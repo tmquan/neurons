@@ -1,0 +1,61 @@
+# SNEMI3D Configuration
+# Neuron segmentation in electron microscopy images
+
+defaults:
+  - default
+
+experiment_name: snemi3d_instance_seg
+project_name: neurons-snemi3d
+
+# Data configuration for SNEMI3D
+data:
+  dataset: snemi3d
+  data_root: data/snemi3d
+  batch_size: 8
+  num_workers: 4
+  train_val_split: 0.2
+  cache_rate: 0.5
+  slice_mode: true
+
+# Model configuration for instance segmentation
+model:
+  type: segresnet
+  in_channels: 1
+  out_channels: 2  # Background, Foreground
+  spatial_dims: 2
+  init_filters: 32
+  feature_dim: 64
+  emb_dim: 16
+  dropout: 0.2
+  use_sem_head: true
+  use_ins_head: true
+
+# Optimizer tuned for SNEMI3D
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  scheduler:
+    type: cosine
+    T_max: 100
+    eta_min: 1.0e-6
+
+# Loss configuration for instance segmentation
+loss:
+  semantic_weight: 1.0
+  instance_weight: 1.0
+  discriminative:
+    delta_var: 0.5
+    delta_dist: 1.5
+    norm: 2
+    A: 1.0
+    B: 1.0
+    R: 0.001
+
+# Training configuration
+training:
+  max_epochs: 100
+  accelerator: auto
+  devices: 1
+  precision: 32-true
+  gradient_clip_val: 1.0

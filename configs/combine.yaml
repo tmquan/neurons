@@ -1,0 +1,136 @@
+# Combined Multi-Dataset Vista3D Configuration
+# Training Vista3D model on combined SNEMI3D and CREMI3D datasets
+#
+# Dataset label format:
+# - 'image': input EM volume [Z, Y, X]
+# - 'label': indexed instance segmentation (unique IDs per object)
+# - 'class_ids': semantic class for each pixel (background=0, neuron=1, ...)
+
+defaults:
+  - default
+
+experiment_name: combine_vista3d
+project_name: neurons-vista3d
+seed: 42
+logger: tensorboard
+log_dir: logs
+
+# Data Configuration
+data:
+  dataset: combine
+  datasets:
+    snemi3d:
+      enabled: true
+      data_root: data/snemi3d
+      weight: 1.0
+    cremi3d:
+      enabled: true
+      data_root: data/cremi3d
+      weight: 1.0
+      volumes:
+        - A
+        - B
+        - C
+
+  patch_size:
+    - 32
+    - 128
+    - 128
+  batch_size: 4
+  num_workers: 4
+  cache_rate: 1.0
+  train_val_split: 0.2
+
+  semantic_classes:
+    names:
+      - background
+      - neuron
+      - cleft
+      - mito
+    default_class: 1
+
+# Model Configuration
+model:
+  type: vista3d
+  encoder_name: segresnet
+  feature_size: 48
+  in_channels: 1
+  num_classes: 4  # background, neuron, cleft, mito
+  sem_head: 16
+  ins_head: 16
+  use_sem_head: true
+  use_ins_head: true
+  pretrained: false
+  freeze_encoder: false
+
+# Training Configuration
+training:
+  mode: auto
+  num_point_prompts: 5
+  max_epochs: 300
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  precision: 16-mixed
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 10
+  benchmark: true
+  deterministic: false
+  fast_dev_run: false
+
+# Optimizer Configuration
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  betas:
+    - 0.9
+    - 0.999
+  scheduler:
+    type: cosine
+    T_max: 300
+    eta_min: 1.0e-7
+
+# Loss Configuration
+loss:
+  ce_weight: 0.5
+  dice_weight: 0.5
+  boundary_weight: 0.1
+  ins_weight: 1.0
+  discriminative:
+    delta_var: 0.5
+    delta_dist: 1.5
+    norm: 2
+    A: 1.0
+    B: 1.0
+    R: 0.001
+  class_weights:
+    - 0.1
+    - 0.4
+    - 0.3
+    - 0.2
+  ignore_index: -100
+
+# Callbacks
+callbacks:
+  checkpoint:
+    enabled: true
+    dirpath: null
+    filename: "combine-{epoch:02d}-{val/dice:.4f}"
+    save_top_k: 3
+    monitor: val/dice
+    mode: max
+    save_last: true
+
+  early_stopping:
+    enabled: true
+    monitor: val/dice
+    patience: 50
+    mode: max
+
+  lr_monitor:
+    enabled: true

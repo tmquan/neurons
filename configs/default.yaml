@@ -1,0 +1,101 @@
+# Neurons Default Configuration
+# Base configuration for all connectomics training tasks
+
+# Experiment metadata
+experiment_name: neurons
+project_name: neurons
+seed: 42
+
+# Logging configuration
+logger: tensorboard  # Options: tensorboard, wandb
+log_dir: logs
+
+# Data configuration
+data:
+  dataset: snemi3d  # Options: snemi3d, cremi3d, microns, combine
+  data_root: data
+  batch_size: 4
+  num_workers: 4
+  train_val_split: 0.2
+  cache_rate: 0.5
+  pin_memory: true
+  image_size: null  # Optional resize, e.g., [256, 256]
+  slice_mode: true  # Return 2D slices
+
+# Model configuration
+model:
+  type: segresnet  # Options: segresnet, vista3d
+  in_channels: 1
+  out_channels: 2
+  spatial_dims: 2
+  init_filters: 32
+  feature_dim: 64
+  emb_dim: 16
+  dropout: 0.2
+  use_sem_head: true
+  use_ins_head: false
+  use_boundary_head: false
+
+# Optimizer configuration
+optimizer:
+  type: adamw
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  scheduler:
+    type: cosine
+    T_max: 100
+    eta_min: 1.0e-6
+
+# Loss configuration
+loss:
+  semantic_weight: 1.0
+  instance_weight: 1.0
+  discriminative:
+    delta_var: 0.5
+    delta_dist: 1.5
+    norm: 2
+    A: 1.0
+    B: 1.0
+    R: 0.001
+
+# Training configuration
+training:
+  max_epochs: 100
+  accelerator: auto  # Options: cpu, gpu, tpu, auto
+  devices: 1
+  strategy: auto
+  precision: 32-true  # Options: 32-true, 16-mixed, bf16-mixed
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+  enable_progress_bar: true
+  enable_model_summary: true
+  deterministic: false
+  benchmark: true
+  fast_dev_run: false
+
+# Callbacks configuration
+callbacks:
+  checkpoint:
+    enabled: true
+    dirpath: checkpoints
+    filename: "{epoch:02d}-{val/loss:.4f}"
+    save_top_k: 3
+    monitor: val/loss
+    mode: min
+    save_last: true
+    verbose: true
+
+  early_stopping:
+    enabled: false
+    monitor: val/loss
+    patience: 20
+    mode: min
+    verbose: true
+    min_delta: 0.0
+
+  lr_monitor:
+    enabled: true
