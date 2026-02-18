@@ -8,6 +8,8 @@ import torch
 from neurons.losses.discriminative import DiscriminativeLoss, DiscriminativeLossVectorized
 from neurons.losses.boundary import BoundaryLoss, BoundaryAwareCrossEntropy
 from neurons.losses.weighted_boundary import WeightedBoundaryLoss
+from neurons.losses.vista2d_losses import Vista2DLoss
+from neurons.losses.vista3d_losses import Vista3DLoss
 
 
 class TestDiscriminativeLoss:
@@ -178,6 +180,204 @@ class TestWeightedBoundaryLoss:
         loss = loss_fn(logits, labels)
         loss.backward()
         assert logits.grad is not None
+
+
+class TestVista2DLoss:
+    """Tests for Vista2DLoss."""
+
+    @pytest.fixture()
+    def loss_fn(self) -> Vista2DLoss:
+        return Vista2DLoss(
+            weight_pull=1.0,
+            weight_push=1.0,
+            weight_norm=0.001,
+            weight_edge=1.0,
+            weight_bone=1.0,
+            delta_v=0.5,
+            delta_d=1.5,
+        )
+
+    @pytest.fixture()
+    def sample_inputs(self):
+        B, H, W = 2, 16, 16
+        predictions = {
+            "semantic": torch.randn(B, 16, H, W),
+            "instance": torch.randn(B, 16, H, W),
+            "geometry": torch.randn(B, 16, H, W),
+        }
+        labels = torch.zeros(B, H, W, dtype=torch.long)
+        labels[:, :8, :8] = 1
+        labels[:, :8, 8:] = 2
+        targets = {
+            "class_labels": (labels > 0).long(),
+            "labels": labels,
+            "gt_diff": torch.randn(B, 9, H, W),
+            "gt_grid": torch.randn(B, 3, H, W),
+            "gt_rgba": torch.randn(B, 4, H, W),
+        }
+        return predictions, targets
+
+    def test_forward_returns_required_keys(self, loss_fn, sample_inputs) -> None:
+        predictions, targets = sample_inputs
+        result = loss_fn(predictions, targets)
+        for key in ("loss", "loss_sem", "loss_aff", "loss_ins"):
+            assert key in result
+
+    def test_total_loss_is_finite(self, loss_fn, sample_inputs) -> None:
+        predictions, targets = sample_inputs
+        result = loss_fn(predictions, targets)
+        assert result["loss"].isfinite()
+
+    def test_sub_losses_non_negative(self, loss_fn, sample_inputs) -> None:
+        predictions, targets = sample_inputs
+        result = loss_fn(predictions, targets)
+        assert result["loss_sem"].item() >= 0.0
+        assert result["loss_aff"].item() >= 0.0
+
+    def test_backward_pass(self, loss_fn, sample_inputs) -> None:
+        predictions, targets = sample_inputs
+        for v in predictions.values():
+            v.requires_grad_(True)
+        result = loss_fn(predictions, targets)
+        result["loss"].backward()
+        for v in predictions.values():
+            assert v.grad is not None
+
+    def test_zero_instances_no_error(self, loss_fn) -> None:
+        B, H, W = 1, 8, 8
+        predictions = {
+            "semantic": torch.randn(B, 16, H, W),
+            "instance": torch.randn(B, 16, H, W),
+            "geometry": torch.randn(B, 16, H, W),
+        }
+        targets = {
+            "class_labels": torch.zeros(B, H, W, dtype=torch.long),
+            "labels": torch.zeros(B, H, W, dtype=torch.long),
+            "gt_diff": torch.zeros(B, 9, H, W),
+            "gt_grid": torch.zeros(B, 3, H, W),
+            "gt_rgba": torch.zeros(B, 4, H, W),
+        }
+        result = loss_fn(predictions, targets)
+        assert result["loss"].isfinite()
+
+    def test_boundary_weight_activates(self) -> None:
+        loss_fn = Vista2DLoss(weight_edge=10.0, weight_bone=1.0)
+        B, H, W = 1, 16, 16
+        labels = torch.zeros(B, H, W, dtype=torch.long)
+        labels[:, :8, :] = 1
+        w = loss_fn._get_weight_boundary(labels)
+        assert w.shape == (B, H, W)
+        assert w.max() > 1.0
+
+    def test_custom_hyperparameters(self) -> None:
+        loss_fn = Vista2DLoss(
+            weight_pull=2.0, weight_push=3.0, weight_norm=0.01,
+            delta_v=0.3, delta_d=2.0,
+        )
+        assert loss_fn.weight_pull == 2.0
+        assert loss_fn.weight_push == 3.0
+        assert loss_fn.delta_v == 0.3
+        assert loss_fn.delta_d == 2.0
+
+
+class TestVista3DLoss:
+    """Tests for Vista3DLoss."""
+
+    @pytest.fixture()
+    def loss_fn(self) -> Vista3DLoss:
+        return Vista3DLoss(
+            weight_pull=1.0,
+            weight_push=1.0,
+            weight_norm=0.001,
+            weight_edge=1.0,
+            weight_bone=1.0,
+            delta_v=0.5,
+            delta_d=1.5,
+        )
+
+    @pytest.fixture()
+    def sample_inputs(self):
+        B, D, H, W = 1, 4, 8, 8
+        predictions = {
+            "semantic": torch.randn(B, 16, D, H, W),
+            "instance": torch.randn(B, 16, D, H, W),
+            "geometry": torch.randn(B, 16, D, H, W),
+        }
+        labels = torch.zeros(B, D, H, W, dtype=torch.long)
+        labels[:, :, :4, :4] = 1
+        labels[:, :, :4, 4:] = 2
+        targets = {
+            "class_labels": (labels > 0).long(),
+            "labels": labels,
+            "gt_diff": torch.randn(B, 9, D, H, W),
+            "gt_grid": torch.randn(B, 3, D, H, W),
+            "gt_rgba": torch.randn(B, 4, D, H, W),
+        }
+        return predictions, targets
+
+    def test_forward_returns_required_keys(self, loss_fn, sample_inputs) -> None:
+        predictions, targets = sample_inputs
+        result = loss_fn(predictions, targets)
+        for key in ("loss", "loss_sem", "loss_aff", "loss_ins"):
+            assert key in result
+
+    def test_total_loss_is_finite(self, loss_fn, sample_inputs) -> None:
+        predictions, targets = sample_inputs
+        result = loss_fn(predictions, targets)
+        assert result["loss"].isfinite()
+
+    def test_backward_pass(self, loss_fn, sample_inputs) -> None:
+        predictions, targets = sample_inputs
+        for v in predictions.values():
+            v.requires_grad_(True)
+        result = loss_fn(predictions, targets)
+        result["loss"].backward()
+        for v in predictions.values():
+            assert v.grad is not None
+
+    def test_boundary_weight_3d(self) -> None:
+        loss_fn = Vista3DLoss(weight_edge=10.0, weight_bone=1.0)
+        B, D, H, W = 1, 4, 8, 8
+        labels = torch.zeros(B, D, H, W, dtype=torch.long)
+        labels[:, :, :4, :] = 1
+        w = loss_fn._get_weight_boundary(labels)
+        assert w.shape == (B, D, H, W)
+        assert w.max() > 1.0
+
+    def test_zero_instances_no_error(self, loss_fn) -> None:
+        B, D, H, W = 1, 4, 8, 8
+        predictions = {
+            "semantic": torch.randn(B, 16, D, H, W),
+            "instance": torch.randn(B, 16, D, H, W),
+            "geometry": torch.randn(B, 16, D, H, W),
+        }
+        targets = {
+            "class_labels": torch.zeros(B, D, H, W, dtype=torch.long),
+            "labels": torch.zeros(B, D, H, W, dtype=torch.long),
+            "gt_diff": torch.zeros(B, 9, D, H, W),
+            "gt_grid": torch.zeros(B, 3, D, H, W),
+            "gt_rgba": torch.zeros(B, 4, D, H, W),
+        }
+        result = loss_fn(predictions, targets)
+        assert result["loss"].isfinite()
+
+    def test_single_instance(self, loss_fn) -> None:
+        B, D, H, W = 1, 4, 8, 8
+        predictions = {
+            "semantic": torch.randn(B, 16, D, H, W),
+            "instance": torch.randn(B, 16, D, H, W),
+            "geometry": torch.randn(B, 16, D, H, W),
+        }
+        labels = torch.ones(B, D, H, W, dtype=torch.long)
+        targets = {
+            "class_labels": torch.ones(B, D, H, W, dtype=torch.long),
+            "labels": labels,
+            "gt_diff": torch.randn(B, 9, D, H, W),
+            "gt_grid": torch.randn(B, 3, D, H, W),
+            "gt_rgba": torch.randn(B, 4, D, H, W),
+        }
+        result = loss_fn(predictions, targets)
+        assert result["loss"].isfinite()
 
 
 if __name__ == "__main__":
