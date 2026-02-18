@@ -1,8 +1,8 @@
 """
-Vista3D Lightning Module for volumetric segmentation training.
+Vista2D Lightning Module for image-based segmentation training.
 
-Uses the 3-head Vista3D model (semantic + instance + geometry) with
-the Vista3DLoss for combined multi-task training.
+Uses the 3-head Vista2D model (semantic + instance + geometry) with
+the Vista2DLoss for combined multi-task training.
 """
 
 from typing import Any, Dict, Optional
@@ -11,22 +11,22 @@ import torch
 import pytorch_lightning as pl
 from einops import rearrange
 
-from neurons.models.vista3d_model import Vista3DWrapper as _Model
-from neurons.losses.vista3d_losses import Vista3DLoss as _Loss
+from neurons.models.vista2d_model import Vista2DWrapper as _Model
+from neurons.losses.vista2d_losses import Vista2DLoss as _Loss
 
-_SPATIAL_DIMS = 3
-_EXPAND_PATTERN = "b d h w -> b 1 d h w"
-_SQUEEZE_PATTERN = "b 1 d h w -> b d h w"
+_SPATIAL_DIMS = 2
+_EXPAND_PATTERN = "b h w -> b 1 h w"
+_SQUEEZE_PATTERN = "b 1 h w -> b h w"
 
 
-class Vista3DModule(pl.LightningModule):
+class Vista2DModule(pl.LightningModule):
     """
-    PyTorch Lightning module for Vista3D-based volumetric segmentation.
+    PyTorch Lightning module for Vista2D-based image segmentation.
 
     Three-head architecture:
-    - semantic: per-voxel class logits  [B, 16, D, H, W]
-    - instance: per-voxel embeddings    [B, 16, D, H, W]
-    - geometry: affinity/grid/rgba      [B, 16, D, H, W]
+    - semantic: per-pixel class logits  [B, 16, H, W]
+    - instance: per-pixel embeddings    [B, 16, H, W]
+    - geometry: affinity/grid/rgba      [B, 16, H, W]
 
     Args:
         model_config: Model configuration dict.
