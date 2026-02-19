@@ -193,13 +193,12 @@ class TestVista2DWrapper:
         out = model(x)
         assert "semantic" in out
         assert "instance" in out
-        assert "geometry" in out
 
     def test_output_shapes(self) -> None:
         model = Vista2DWrapper(in_channels=1, num_classes=16, feature_size=16)
         x = torch.randn(2, 1, 32, 32)
         out = model(x)
-        for key in ("semantic", "instance", "geometry"):
+        for key in ("semantic", "instance"):
             assert out[key].shape == (2, 16, 32, 32)
 
     def test_different_input_channels(self) -> None:
@@ -230,13 +229,12 @@ class TestVista3DWrapper:
         out = model(x)
         assert "semantic" in out
         assert "instance" in out
-        assert "geometry" in out
 
     def test_output_shapes(self) -> None:
         model = Vista3DWrapper(in_channels=1, num_classes=16, feature_size=16)
         x = torch.randn(1, 1, 8, 16, 16)
         out = model(x)
-        for key in ("semantic", "instance", "geometry"):
+        for key in ("semantic", "instance"):
             assert out[key].shape == (1, 16, 8, 16, 16)
 
     def test_backward_pass(self) -> None:

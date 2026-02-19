@@ -1,7 +1,7 @@
 """
 Vista3D Lightning Module for volumetric segmentation training.
 
-Uses the 3-head Vista3D model (semantic + instance + geometry) with
+Uses the 2-head Vista3D model (semantic + instance) with
 the Vista3DLoss for combined multi-task training.
 """
 
@@ -23,10 +23,9 @@ class Vista3DModule(pl.LightningModule):
     """
     PyTorch Lightning module for Vista3D-based volumetric segmentation.
 
-    Three-head architecture:
+    Two-head architecture:
     - semantic: per-voxel class logits  [B, 16, D, H, W]
     - instance: per-voxel embeddings    [B, 16, D, H, W]
-    - geometry: affinity/grid/rgba      [B, 16, D, H, W]
 
     Args:
         model_config: Model configuration dict.
@@ -66,7 +65,7 @@ class Vista3DModule(pl.LightningModule):
         )
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Forward pass through 3-head model."""
+        """Forward pass through 2-head model."""
         return self.model(x)
 
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -75,17 +74,10 @@ class Vista3DModule(pl.LightningModule):
         if labels.dim() == _SPATIAL_DIMS + 2:
             labels = rearrange(labels, _SQUEEZE_PATTERN)
 
-        targets: Dict[str, torch.Tensor] = {
+        return {
             "class_labels": batch.get("class_ids", (labels > 0).long()),
             "labels": labels,
         }
-
-        spatial = labels.shape[1:]
-        targets["gt_diff"] = batch.get("gt_diff", torch.zeros(labels.shape[0], 9, *spatial, device=labels.device))
-        targets["gt_grid"] = batch.get("gt_grid", torch.zeros(labels.shape[0], 3, *spatial, device=labels.device))
-        targets["gt_rgba"] = batch.get("gt_rgba", torch.zeros(labels.shape[0], 4, *spatial, device=labels.device))
-
-        return targets
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""

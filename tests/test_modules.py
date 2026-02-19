@@ -296,7 +296,6 @@ class TestVista2DModule:
         out = module(x)
         assert "semantic" in out
         assert "instance" in out
-        assert "geometry" in out
 
     def test_training_step(self) -> None:
         module = self._make_module()
@@ -325,10 +324,6 @@ class TestVista2DModule:
         targets = module._prepare_targets(batch)
         assert "class_labels" in targets
         assert "labels" in targets
-        assert "gt_diff" in targets
-        assert targets["gt_diff"].shape[1] == 9
-        assert targets["gt_grid"].shape[1] == 3
-        assert targets["gt_rgba"].shape[1] == 4
 
     def test_prepare_targets_squeezes_4d(self) -> None:
         module = self._make_module()
@@ -381,7 +376,6 @@ class TestVista3DModule:
         out = module(x)
         assert "semantic" in out
         assert "instance" in out
-        assert "geometry" in out
 
     def test_training_step(self) -> None:
         module = self._make_module()

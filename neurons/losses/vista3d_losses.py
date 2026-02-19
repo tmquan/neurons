@@ -1,8 +1,8 @@
 """
 Vista3D combined loss for volumetric segmentation.
 
-Computes semantic (CE), geometry (L1 on diff/grid/rgba), and
-instance (pull/push discriminative) losses for the 3-head Vista3D model.
+Computes semantic (CE) and instance (pull/push discriminative) losses
+for the 2-head Vista3D model.
 """
 
 from typing import Dict
@@ -26,12 +26,7 @@ _REDUCE_PATTERN = "b ... -> b " + " ".join(["1"] * _SPATIAL_DIMS)
 
 class Vista3DLoss(nn.Module):
     """
-    Combined loss for the Vista3D 3-head architecture.
-
-    Heads and their target slicing convention (16 geometry channels):
-        channels  0--8  : gt_diff  (local displacement field, 9ch)
-        channels  9--11 : gt_grid  (normalised spatial coordinates, 3ch)
-        channels 12--15 : gt_rgba  (auxiliary colour/intensity, 4ch)
+    Combined loss for the Vista3D 2-head architecture.
 
     Args:
         weight_pull: Pull (variance) weight for instance embed.
@@ -62,7 +57,6 @@ class Vista3DLoss(nn.Module):
         self.delta_v = delta_v
         self.delta_d = delta_d
         self.ce_loss = nn.CrossEntropyLoss()
-        self.l1_loss = nn.L1Loss()
 
     # ------------------------------------------------------------------
     # Weighting helpers
@@ -169,31 +163,23 @@ class Vista3DLoss(nn.Module):
         Compute combined loss.
 
         Args:
-            predictions: Dict with 'semantic', 'instance', 'geometry' tensors.
-            targets: Dict with 'class_labels', 'labels', 'gt_diff', 'gt_grid', 'gt_rgba'.
+            predictions: Dict with 'semantic' and 'instance' tensors.
+            targets: Dict with 'class_labels' and 'labels'.
 
         Returns:
-            Dict with 'loss', 'loss_sem', 'loss_aff', 'loss_ins'.
+            Dict with 'loss', 'loss_sem', 'loss_ins'.
         """
         loss_sem = self.ce_loss(predictions["semantic"], targets["class_labels"])
-
-        aff = predictions["geometry"]
-        loss_aff = (
-            self.l1_loss(aff[:, 0:9], targets["gt_diff"])
-            + self.l1_loss(aff[:, 9:12], targets["gt_grid"])
-            + self.l1_loss(aff[:, 12:16], targets["gt_rgba"])
-        )
 
         labels = targets["labels"]
         w_edge = self._get_weight_boundary(labels) if self.weight_edge > 1.0 else torch.ones_like(labels, dtype=torch.float32)
         w_bone = self._get_weight_skeleton(labels) if self.weight_bone > 1.0 else torch.ones_like(labels, dtype=torch.float32)
         loss_ins = self._instance_loss(predictions["instance"], labels, w_edge, w_bone)
 
-        total = loss_sem + loss_aff + loss_ins
+        total = loss_sem + loss_ins
 
         return {
             "loss": total,
             "loss_sem": loss_sem,
-            "loss_aff": loss_aff,
             "loss_ins": loss_ins,
         }

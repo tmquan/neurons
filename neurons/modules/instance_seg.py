@@ -97,9 +97,8 @@ class InstanceSegmentationModule(pl.LightningModule):
         loss_sem = self.semantic_loss(semantic_logits, semantic_target)
 
         embedding = outputs["embedding"]
-        loss_ins, loss_var, loss_dst, loss_reg = self.instance_loss(
-            embedding, labels_squeezed
-        )
+        ins_result = self.instance_loss(embedding, labels_squeezed)
+        loss_ins = ins_result["loss"]
 
         total_loss = self.semantic_weight * loss_sem + self.instance_weight * loss_ins
 
@@ -107,9 +106,9 @@ class InstanceSegmentationModule(pl.LightningModule):
             "loss": total_loss,
             "loss_sem": loss_sem,
             "loss_ins": loss_ins,
-            "loss_var": loss_var,
-            "loss_dst": loss_dst,
-            "loss_reg": loss_reg,
+            "loss_var": ins_result["l_var"],
+            "loss_dst": ins_result["l_dst"],
+            "loss_reg": ins_result["l_reg"],
         }
 
     def _compute_metrics(

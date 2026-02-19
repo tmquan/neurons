@@ -1,10 +1,9 @@
 """
 Vista2D model wrapper for image-based connectomics segmentation.
 
-2D version of the Vista/GAPE architecture with three parallel task heads:
+2D version of the Vista/GAPE architecture with two parallel task heads:
 - Semantic: per-pixel class logits (16 channels)
 - Instance: per-pixel embedding vectors for discriminative clustering (16 channels)
-- Geometry: affinity / reconstruction features (16 channels)
 """
 
 from typing import Any, Dict
@@ -57,10 +56,6 @@ class Vista2DWrapper(nn.Module):
             _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
             _CONV(64, 16, 1),
         )
-        self.head_geometry = nn.Sequential(
-            _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
-            _CONV(64, 16, 1),
-        )
 
     def _build_backbone(self, encoder_name: str, **kwargs: Any) -> None:
         """Build backbone, falling back to SegResNet if Vista3D is unavailable."""
@@ -84,11 +79,10 @@ class Vista2DWrapper(nn.Module):
             self._has_vista3d = False
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Forward pass through backbone + three parallel heads."""
+        """Forward pass through backbone + two parallel heads."""
         feat = self.vista3d(x) if self._has_vista3d else self.backbone(x)
 
         return {
             "semantic": self.head_semantic(feat),
             "instance": self.head_instance(feat),
-            "geometry": self.head_geometry(feat),
         }
