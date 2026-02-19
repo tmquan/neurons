@@ -50,6 +50,7 @@ class Vista3DModule(pl.LightningModule):
         self.model = _Model(
             in_channels=model_config.get("in_channels", 1),
             num_classes=model_config.get("num_classes", 16),
+            emb_dim=model_config.get("emb_dim", 16),
             feature_size=model_config.get("feature_size", 48),
             encoder_name=model_config.get("encoder_name", "segresnet"),
         )
@@ -62,6 +63,10 @@ class Vista3DModule(pl.LightningModule):
             weight_bone=loss_config.get("weight_bone", 10.0),
             delta_v=loss_config.get("delta_v", 0.5),
             delta_d=loss_config.get("delta_d", 1.5),
+            ce_weight=loss_config.get("ce_weight", 1.0),
+            dice_weight=loss_config.get("dice_weight", 0.0),
+            class_weights=loss_config.get("class_weights"),
+            ignore_index=loss_config.get("ignore_index", -100),
         )
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:

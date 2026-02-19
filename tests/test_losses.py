@@ -185,7 +185,7 @@ class TestCentroidEmbeddingLoss:
         labels = torch.zeros(1, 16, 16, dtype=torch.long)
         labels[:, :8, :] = 1
         gt_image = torch.rand(1, 1, 16, 16)
-        result = loss_fn(embedding, labels, gt_image=gt_image)
+        result = loss_fn(embedding, labels, raw_image=gt_image)
         assert result["l_raw"].isfinite()
         assert result["l_raw"].item() >= 0.0
 
@@ -201,7 +201,7 @@ class TestCentroidEmbeddingLoss:
         embedding = torch.randn(1, 8, 16, 16, requires_grad=True)
         labels = torch.ones(1, 16, 16, dtype=torch.long)
         gt_image = torch.rand(1, 1, 16, 16)
-        result = loss_fn(embedding, labels, gt_image=gt_image)
+        result = loss_fn(embedding, labels, raw_image=gt_image)
         result["loss"].backward()
         assert loss_fn.proj_raw.weight.grad is not None
 
@@ -217,7 +217,7 @@ class TestCentroidEmbeddingLoss:
         labels[:, :8, 8:] = 2
         labels[:, 8:, :] = 3
         gt_image = torch.rand(2, 1, 16, 16)
-        result = loss_fn(embedding, labels, gt_image=gt_image)
+        result = loss_fn(embedding, labels, raw_image=gt_image)
         assert result["loss"].isfinite()
         result["loss"].backward()
         assert embedding.grad is not None

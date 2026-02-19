@@ -2,8 +2,8 @@
 Vista3D model wrapper for volumetric connectomics segmentation.
 
 3D version of the Vista/GAPE architecture with two parallel task heads:
-- Semantic: per-voxel class logits (16 channels)
-- Instance: per-voxel embedding vectors for discriminative clustering (16 channels)
+- Semantic: per-voxel class logits (num_classes channels)
+- Instance: per-voxel embedding vectors for discriminative clustering (emb_dim channels)
 """
 
 from typing import Any, Dict
@@ -23,20 +23,25 @@ class Vista3DWrapper(nn.Module):
     Args:
         in_channels: Number of input channels (default: 1 for EM).
         num_classes: Number of semantic classes (default: 16).
+            Set higher than currently needed to leave headroom for
+            future class additions without retraining the backbone.
+        emb_dim: Instance embedding dimensionality (default: 16).
         feature_size: Base feature dimension from backbone (default: 48).
         encoder_name: Backbone encoder ('segresnet' or 'swin').
 
     Example:
-        >>> model = Vista3DWrapper(in_channels=1, num_classes=16)
+        >>> model = Vista3DWrapper(in_channels=1, num_classes=16, emb_dim=16)
         >>> x = torch.randn(1, 1, 64, 64, 64)
         >>> out = model(x)
         >>> out['semantic'].shape   # [1, 16, 64, 64, 64]
+        >>> out['instance'].shape   # [1, 16, 64, 64, 64]
     """
 
     def __init__(
         self,
         in_channels: int = 1,
         num_classes: int = 16,
+        emb_dim: int = 16,
         feature_size: int = 48,
         encoder_name: str = "segresnet",
         **kwargs: Any,
@@ -44,17 +49,18 @@ class Vista3DWrapper(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.num_classes = num_classes
+        self.emb_dim = emb_dim
         self.feature_size = feature_size
 
         self._build_backbone(encoder_name, **kwargs)
 
         self.head_semantic = nn.Sequential(
             _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
-            _CONV(64, 16, 1),
+            _CONV(64, num_classes, 1),
         )
         self.head_instance = nn.Sequential(
             _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
-            _CONV(64, 16, 1),
+            _CONV(64, emb_dim, 1),
         )
 
     def _build_backbone(self, encoder_name: str, **kwargs: Any) -> None:

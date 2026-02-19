@@ -1,5 +1,9 @@
 # Neurons
 
+<p align="center">
+  <img src="teaser.png" alt="Neurons — from electron microscopy to boundary detection to instance segmentation" width="100%">
+</p>
+
 A modular, extensible PyTorch Lightning-based infrastructure for connectomics research.
 
 ## Overview
@@ -9,7 +13,7 @@ A modular, extensible PyTorch Lightning-based infrastructure for connectomics re
 ## Features
 
 - **Multi-Dataset Support** -- SNEMI3D, CREMI3D, MICRONS, and combined multi-dataset training
-- **Three Segmentation Paradigms** -- Semantic, Instance (discriminative loss), and Affinity-based
+- **Vista Architecture** -- Vista3D and Vista2D with semantic + instance dual heads
 - **Model Zoo** -- SegResNet and Vista3D wrappers via MONAI
 - **Connectomics Losses** -- Discriminative, Boundary, and Weighted Boundary losses
 - **Evaluation Metrics** -- Adjusted Rand Index (ARI), Adjusted Mutual Information (AMI), Dice, IoU
@@ -40,7 +44,7 @@ neurons/
 ├── neurons/
 │   ├── datasets/       # Dataset classes: BASE, SNEMI3D, CREMI3D, MICRONS
 │   ├── datamodules/    # Lightning DataModules + COMBINE datamodule
-│   ├── modules/        # Lightning modules: semantic_seg, instance_seg, affinity_seg, vista3d
+│   ├── modules/        # Lightning modules: semantic_seg, instance_seg, vista3d, vista2d
 │   ├── models/         # Model wrappers: Base, Vista3D, SegResNet
 │   ├── losses/         # Loss functions: discriminative, boundary, weighted_boundary
 │   ├── preprocessors/  # Data loaders: TIFF, HDF5, NRRD
@@ -99,35 +103,22 @@ All behavior is driven by YAML configs in `configs/`:
 | `microns.yaml` | MICRONS large-scale connectomics |
 | `combine.yaml` | Multi-dataset Vista3D training |
 
-## Segmentation Paradigms
+## Training
 
-### Semantic Segmentation
-Per-voxel classification with cross-entropy loss. Good starting point.
-
-```yaml
-model:
-  use_ins_head: false
-  use_affinity: false
-```
-
-### Instance Segmentation
-Discriminative loss for embedding-based instance prediction.
+Vista3D (default) and Vista2D modules jointly train semantic and instance heads.
 
 ```yaml
 model:
-  use_ins_head: true
+  type: vista3d          # or vista2d
+  num_classes: 16
+  emb_dim: 16
 loss:
-  discriminative:
-    delta_var: 0.5
-    delta_dist: 1.5
-```
-
-### Affinity Segmentation
-Boundary/affinity prediction for watershed-based segmentation.
-
-```yaml
-model:
-  use_affinity: true
+  ce_weight: 0.5
+  dice_weight: 0.5
+  weight_pull: 1.0
+  weight_push: 1.0
+  delta_v: 0.5
+  delta_d: 1.5
 ```
 
 ## Running Tests

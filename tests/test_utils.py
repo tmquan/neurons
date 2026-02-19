@@ -11,18 +11,20 @@ import torch
 
 from neurons.utils.io import find_folder, load_volume, save_volume, ensure_data, SUPPORTED_EXTENSIONS
 from neurons.utils.labels import (
-    compute_ari_point,
-    compute_ami_point,
-    compute_axi_point,
-    compute_ari_batch,
-    compute_ami_batch,
-    compute_axi_batch,
     relabel_after_crop,
     relabel_sequential,
     relabel_connected_components_2d,
     relabel_connected_components_3d,
     cluster_embeddings_meanshift,
+)
+from neurons.metrics.instance import (
     _prepare_flat_labels,
+    compute_per_point_ari as compute_ari_point,
+    compute_per_point_ami as compute_ami_point,
+    compute_per_point_axi as compute_axi_point,
+    compute_per_batch_ari as compute_ari_batch,
+    compute_per_batch_ami as compute_ami_batch,
+    compute_per_batch_axi as compute_axi_batch,
 )
 
 

@@ -182,7 +182,7 @@ def generate_teaser(out_path: str = "teaser.png") -> None:
     features = [
         "SNEMI3D  /  CREMI3D  /  MICRONS  /  MitoEM2",
         "SegResNet  /  Vista3D  /  Vista2D",
-        "Discriminative  /  Boundary  /  Affinity",
+        "Discriminative  /  Boundary  /  Skeleton",
         "ARI  /  AMI  /  Dice  /  IoU",
     ]
     for i, (lbl, feat) in enumerate(zip(labels_row, features)):

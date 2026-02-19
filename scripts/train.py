@@ -149,50 +149,26 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
 
 def get_module(cfg: DictConfig) -> pl.LightningModule:
     """Create appropriate Lightning module based on config."""
-    from neurons.modules import (
-        AffinitySegmentationModule,
-        InstanceSegmentationModule,
-        SemanticSegmentationModule,
-        Vista3DModule,
-    )
+    from neurons.modules import Vista3DModule, Vista2DModule
 
     model_cfg = dict(cfg.get("model", {}))
     optimizer_cfg = dict(cfg.get("optimizer", {}))
     loss_cfg = dict(cfg.get("loss", {}))
 
-    model_type = model_cfg.pop("type", "segresnet").lower()
+    model_type = model_cfg.pop("type", "vista3d").lower()
 
-    if model_type == "vista3d":
-        return Vista3DModule(
+    if model_type == "vista2d":
+        return Vista2DModule(
             model_config=model_cfg,
             optimizer_config=optimizer_cfg,
             loss_config=loss_cfg,
-            training_mode=cfg.training.get("mode", "auto"),
-            num_point_prompts=cfg.training.get("num_point_prompts", 5),
         )
 
-    use_instance = model_cfg.pop("use_ins_head", False)
-    use_affinity = model_cfg.pop("use_affinity", False)
-
-    if use_affinity:
-        return AffinitySegmentationModule(
-            model_config=model_cfg,
-            optimizer_config=optimizer_cfg,
-            loss_config=loss_cfg,
-        )
-    elif use_instance:
-        model_cfg["use_ins_head"] = True
-        return InstanceSegmentationModule(
-            model_config=model_cfg,
-            optimizer_config=optimizer_cfg,
-            loss_config=loss_cfg,
-        )
-    else:
-        return SemanticSegmentationModule(
-            model_config=model_cfg,
-            optimizer_config=optimizer_cfg,
-            loss_config=loss_cfg,
-        )
+    return Vista3DModule(
+        model_config=model_cfg,
+        optimizer_config=optimizer_cfg,
+        loss_config=loss_cfg,
+    )
 
 
 def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
