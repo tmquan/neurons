@@ -212,7 +212,7 @@ def _skeletonize_mask(
     mod = _SKEL_MODULE.to(mask.device)
     inp = mask.float()[None, None]
     skel = mod(inp)
-    return skel.squeeze(0).squeeze(0) > 0.5
+    return rearrange(skel, "1 1 ... -> ...") > 0.5
 
 
 # ======================================================================

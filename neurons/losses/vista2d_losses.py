@@ -1,22 +1,18 @@
 """
 Vista2D combined loss for image-based segmentation.
 
-Computes semantic (CE) and instance (pull/push discriminative) losses
+Computes semantic (CE + Dice) and instance (pull/push discriminative) losses
 for the 2-head Vista2D model.
 """
 
-from typing import Dict
+from typing import Dict, List, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
-
-try:
-    from kornia.contrib import distance_transform
-    _HAS_KORNIA = True
-except ImportError:
-    _HAS_KORNIA = False
+from scipy.ndimage import distance_transform_edt as _scipy_edt
 
 _SPATIAL_DIMS = 2
 _POOL_FN = F.max_pool2d
@@ -28,6 +24,9 @@ class Vista2DLoss(nn.Module):
     """
     Combined loss for the Vista2D 2-head architecture.
 
+    Semantic branch:  ``ce_weight * CE  +  dice_weight * (1 - Dice)``
+    Instance branch:  weighted pull/push/norm discriminative loss.
+
     Args:
         weight_pull: Pull (variance) weight for instance embed.
         weight_push: Push (distance) weight for instance embed.
@@ -36,6 +35,10 @@ class Vista2DLoss(nn.Module):
         weight_bone: Extra weight factor on skeleton (medial axis) pixels.
         delta_v: Margin for the pull term.
         delta_d: Margin for the push term.
+        ce_weight: Weight for CE loss in the semantic branch.
+        dice_weight: Weight for Dice loss in the semantic branch.
+        class_weights: Per-class weights for CE loss (length = num_classes).
+        ignore_index: Label value to ignore in CE loss.
     """
 
     def __init__(
@@ -47,6 +50,10 @@ class Vista2DLoss(nn.Module):
         weight_bone: float = 10.0,
         delta_v: float = 0.5,
         delta_d: float = 1.5,
+        ce_weight: float = 1.0,
+        dice_weight: float = 0.0,
+        class_weights: Optional[List[float]] = None,
+        ignore_index: int = -100,
     ) -> None:
         super().__init__()
         self.weight_pull = weight_pull
@@ -56,13 +63,48 @@ class Vista2DLoss(nn.Module):
         self.weight_bone = weight_bone
         self.delta_v = delta_v
         self.delta_d = delta_d
-        self.ce_loss = nn.CrossEntropyLoss()
+        self.ce_weight = ce_weight
+        self.dice_weight = dice_weight
+        self.ignore_index = ignore_index
+
+        cw = torch.tensor(class_weights, dtype=torch.float32) if class_weights else None
+        self.ce_loss = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index)
+
+    # ------------------------------------------------------------------
+    # Semantic helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _dice_loss(
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        ignore_index: int = -100,
+        eps: float = 1e-5,
+    ) -> torch.Tensor:
+        """Soft Dice loss averaged over classes (1 - Dice)."""
+        C = logits.shape[1]
+        probs = F.softmax(logits, dim=1)
+        valid = target != ignore_index
+        target_safe = target.clone()
+        target_safe[~valid] = 0
+        one_hot = F.one_hot(target_safe.long(), C).float()
+        one_hot = rearrange(one_hot, "b ... c -> b c ...")
+        valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
+
+        probs = probs * valid_mask
+        one_hot = one_hot * valid_mask
+
+        intersection = (probs * one_hot).sum(dim=tuple(range(2, probs.dim())))
+        card_p = probs.sum(dim=tuple(range(2, probs.dim())))
+        card_g = one_hot.sum(dim=tuple(range(2, one_hot.dim())))
+
+        dice = (2.0 * intersection + eps) / (card_p + card_g + eps)
+        return 1.0 - dice.mean()
 
     # ------------------------------------------------------------------
     # Weighting helpers
     # ------------------------------------------------------------------
     def _get_weight_boundary(self, label: torch.Tensor) -> torch.Tensor:
-        """Compute boundary weight map via morphological gradient."""
+        """Boundary weight map via morphological gradient."""
         gt_label_float = rearrange(label, "b ... -> b 1 ...").float()
         padded_arr = F.pad(gt_label_float, _PAD_TUPLE, mode="replicate")
         pooled_max = _POOL_FN(+padded_arr, 3, stride=1, padding=0)
@@ -70,26 +112,26 @@ class Vista2DLoss(nn.Module):
         boundary = rearrange(pooled_max != pooled_min, "b 1 ... -> b ...").float()
         return 1.0 + boundary * (self.weight_edge - 1.0)
 
+    @torch.no_grad()
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
-        """Compute skeleton (medial axis) weight map via distance transform."""
-        if not _HAS_KORNIA:
-            return torch.ones_like(label, dtype=torch.float32)
-
+        """Skeleton (medial axis) weight map via scipy EDT."""
         weight_bone = torch.ones_like(label, dtype=torch.float32)
-        unique_ids = torch.unique(label)
-        for uid in unique_ids:
-            if uid == 0:
-                continue
-            inst_mask = rearrange(label == uid, "b ... -> b 1 ...").float()
-            dt = distance_transform(inst_mask)
-            dt = rearrange(dt, "b 1 ... -> b ...")
-            max_d = reduce(dt, _REDUCE_PATTERN, "max")
-            dt_norm = torch.where(max_d > 0, dt / max_d, dt)
-            weight_bone = torch.where(
-                label == uid,
-                1.0 + dt_norm * (self.weight_bone - 1.0),
-                weight_bone,
-            )
+        label_np = label.cpu().numpy()
+
+        for b in range(label.shape[0]):
+            unique_ids = np.unique(label_np[b])
+            for uid in unique_ids:
+                if uid == 0:
+                    continue
+                mask = label_np[b] == uid
+                dt = _scipy_edt(mask).astype(np.float32)
+                max_d = dt.max()
+                if max_d > 0:
+                    dt /= max_d
+                dt_t = torch.from_numpy(dt).to(label.device)
+                inst_mask = label[b] == uid
+                weight_bone[b][inst_mask] = 1.0 + dt_t[inst_mask] * (self.weight_bone - 1.0)
+
         return weight_bone
 
     # ------------------------------------------------------------------
@@ -101,8 +143,35 @@ class Vista2DLoss(nn.Module):
         label: torch.Tensor,
         w_edge: torch.Tensor,
         w_bone: torch.Tensor,
+        class_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Discriminative instance loss on flattened spatial dims."""
+        """Discriminative instance loss on flattened spatial dims.
+
+        When ``class_ids`` is provided, pull/push is computed separately
+        per semantic class so that instances of different classes never
+        repel each other.
+        """
+        if class_ids is not None:
+            unique_classes = torch.unique(class_ids)
+            unique_classes = unique_classes[unique_classes > 0]
+            if len(unique_classes) == 0:
+                return self._instance_loss_single(embed, label, w_edge, w_bone)
+            total = torch.tensor(0.0, device=embed.device)
+            for cid in unique_classes:
+                class_mask = (class_ids == cid).long()
+                masked_label = label * class_mask
+                total = total + self._instance_loss_single(embed, masked_label, w_edge, w_bone)
+            return total / len(unique_classes)
+        return self._instance_loss_single(embed, label, w_edge, w_bone)
+
+    def _instance_loss_single(
+        self,
+        embed: torch.Tensor,
+        label: torch.Tensor,
+        w_edge: torch.Tensor,
+        w_bone: torch.Tensor,
+    ) -> torch.Tensor:
+        """Discriminative instance loss for a single class partition."""
         B = embed.shape[0]
         emb_flat = rearrange(embed, "b c ... -> b c (...)")
         lbl_flat = rearrange(label, "b ... -> b (...)")
@@ -126,10 +195,10 @@ class Vista2DLoss(nn.Module):
                 mask = lbl_flat[b] == uid
                 w = w_flat[b, mask]
                 emb = emb_flat[b, :, mask]
-                center = (emb * w.unsqueeze(0)).sum(1) / (w.sum() + 1e-8)
+                center = (emb * rearrange(w, "n -> 1 n")).sum(1) / (w.sum() + 1e-8)
                 centers.append(center)
 
-                dist = torch.norm(emb - center.unsqueeze(1), dim=0)
+                dist = torch.norm(emb - rearrange(center, "e -> e 1"), dim=0)
                 pull = F.relu(dist - self.delta_v) ** 2
                 loss_pull = loss_pull + (pull * w).mean()
 
@@ -167,19 +236,31 @@ class Vista2DLoss(nn.Module):
             targets: Dict with 'class_labels' and 'labels'.
 
         Returns:
-            Dict with 'loss', 'loss_sem', 'loss_ins'.
+            Dict with 'loss', 'loss_sem', 'loss_ce', 'loss_dice', 'loss_ins'.
         """
-        loss_sem = self.ce_loss(predictions["semantic"], targets["class_labels"])
+        sem_logits = predictions["semantic"]
+        class_labels = targets["class_labels"]
+
+        loss_ce = self.ce_loss(sem_logits, class_labels)
+        loss_dice = (
+            self._dice_loss(sem_logits, class_labels, self.ignore_index)
+            if self.dice_weight > 0
+            else torch.tensor(0.0, device=sem_logits.device)
+        )
+        loss_sem = self.ce_weight * loss_ce + self.dice_weight * loss_dice
 
         labels = targets["labels"]
         w_edge = self._get_weight_boundary(labels) if self.weight_edge > 1.0 else torch.ones_like(labels, dtype=torch.float32)
         w_bone = self._get_weight_skeleton(labels) if self.weight_bone > 1.0 else torch.ones_like(labels, dtype=torch.float32)
-        loss_ins = self._instance_loss(predictions["instance"], labels, w_edge, w_bone)
+        class_ids = targets.get("class_ids") or predictions.get("class_ids")
+        loss_ins = self._instance_loss(predictions["instance"], labels, w_edge, w_bone, class_ids)
 
         total = loss_sem + loss_ins
 
         return {
             "loss": total,
             "loss_sem": loss_sem,
+            "loss_ce": loss_ce,
+            "loss_dice": loss_dice,
             "loss_ins": loss_ins,
         }

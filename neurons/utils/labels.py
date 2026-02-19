@@ -298,3 +298,94 @@ def _cluster_with_sklearn(
     labels_fg = np.array([label_map.get(int(l), 0) for l in labels_fg], dtype=np.int64)
 
     return labels_fg
+
+
+# ---------------------------------------------------------------------------
+# Differentiable clustering wrappers
+# ---------------------------------------------------------------------------
+
+def cluster_embeddings_soft(
+    embedding: torch.Tensor,
+    foreground_mask: Optional[torch.Tensor] = None,
+    bandwidth: float = 0.5,
+    num_iters: int = 10,
+    temperature: float = 1.0,
+    min_cluster_size: int = 50,
+) -> torch.Tensor:
+    """Cluster pixel embeddings using differentiable soft mean-shift.
+
+    This is the GPU-friendly, gradient-preserving alternative to
+    ``cluster_embeddings_meanshift``.
+
+    Args:
+        embedding: Pixel embeddings [E, *spatial] or [B, E, *spatial].
+        foreground_mask: Binary mask, same spatial shape.
+        bandwidth: Gaussian kernel bandwidth.
+        num_iters: Mean-shift iterations.
+        temperature: Softmax temperature (lower = harder assignments).
+        min_cluster_size: Minimum pixels per cluster.
+
+    Returns:
+        Instance labels with same spatial shape.
+    """
+    from neurons.inference.soft_clustering import SoftMeanShift
+
+    batched = embedding.dim() >= 4
+    if not batched:
+        embedding = embedding.unsqueeze(0)
+        if foreground_mask is not None:
+            foreground_mask = foreground_mask.unsqueeze(0)
+
+    clusterer = SoftMeanShift(
+        bandwidth=bandwidth,
+        num_iters=num_iters,
+        temperature=temperature,
+        min_cluster_size=min_cluster_size,
+    )
+    labels, _, _ = clusterer(embedding, foreground_mask)
+
+    if not batched:
+        labels = labels.squeeze(0)
+    return labels
+
+
+def cluster_offsets_hough(
+    offsets: torch.Tensor,
+    foreground_mask: Optional[torch.Tensor] = None,
+    bin_size: float = 2.0,
+    sigma: float = 2.0,
+    threshold: float = 0.3,
+    min_votes: int = 50,
+) -> torch.Tensor:
+    """Cluster via Hough voting on predicted spatial offsets.
+
+    Args:
+        offsets: Predicted offsets [S, *spatial] or [B, S, *spatial].
+        foreground_mask: Binary mask, same spatial shape.
+        bin_size: Spatial bin size for vote accumulator.
+        sigma: Gaussian smoothing sigma for votes.
+        threshold: Relative peak threshold.
+        min_votes: Minimum votes for a valid peak.
+
+    Returns:
+        Instance labels with same spatial shape.
+    """
+    from neurons.inference.soft_clustering import HoughVoting
+
+    batched = offsets.dim() >= 4
+    if not batched:
+        offsets = offsets.unsqueeze(0)
+        if foreground_mask is not None:
+            foreground_mask = foreground_mask.unsqueeze(0)
+
+    voter = HoughVoting(
+        bin_size=bin_size,
+        sigma=sigma,
+        threshold=threshold,
+        min_votes=min_votes,
+    )
+    labels = voter(offsets, foreground_mask)
+
+    if not batched:
+        labels = labels.squeeze(0)
+    return labels

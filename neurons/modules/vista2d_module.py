@@ -24,8 +24,8 @@ class Vista2DModule(pl.LightningModule):
     PyTorch Lightning module for Vista2D-based image segmentation.
 
     Two-head architecture:
-    - semantic: per-pixel class logits  [B, 16, H, W]
-    - instance: per-pixel embeddings    [B, 16, H, W]
+    - semantic: per-pixel class logits  [B, C, H, W]
+    - instance: per-pixel embeddings    [B, E, H, W]
 
     Args:
         model_config: Model configuration dict.
@@ -50,6 +50,7 @@ class Vista2DModule(pl.LightningModule):
         self.model = _Model(
             in_channels=model_config.get("in_channels", 1),
             num_classes=model_config.get("num_classes", 16),
+            emb_dim=model_config.get("emb_dim", 16),
             feature_size=model_config.get("feature_size", 48),
             encoder_name=model_config.get("encoder_name", "segresnet"),
         )
@@ -62,11 +63,15 @@ class Vista2DModule(pl.LightningModule):
             weight_bone=loss_config.get("weight_bone", 10.0),
             delta_v=loss_config.get("delta_v", 0.5),
             delta_d=loss_config.get("delta_d", 1.5),
+            ce_weight=loss_config.get("ce_weight", 1.0),
+            dice_weight=loss_config.get("dice_weight", 0.0),
+            class_weights=loss_config.get("class_weights"),
+            ignore_index=loss_config.get("ignore_index", -100),
         )
 
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, **kw: Any) -> Dict[str, torch.Tensor]:
         """Forward pass through 2-head model."""
-        return self.model(x)
+        return self.model(x, **kw)
 
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Extract and reshape targets from batch dict."""
@@ -74,10 +79,13 @@ class Vista2DModule(pl.LightningModule):
         if labels.dim() == _SPATIAL_DIMS + 2:
             labels = rearrange(labels, _SQUEEZE_PATTERN)
 
-        return {
+        targets: Dict[str, Any] = {
             "class_labels": batch.get("class_ids", (labels > 0).long()),
             "labels": labels,
         }
+        if "class_ids" in batch:
+            targets["class_ids"] = batch["class_ids"]
+        return targets
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
@@ -85,8 +93,8 @@ class Vista2DModule(pl.LightningModule):
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
-        predictions = self(images)
         targets = self._prepare_targets(batch)
+        predictions = self.model(images, class_ids=targets.get("class_ids"))
         losses = self.criterion(predictions, targets)
 
         bs = images.shape[0]
@@ -101,8 +109,8 @@ class Vista2DModule(pl.LightningModule):
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
-        predictions = self(images)
         targets = self._prepare_targets(batch)
+        predictions = self.model(images, class_ids=targets.get("class_ids"))
         losses = self.criterion(predictions, targets)
 
         bs = images.shape[0]
@@ -112,6 +120,26 @@ class Vista2DModule(pl.LightningModule):
         preds = predictions["semantic"].argmax(dim=1)
         acc = (preds == targets["class_labels"]).float().mean()
         self.log("val/accuracy", acc, prog_bar=True, sync_dist=True, batch_size=bs)
+
+        return losses["loss"]
+
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Test step (same metrics as validation)."""
+        images = batch["image"]
+        if images.dim() == _SPATIAL_DIMS + 1:
+            images = rearrange(images, _EXPAND_PATTERN)
+
+        targets = self._prepare_targets(batch)
+        predictions = self.model(images, class_ids=targets.get("class_ids"))
+        losses = self.criterion(predictions, targets)
+
+        bs = images.shape[0]
+        for name, val in losses.items():
+            self.log(f"test/{name}", val, sync_dist=True, batch_size=bs)
+
+        preds = predictions["semantic"].argmax(dim=1)
+        acc = (preds == targets["class_labels"]).float().mean()
+        self.log("test/accuracy", acc, sync_dist=True, batch_size=bs)
 
         return losses["loss"]
 

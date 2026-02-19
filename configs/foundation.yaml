@@ -1,21 +1,17 @@
-# Combined Multi-Dataset Vista3D Configuration
-# Training Vista3D model on combined SNEMI3D and CREMI3D datasets
-#
-# Dataset label format:
-# - 'image': input EM volume [Z, Y, X]
-# - 'label': indexed instance segmentation (unique IDs per object)
-# - 'class_ids': semantic class for each pixel (background=0, neuron=1, ...)
+# Foundation Model Configuration
+# Large-scale Vista3D training with per-class instance loss,
+# multi-dataset combine, and geometric projection heads.
 
 defaults:
   - default
 
-experiment_name: combine_vista3d
-project_name: neurons-vista3d
+experiment_name: foundation_vista3d
+project_name: neurons-foundation
 seed: 42
-logger: tensorboard
+logger: wandb
 log_dir: logs
 
-# Data Configuration
+# Data Configuration -- combine all available datasets
 data:
   dataset: combine
   datasets:
@@ -31,44 +27,49 @@ data:
         - A
         - B
         - C
+    mitoem2:
+      enabled: true
+      data_root: data/mitoem2
+      weight: 1.5
 
   patch_size:
-    - 32
+    - 64
     - 128
     - 128
-  batch_size: 4
-  num_workers: 4
+  batch_size: 2
+  num_workers: 8
   cache_rate: 1.0
-  train_val_split: 0.2
+  train_val_split: 0.15
 
   semantic_classes:
     names:
       - background
       - neuron
       - cleft
-      - mito
+      - mitochondria
+      - mito_boundary
     default_class: 1
 
 # Model Configuration
 model:
   type: vista3d
   encoder_name: segresnet
-  feature_size: 48
+  feature_size: 96
   in_channels: 1
   num_classes: 16
-  emb_dim: 16
+  emb_dim: 32
 
 # Training Configuration
 training:
-  max_epochs: 300
+  max_epochs: 500
   accelerator: gpu
   devices: 1
   strategy: auto
-  precision: 16-mixed
+  precision: bf16-mixed
   gradient_clip_val: 1.0
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 4
   val_check_interval: 1.0
-  check_val_every_n_epoch: 1
+  check_val_every_n_epoch: 2
   num_sanity_val_steps: 2
   log_every_n_steps: 10
   benchmark: true
@@ -78,28 +79,27 @@ training:
 # Optimizer Configuration
 optimizer:
   type: adamw
-  lr: 1.0e-4
-  weight_decay: 1.0e-5
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
   betas:
     - 0.9
     - 0.999
   scheduler:
     type: cosine
-    T_max: 300
+    T_max: 500
     eta_min: 1.0e-7
 
 # Loss Configuration
 loss:
-  # Semantic loss weights
   ce_weight: 0.5
   dice_weight: 0.5
   class_weights:
-    - 0.10  # 0: background
-    - 0.40  # 1: neuron
-    - 0.30  # 2: cleft
+    - 0.05  # 0: background
+    - 0.35  # 1: neuron
+    - 0.25  # 2: cleft
     - 0.20  # 3: mitochondria
-    - 0.00  # 4-15: unused headroom
-    - 0.00
+    - 0.15  # 4: mito_boundary
+    - 0.00  # 5-15: unused headroom
     - 0.00
     - 0.00
     - 0.00
@@ -112,14 +112,12 @@ loss:
     - 0.00
   ignore_index: -100
 
-  # Instance discriminative loss
   weight_pull: 1.0
   weight_push: 1.0
   weight_norm: 0.001
   delta_v: 0.5
   delta_d: 1.5
 
-  # Geometry-aware weighting
   weight_edge: 10.0
   weight_bone: 10.0
 
@@ -128,8 +126,8 @@ callbacks:
   checkpoint:
     enabled: true
     dirpath: null
-    filename: "combine-{epoch:02d}-{val/loss:.4f}"
-    save_top_k: 3
+    filename: "foundation-{epoch:02d}-{val/loss:.4f}"
+    save_top_k: 5
     monitor: val/loss
     mode: min
     save_last: true
@@ -137,7 +135,7 @@ callbacks:
   early_stopping:
     enabled: true
     monitor: val/loss
-    patience: 50
+    patience: 80
     mode: min
 
   lr_monitor:

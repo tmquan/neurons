@@ -7,6 +7,8 @@ from neurons.utils.labels import (
     relabel_sequential,
     relabel_after_crop,
     cluster_embeddings_meanshift,
+    cluster_embeddings_soft,
+    cluster_offsets_hough,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "relabel_sequential",
     "relabel_after_crop",
     "cluster_embeddings_meanshift",
+    "cluster_embeddings_soft",
+    "cluster_offsets_hough",
 ]

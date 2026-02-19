@@ -6,7 +6,7 @@ Vista3D model wrapper for volumetric connectomics segmentation.
 - Instance: per-voxel embedding vectors for discriminative clustering (emb_dim channels)
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -84,11 +84,24 @@ class Vista3DWrapper(nn.Module):
             )
             self._has_vista3d = False
 
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Forward pass through backbone + two parallel heads."""
+    def forward(
+        self,
+        x: torch.Tensor,
+        class_ids: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Forward pass through backbone + two parallel heads.
+
+        Args:
+            x: Input tensor [B, C, D, H, W].
+            class_ids: Optional per-voxel semantic class labels [B, D, H, W].
+                Passed through so the loss can compute per-class instance losses.
+        """
         feat = self.vista3d(x) if self._has_vista3d else self.backbone(x)
 
-        return {
+        out: Dict[str, torch.Tensor] = {
             "semantic": self.head_semantic(feat),
             "instance": self.head_instance(feat),
         }
+        if class_ids is not None:
+            out["class_ids"] = class_ids
+        return out

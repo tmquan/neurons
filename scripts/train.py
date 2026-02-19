@@ -47,6 +47,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         CREMI3DDataModule,
         CombineDataModule,
         MICRONSDataModule,
+        MitoEM2DataModule,
         SNEMI3DDataModule,
     )
 
@@ -93,54 +94,80 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             **common_args,
         )
 
+    elif dataset_type == "mitoem2":
+        return MitoEM2DataModule(
+            split=data_cfg.get("split", "human"),
+            slice_mode=data_cfg.get("slice_mode", True),
+            **common_args,
+        )
+
     elif dataset_type == "combine":
         datasets_cfg = data_cfg.get("datasets", {})
-        snemi_cfg = datasets_cfg.get("snemi3d", {})
-        cremi_cfg = datasets_cfg.get("cremi3d", {})
+        snemi3d_cfg = datasets_cfg.get("snemi3d", {})
+        cremi3d_cfg = datasets_cfg.get("cremi3d", {})
+        mitoem2_cfg = datasets_cfg.get("mitoem2", {})
 
         patch_size = data_cfg.get("patch_size", [32, 128, 128])
         if isinstance(patch_size, list):
             patch_size = tuple(patch_size)
 
-        snemi3d_dm: Optional[SNEMI3DDataModule] = None
-        cremi3d_dm: Optional[CREMI3DDataModule] = None
+        dm_entries: Dict[str, tuple] = {}
 
-        if snemi_cfg.get("enabled", True):
-            snemi3d_root = snemi_cfg.get("data_root", "data/snemi3d")
+        if snemi3d_cfg.get("enabled", True):
+            snemi3d_root = snemi3d_cfg.get("data_root", "data/snemi3d")
             if Path(snemi3d_root).exists():
-                snemi3d_dm = SNEMI3DDataModule(
-                    data_root=snemi3d_root,
-                    batch_size=data_cfg.get("batch_size", 4),
-                    num_workers=data_cfg.get("num_workers", 4),
-                    train_val_split=data_cfg.get("train_val_split", 0.2),
-                    cache_rate=data_cfg.get("cache_rate", 0.5),
-                    patch_size=patch_size,
-                    slice_mode=False,
+                dm_entries["snemi3d"] = (
+                    SNEMI3DDataModule(
+                        data_root=snemi3d_root,
+                        batch_size=data_cfg.get("batch_size", 4),
+                        num_workers=data_cfg.get("num_workers", 4),
+                        train_val_split=data_cfg.get("train_val_split", 0.2),
+                        cache_rate=data_cfg.get("cache_rate", 0.5),
+                        patch_size=patch_size,
+                        slice_mode=False,
+                    ),
+                    snemi3d_cfg.get("weight", 1.0),
                 )
 
-        if cremi_cfg.get("enabled", True):
-            cremi3d_root = cremi_cfg.get("data_root", "data/cremi3d")
+        if cremi3d_cfg.get("enabled", True):
+            cremi3d_root = cremi3d_cfg.get("data_root", "data/cremi3d")
             if Path(cremi3d_root).exists():
-                cremi3d_dm = CREMI3DDataModule(
-                    data_root=cremi3d_root,
-                    batch_size=data_cfg.get("batch_size", 4),
-                    num_workers=data_cfg.get("num_workers", 4),
-                    train_val_split=data_cfg.get("train_val_split", 0.2),
-                    cache_rate=data_cfg.get("cache_rate", 0.5),
-                    patch_size=patch_size,
-                    volumes=list(cremi_cfg.get("volumes", ["A", "B"])),
-                    include_clefts=cremi_cfg.get("include_clefts", True),
-                    include_mito=cremi_cfg.get("include_mito", False),
+                dm_entries["cremi3d"] = (
+                    CREMI3DDataModule(
+                        data_root=cremi3d_root,
+                        batch_size=data_cfg.get("batch_size", 4),
+                        num_workers=data_cfg.get("num_workers", 4),
+                        train_val_split=data_cfg.get("train_val_split", 0.2),
+                        cache_rate=data_cfg.get("cache_rate", 0.5),
+                        patch_size=patch_size,
+                        volumes=list(cremi3d_cfg.get("volumes", ["A", "B"])),
+                        include_clefts=cremi3d_cfg.get("include_clefts", True),
+                        include_mito=cremi3d_cfg.get("include_mito", False),
+                    ),
+                    cremi3d_cfg.get("weight", 1.0),
+                )
+
+        if mitoem2_cfg.get("enabled", False):
+            mito_root = mitoem2_cfg.get("data_root", "data/mitoem2")
+            if Path(mito_root).exists():
+                dm_entries["mitoem2"] = (
+                    MitoEM2DataModule(
+                        data_root=mito_root,
+                        batch_size=data_cfg.get("batch_size", 4),
+                        num_workers=data_cfg.get("num_workers", 4),
+                        train_val_split=data_cfg.get("train_val_split", 0.2),
+                        cache_rate=data_cfg.get("cache_rate", 0.5),
+                        split=mitoem2_cfg.get("split", "human"),
+                        slice_mode=False,
+                    ),
+                    mitoem2_cfg.get("weight", 1.5),
                 )
 
         return CombineDataModule(
-            snemi3d_datamodule=snemi3d_dm,
-            cremi3d_datamodule=cremi3d_dm,
+            datamodules=dm_entries if dm_entries else None,
             batch_size=data_cfg.get("batch_size", 4),
             num_workers=data_cfg.get("num_workers", 4),
             use_weighted_sampling=True,
-            snemi3d_weight=snemi_cfg.get("weight", 1.0),
-            cremi3d_weight=cremi_cfg.get("weight", 1.0),
         )
 
     else:

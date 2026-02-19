@@ -24,8 +24,8 @@ class Vista3DModule(pl.LightningModule):
     PyTorch Lightning module for Vista3D-based volumetric segmentation.
 
     Two-head architecture:
-    - semantic: per-voxel class logits  [B, 16, D, H, W]
-    - instance: per-voxel embeddings    [B, 16, D, H, W]
+    - semantic: per-voxel class logits  [B, C, D, H, W]
+    - instance: per-voxel embeddings    [B, E, D, H, W]
 
     Args:
         model_config: Model configuration dict.
@@ -69,9 +69,9 @@ class Vista3DModule(pl.LightningModule):
             ignore_index=loss_config.get("ignore_index", -100),
         )
 
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, **kw: Any) -> Dict[str, torch.Tensor]:
         """Forward pass through 2-head model."""
-        return self.model(x)
+        return self.model(x, **kw)
 
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Extract and reshape targets from batch dict."""
@@ -79,10 +79,13 @@ class Vista3DModule(pl.LightningModule):
         if labels.dim() == _SPATIAL_DIMS + 2:
             labels = rearrange(labels, _SQUEEZE_PATTERN)
 
-        return {
+        targets: Dict[str, Any] = {
             "class_labels": batch.get("class_ids", (labels > 0).long()),
             "labels": labels,
         }
+        if "class_ids" in batch:
+            targets["class_ids"] = batch["class_ids"]
+        return targets
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
@@ -90,8 +93,8 @@ class Vista3DModule(pl.LightningModule):
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
-        predictions = self(images)
         targets = self._prepare_targets(batch)
+        predictions = self.model(images, class_ids=targets.get("class_ids"))
         losses = self.criterion(predictions, targets)
 
         bs = images.shape[0]
@@ -106,8 +109,8 @@ class Vista3DModule(pl.LightningModule):
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
-        predictions = self(images)
         targets = self._prepare_targets(batch)
+        predictions = self.model(images, class_ids=targets.get("class_ids"))
         losses = self.criterion(predictions, targets)
 
         bs = images.shape[0]
@@ -117,6 +120,26 @@ class Vista3DModule(pl.LightningModule):
         preds = predictions["semantic"].argmax(dim=1)
         acc = (preds == targets["class_labels"]).float().mean()
         self.log("val/accuracy", acc, prog_bar=True, sync_dist=True, batch_size=bs)
+
+        return losses["loss"]
+
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Test step (same metrics as validation)."""
+        images = batch["image"]
+        if images.dim() == _SPATIAL_DIMS + 1:
+            images = rearrange(images, _EXPAND_PATTERN)
+
+        targets = self._prepare_targets(batch)
+        predictions = self.model(images, class_ids=targets.get("class_ids"))
+        losses = self.criterion(predictions, targets)
+
+        bs = images.shape[0]
+        for name, val in losses.items():
+            self.log(f"test/{name}", val, sync_dist=True, batch_size=bs)
+
+        preds = predictions["semantic"].argmax(dim=1)
+        acc = (preds == targets["class_labels"]).float().mean()
+        self.log("test/accuracy", acc, sync_dist=True, batch_size=bs)
 
         return losses["loss"]
 

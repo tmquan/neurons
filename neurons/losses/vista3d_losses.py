@@ -5,7 +5,7 @@ Computes semantic (CE + Dice) and instance (pull/push discriminative) losses
 for the 2-head Vista3D model.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -143,8 +143,35 @@ class Vista3DLoss(nn.Module):
         label: torch.Tensor,
         w_edge: torch.Tensor,
         w_bone: torch.Tensor,
+        class_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Discriminative instance loss on flattened spatial dims."""
+        """Discriminative instance loss on flattened spatial dims.
+
+        When ``class_ids`` is provided, pull/push is computed separately
+        per semantic class so that instances of different classes never
+        repel each other.
+        """
+        if class_ids is not None:
+            unique_classes = torch.unique(class_ids)
+            unique_classes = unique_classes[unique_classes > 0]
+            if len(unique_classes) == 0:
+                return self._instance_loss_single(embed, label, w_edge, w_bone)
+            total = torch.tensor(0.0, device=embed.device)
+            for cid in unique_classes:
+                class_mask = (class_ids == cid).long()
+                masked_label = label * class_mask
+                total = total + self._instance_loss_single(embed, masked_label, w_edge, w_bone)
+            return total / len(unique_classes)
+        return self._instance_loss_single(embed, label, w_edge, w_bone)
+
+    def _instance_loss_single(
+        self,
+        embed: torch.Tensor,
+        label: torch.Tensor,
+        w_edge: torch.Tensor,
+        w_bone: torch.Tensor,
+    ) -> torch.Tensor:
+        """Discriminative instance loss for a single class partition."""
         B = embed.shape[0]
         emb_flat = rearrange(embed, "b c ... -> b c (...)")
         lbl_flat = rearrange(label, "b ... -> b (...)")
@@ -168,10 +195,10 @@ class Vista3DLoss(nn.Module):
                 mask = lbl_flat[b] == uid
                 w = w_flat[b, mask]
                 emb = emb_flat[b, :, mask]
-                center = (emb * w.unsqueeze(0)).sum(1) / (w.sum() + 1e-8)
+                center = (emb * rearrange(w, "n -> 1 n")).sum(1) / (w.sum() + 1e-8)
                 centers.append(center)
 
-                dist = torch.norm(emb - center.unsqueeze(1), dim=0)
+                dist = torch.norm(emb - rearrange(center, "e -> e 1"), dim=0)
                 pull = F.relu(dist - self.delta_v) ** 2
                 loss_pull = loss_pull + (pull * w).mean()
 
@@ -225,7 +252,8 @@ class Vista3DLoss(nn.Module):
         labels = targets["labels"]
         w_edge = self._get_weight_boundary(labels) if self.weight_edge > 1.0 else torch.ones_like(labels, dtype=torch.float32)
         w_bone = self._get_weight_skeleton(labels) if self.weight_bone > 1.0 else torch.ones_like(labels, dtype=torch.float32)
-        loss_ins = self._instance_loss(predictions["instance"], labels, w_edge, w_bone)
+        class_ids = targets.get("class_ids") or predictions.get("class_ids")
+        loss_ins = self._instance_loss(predictions["instance"], labels, w_edge, w_bone, class_ids)
 
         total = loss_sem + loss_ins
 
