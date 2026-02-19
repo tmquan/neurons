@@ -11,8 +11,6 @@ from neurons.losses.discriminative import (
     DiscriminativeLoss,
     DiscriminativeLossVectorized,
 )
-from neurons.losses.boundary import BoundaryLoss, BoundaryAwareCrossEntropy
-from neurons.losses.weighted_boundary import WeightedBoundaryLoss
 from neurons.losses.vista2d_losses import Vista2DLoss
 from neurons.losses.vista3d_losses import Vista3DLoss
 
@@ -393,92 +391,6 @@ class TestSkeletonEmbeddingLoss:
         r = repr(loss_fn)
         assert "SkeletonEmbeddingLoss" in r
         assert "delta_push=15.0" in r
-
-
-class TestBoundaryLoss:
-    """Tests for BoundaryLoss."""
-
-    def test_output_shape(self) -> None:
-        """Test that output is a scalar."""
-        loss_fn = BoundaryLoss(boundary_weight=5.0)
-        logits = torch.randn(2, 2, 32, 32)
-        labels = torch.randint(0, 2, (2, 32, 32))
-
-        loss = loss_fn(logits, labels)
-        assert loss.dim() == 0
-        assert loss.isfinite()
-
-    def test_boundary_weight_effect(self) -> None:
-        """Test that higher boundary weight increases loss at boundaries."""
-        logits = torch.randn(1, 2, 32, 32)
-        labels = torch.zeros(1, 32, 32, dtype=torch.long)
-        labels[:, :, 16:] = 1
-
-        loss_low = BoundaryLoss(boundary_weight=1.0)(logits, labels)
-        loss_high = BoundaryLoss(boundary_weight=10.0)(logits, labels)
-
-        assert loss_high >= loss_low
-
-
-class TestBoundaryAwareCrossEntropy:
-    """Tests for BoundaryAwareCrossEntropy."""
-
-    def test_output_shape(self) -> None:
-        """Test that output is a scalar."""
-        loss_fn = BoundaryAwareCrossEntropy()
-        logits = torch.randn(2, 2, 32, 32)
-        labels = torch.randint(0, 2, (2, 32, 32))
-
-        loss = loss_fn(logits, labels)
-        assert loss.dim() == 0
-        assert loss.isfinite()
-
-
-class TestWeightedBoundaryLoss:
-    """Tests for WeightedBoundaryLoss."""
-
-    def test_2d_output(self) -> None:
-        """Test 2D weighted boundary loss."""
-        loss_fn = WeightedBoundaryLoss(num_classes=2, boundary_weight=5.0)
-        logits = torch.randn(2, 2, 32, 32)
-        labels = torch.randint(0, 2, (2, 32, 32))
-
-        loss = loss_fn(logits, labels)
-        assert loss.dim() == 0
-        assert loss.isfinite()
-
-    def test_3d_output(self) -> None:
-        """Test 3D weighted boundary loss."""
-        loss_fn = WeightedBoundaryLoss(num_classes=4, boundary_weight=3.0)
-        logits = torch.randn(1, 4, 8, 16, 16)
-        labels = torch.randint(0, 4, (1, 8, 16, 16))
-
-        loss = loss_fn(logits, labels)
-        assert loss.dim() == 0
-        assert loss.isfinite()
-
-    def test_manual_class_weights(self) -> None:
-        """Test with manually specified class weights."""
-        loss_fn = WeightedBoundaryLoss(
-            num_classes=3,
-            boundary_weight=5.0,
-            class_weights=[0.1, 0.5, 0.4],
-        )
-        logits = torch.randn(2, 3, 32, 32)
-        labels = torch.randint(0, 3, (2, 32, 32))
-
-        loss = loss_fn(logits, labels)
-        assert loss.isfinite()
-
-    def test_backward_pass(self) -> None:
-        """Test gradient computation."""
-        loss_fn = WeightedBoundaryLoss(num_classes=2)
-        logits = torch.randn(1, 2, 16, 16, requires_grad=True)
-        labels = torch.randint(0, 2, (1, 16, 16))
-
-        loss = loss_fn(logits, labels)
-        loss.backward()
-        assert logits.grad is not None
 
 
 class TestVista2DLoss:

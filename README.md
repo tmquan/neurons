@@ -12,49 +12,78 @@ A modular, extensible PyTorch Lightning-based infrastructure for connectomics re
 
 ## Features
 
-- **Multi-Dataset Support** -- SNEMI3D, CREMI3D, MICRONS, and combined multi-dataset training
+- **Multi-Dataset Support** -- SNEMI3D, CREMI3D, MICRONS, MitoEM2, and combined multi-dataset training with unified label space
 - **Vista Architecture** -- Vista3D and Vista2D with semantic + instance dual heads
 - **Model Zoo** -- SegResNet and Vista3D wrappers via MONAI
-- **Connectomics Losses** -- Discriminative, Boundary, and Weighted Boundary losses
-- **Evaluation Metrics** -- Adjusted Rand Index (ARI), Adjusted Mutual Information (AMI), Dice, IoU
+- **Geometric Instance Losses** -- Centroid and skeleton discriminative losses with learned projection heads for direction, structure tensor, and image reconstruction
+- **Evaluation Metrics** -- ARI, AMI, AXI, VOI, TED (instance); Dice, IoU (semantic)
 - **Hydra Configuration** -- YAML-based config with CLI overrides, no code changes needed
 - **Experiment Tracking** -- Weights & Biases and TensorBoard integration
 - **EM-Specific Augmentations** -- Elastic deformation, missing sections, imaging defects
-- **Multi-Format I/O** -- HDF5, TIFF, NRRD with automatic format detection
+- **Multi-Format I/O** -- HDF5, TIFF, NRRD, NIfTI with automatic format detection
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone <repo-url> neurons
 cd neurons
-
-# Install in development mode
 pip install -e ".[dev]"
 ```
 
 ### Dependencies
 
-Core: PyTorch, PyTorch Lightning, MONAI, einops, Hydra, h5py, tifffile, pynrrd
+Core: PyTorch, PyTorch Lightning, MONAI, einops, Hydra, h5py, tifffile, pynrrd, scipy
 
 ## Directory Structure
 
 ```
 neurons/
 ├── neurons/
-│   ├── datasets/       # Dataset classes: BASE, SNEMI3D, CREMI3D, MICRONS
-│   ├── datamodules/    # Lightning DataModules + COMBINE datamodule
-│   ├── modules/        # Lightning modules: semantic_seg, instance_seg, vista3d, vista2d
-│   ├── models/         # Model wrappers: Base, Vista3D, SegResNet
-│   ├── losses/         # Loss functions: discriminative, boundary, weighted_boundary
-│   ├── preprocessors/  # Data loaders: TIFF, HDF5, NRRD
-│   ├── transforms/     # EM-specific augmentation pipelines
-│   └── utils/          # I/O utilities: find_path, load_volume, save_volume
+│   ├── datasets/       # Dataset classes: SNEMI3D, CREMI3D, MICRONS, MitoEM2
+│   ├── datamodules/    # Lightning DataModules + CombineDataModule
+│   ├── models/         # Model wrappers: Vista3D, Vista2D, SegResNet
+│   ├── modules/        # Lightning training modules: Vista3D, Vista2D
+│   ├── losses/         # Discriminative (centroid + skeleton), Vista2D, Vista3D
+│   ├── metrics/        # Instance (ARI, AMI, VOI, TED) and semantic (Dice, IoU)
+│   ├── preprocessors/  # Format handlers: TIFF, HDF5, NRRD, NIfTI
+│   ├── transforms/     # EM-specific augmentations
+│   └── utils/          # I/O helpers and label utilities
 ├── configs/            # Hydra YAML configuration files
-├── scripts/            # Training entry points
-├── notebooks/          # EDA Jupyter notebooks
+├── scripts/            # Training entry points and dataset download scripts
+├── notebooks/          # Exploratory Jupyter notebooks
 └── tests/              # Unit test suite
 ```
+
+## Loss Functions
+
+### CentroidEmbeddingLoss
+
+Classic De Brabandere et al. (2017) discriminative loss with three optional
+learned projection heads that decode geometric properties from the E-dim
+embedding space:
+
+| Head | Projection | Target |
+|------|-----------|--------|
+| `proj_dir` | `E -> S` | Per-pixel direction toward centroid or skeleton |
+| `proj_cov` | `E -> S*S` | Per-pixel EDT structure tensor (tensor glyph) |
+| `proj_raw` | `E -> 4` | RGBA image reconstruction |
+
+The `dir_target` parameter selects between `"centroid"` (offset toward
+instance centroid) and `"skeleton"` (offset toward nearest topology-preserving
+skeleton point).
+
+### SkeletonEmbeddingLoss
+
+Geometry-aware variant operating on predicted offset fields. Four
+differentiable terms: L2 pull to nearest skeleton point, pairwise push on
+instance centres, cosine boundary penalty (DT gradient alignment), and
+skeleton benefit (differentiable DT sampling via `grid_sample`).
+
+### Vista2DLoss / Vista3DLoss
+
+Combined semantic (CE + optional Dice) and instance (pull/push/norm)
+losses for the two-head Vista architecture, with boundary and skeleton
+weighting via morphological gradient and normalised EDT.
 
 ## Quick Start
 
@@ -64,7 +93,7 @@ neurons/
 jupyter notebook notebooks/01_explore_snemi3d.ipynb
 ```
 
-### 2. Train a semantic segmentation model
+### 2. Train a segmentation model
 
 ```bash
 python scripts/train.py --config-name snemi3d
