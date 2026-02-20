@@ -127,32 +127,7 @@ dt     = scipy.ndimage.distance_transform_edt(mask)
 mask_f = mask.astype(float)
 ```
 
-### 3.2 Adaptive Integration Scale
-
-A fixed integration scale cannot work for all instance sizes.  If the
-Gaussian window is much smaller than the medial-axis depth, the window at
-the centre only sees gradients pointing in one direction (toward the
-nearest boundary), producing falsely anisotropic tensors even for round
-instances.
-
-The implementation adapts per-instance:
-
-```
-sigma_int = max(sigma, dt.max())
-```
-
-Since `dt.max()` is the medial-axis depth (maximum distance to boundary),
-setting `sigma_int >= dt.max()` ensures the Gaussian weight at the boundary
-is at least `exp(-1/4) ~ 0.78` of the centre weight, giving boundary
-contributions from **all** directions substantial influence at the medial
-axis.
-
-| Instance size | sigma_int | Effect |
-|---|---|---|
-| Small (max EDT < sigma) | sigma (unchanged) | standard smoothing |
-| Large (max EDT >> sigma) | max EDT | window reaches boundaries from everywhere inside |
-
-### 3.3 Gradient Masking
+### 3.2 Gradient Masking
 
 The EDT is zero outside the instance mask.  Taking Gaussian derivatives
 across the mask boundary creates artificial gradients from the
@@ -164,7 +139,7 @@ g = gaussian_filter(dt, sigma=sigma_d, order=derivative_order)
 g *= mask_f          # zero outside instance
 ```
 
-### 3.4 Mask-Normalised Smoothing
+### 3.3 Mask-Normalised Smoothing
 
 Naively smoothing the outer product with `gaussian_filter` averages in
 zeros from outside the instance, directionally biasing the tensor (the
@@ -172,13 +147,60 @@ short-axis boundary is closer, so more zeros leak in from that direction).
 Dividing by the smoothed mask corrects this:
 
 ```
-norm = max(gaussian_filter(mask_f, sigma=sigma_int), 1e-10)
+norm = max(gaussian_filter(mask_f, sigma=sigma), 1e-10)
 
-S_ij = gaussian_filter(g_i * g_j, sigma=sigma_int) / norm
+S_ij = gaussian_filter(g_i * g_j, sigma=sigma) / norm
 ```
 
 This is equivalent to computing the weighted average restricted to
 instance-interior pixels only.
+
+### 3.4 EDT-Blended Isotropy
+
+The raw structure tensor from step 3.3 captures local boundary
+orientation well, but for non-circular instances it remains anisotropic
+even at the medial axis.  This is because a fixed-sigma integration
+window centred deep inside the instance sees only gradients pointing
+toward the nearest boundary — all in roughly the same direction.
+
+Scaling sigma to the instance size does not help: a per-instance global
+sigma makes the tensor spatially uniform (same value everywhere), losing
+both boundary anisotropy and interior isotropy.
+
+The solution is **depth-weighted blending toward isotropy**.  A mixing
+weight is computed from the normalised EDT:
+
+\[
+  w(\mathbf{p}) = \left(\frac{\mathrm{EDT}(\mathbf{p})}{\max_{\mathbf{q} \in M_k}\mathrm{EDT}(\mathbf{q})}\right)^{2}
+\]
+
+The blended tensor replaces the eigenvalues with a mix of the original
+values and their mean:
+
+\[
+  S_{\text{blend}}(\mathbf{p}) = (1 - w)\,S(\mathbf{p}) \;+\; w\,\frac{\mathrm{tr}(S(\mathbf{p}))}{S_{\text{dim}}}\,I
+\]
+
+| Location | \( w \) | Effect |
+|---|---|---|
+| Boundary (\(\mathrm{EDT} \approx 0\)) | \(\approx 0\) | raw anisotropic tensor preserved |
+| Medial axis (\(\mathrm{EDT} = \max\)) | \(\approx 1\) | eigenvalues collapse to their mean → isotropic |
+
+The squared exponent keeps the transition sharp near the boundary
+(preserving local edge orientation) while making the interior
+convincingly isotropic.
+
+In code:
+
+```python
+w = (dt / edt_max) ** 2          # [0, 1] per pixel
+trace = S_xx + S_yy
+iso   = trace / 2
+
+S_xx_blend = (1 - w) * S_xx + w * iso
+S_yy_blend = (1 - w) * S_yy + w * iso
+S_xy_blend = (1 - w) * S_xy              # off-diag shrinks to 0
+```
 
 ### 3.5 Storage Layout
 
@@ -287,9 +309,9 @@ The structure tensor gradient indices follow the same convention:
 
 | Parameter | Default | Set by | Effect |
 |---|---|---|---|
-| `sigma` | 5.0 | `_compute_covariance(sigma=...)` | Minimum integration scale; also controls `sigma_d = max(1, sigma/3)` for the derivative kernel |
-| `sigma_int` | `max(sigma, max_edt)` | computed per-instance | Actual integration scale; adapts to instance size |
-| `sigma_d` | `max(1.0, sigma / 3.0)` | computed once | Derivative kernel scale; kept small for sharp gradients |
+| `sigma` | 5.0 | `_compute_covariance(sigma=...)` | Integration scale for Gaussian smoothing; also controls `sigma_d = max(1, sigma/3)` for the derivative kernel |
+| `sigma_d` | `max(1.0, sigma / 3.0)` | computed once | Derivative kernel scale; kept small for sharp local gradients |
+| `w` exponent | 2 | hard-coded | Power applied to normalised EDT for the isotropy blend; higher = sharper transition, more boundary preserved |
 | `step` | 8 | notebook | Grid spacing for glyph subsampling (visualisation only) |
 | `glyph_radius` | `step * 0.4` | notebook | Half-width of each glyph ellipse (visualisation only) |
 | `w_cov` | 0.0 | `CentroidEmbeddingLoss(w_cov=...)` | Weight of the structure-tensor regression loss |
@@ -301,12 +323,15 @@ The structure tensor gradient indices follow the same convention:
 If tensor glyphs look wrong, check:
 
 1. **Interior glyphs are not isotropic (round)?**
-   `sigma_int` must be at least `dt.max()` per instance so the integration
-   window reaches boundaries from the medial axis.
+   The EDT-blended isotropy step (section 3.4) must be present.  Verify
+   that `w = (dt / edt_max) ** 2` is computed and applied to the diagonal
+   and off-diagonal components.
 
 2. **All glyphs are round (no boundary anisotropy)?**
-   `sigma_d` may be too large, blurring the gradient field.  It should be
-   much smaller than `sigma_int`.
+   The blending exponent may be too low (blending too aggressively toward
+   isotropy).  Increasing the exponent from 2 to 3 or 4 preserves more
+   anisotropy near the boundary.  Also check that `sigma_d` is small;
+   a large derivative scale blurs the gradient field.
 
 3. **Glyphs leak across instance boundaries?**
    Verify that gradients are multiplied by `mask_f` before forming the
@@ -323,3 +348,9 @@ If tensor glyphs look wrong, check:
    an inverted y-axis (`set_ylim(H, 0)`), the visual rotation is
    reflected.  The angle is `atan2(eigvec_y, eigvec_x)` in (col, row)
    coordinates.
+
+6. **Tensor is spatially uniform across the instance?**
+   This happens when the integration sigma is set to the instance size
+   (e.g. `sigma = dt.max()`), making every pixel see the same global
+   average.  Use a fixed small sigma with the EDT-blending approach
+   instead.

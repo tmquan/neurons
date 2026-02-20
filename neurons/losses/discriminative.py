@@ -313,24 +313,21 @@ def _compute_covariance(
     gradient is obtained via Gaussian derivatives, and the smoothed outer
     product of the gradient (the *structure tensor*) is stored per pixel.
 
-    The integration scale adapts per-instance so that the smoothing
-    window at the medial axis reaches the boundaries: this guarantees
-    isotropic (round) glyphs deep inside each instance, while near
-    boundaries the gradient is consistent, giving anisotropic glyphs
-    elongated along the boundary tangent.
-
     Gradients are masked to the instance interior and the Gaussian
     integration is normalised by the mask coverage to avoid boundary
     leakage from the zero-padded exterior.
+
+    After smoothing, the tensor is blended toward isotropy in proportion
+    to the normalised EDT depth: ``w = (EDT / max_EDT)^2``.  Near the
+    boundary (``w ~ 0``) the raw anisotropic tensor is preserved; at the
+    medial axis (``w ~ 1``) eigenvalues converge to their mean, yielding
+    a round glyph.
 
     Args:
         lbl_flat: [N] instance labels (0 = background).
         coords: [S, N] pixel coordinates.
         spatial_shape: e.g. (H, W) or (D, H, W).  Required.
-        sigma: Minimum integration scale for structure tensor smoothing.
-            The actual scale is ``max(sigma, max_edt)`` per instance
-            so that boundary contributions from all directions have
-            substantial Gaussian weight at the medial axis.
+        sigma: Integration scale for structure tensor smoothing.
 
     Returns:
         [S*S, N] structure tensor flattened row-major per pixel
@@ -356,9 +353,9 @@ def _compute_covariance(
             continue
         dt = _scipy_edt(mask).astype(np.float64)
         mask_f = mask.astype(np.float64)
+        edt_max = dt.max()
 
-        sigma_int = max(sigma, dt.max())
-        norm = np.maximum(_gauss(mask_f, sigma=sigma_int), 1e-10)
+        norm = np.maximum(_gauss(mask_f, sigma=sigma), 1e-10)
 
         grads = []
         for i in range(S):
@@ -371,8 +368,32 @@ def _compute_covariance(
         idx = 0
         for i in range(S):
             for j in range(S):
-                smoothed = _gauss(grads[i] * grads[j], sigma=sigma_int) / norm
-                st_np[idx][mask] = smoothed[mask]
+                st_np[idx][mask] = (
+                    _gauss(grads[i] * grads[j], sigma=sigma) / norm
+                )[mask]
+                idx += 1
+
+        # Blend toward isotropy based on normalised EDT depth.
+        w = np.zeros_like(dt)
+        if edt_max > 1e-6:
+            w[mask] = (dt[mask] / edt_max) ** 2
+
+        trace = np.zeros(mask.shape, dtype=np.float64)
+        for i in range(S):
+            trace += st_np[i * S + i]
+        iso_val = trace / S
+
+        idx = 0
+        for i in range(S):
+            for j in range(S):
+                if i == j:
+                    st_np[idx][mask] = (
+                        (1.0 - w[mask]) * st_np[idx][mask] + w[mask] * iso_val[mask]
+                    ).astype(np.float32)
+                else:
+                    st_np[idx][mask] = (
+                        (1.0 - w[mask]) * st_np[idx][mask]
+                    ).astype(np.float32)
                 idx += 1
 
     st_flat = torch.from_numpy(
