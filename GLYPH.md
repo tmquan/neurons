@@ -39,7 +39,7 @@ volumes).  The EDT assigns each interior pixel $\mathbf{p} \in M_k$ the
 Euclidean distance to the nearest exterior pixel:
 
 $$
-D(\mathbf{p}) \;=\; \min_{\mathbf{q} \,\notin\, M_k} \lVert \mathbf{p} - \mathbf{q} \rVert_2
+D(\mathbf{p}) = \min_{\mathbf{q} \notin M_k} \|\mathbf{p} - \mathbf{q}\|_2
 $$
 
 Key properties of $D$:
@@ -65,26 +65,24 @@ Let $G_\sigma : \mathbb{R}^S \to \mathbb{R}$ denote the isotropic
 Gaussian of standard deviation $\sigma$:
 
 $$
-G_\sigma(\mathbf{x}) \;=\; \frac{1}{(2\pi\sigma^2)^{S/2}} \exp\!\Bigl(-\frac{\lVert\mathbf{x}\rVert^2}{2\sigma^2}\Bigr)
+G_\sigma(\mathbf{x}) = \frac{1}{(2\pi\sigma^2)^{S/2}} \exp\left(-\frac{\|\mathbf{x}\|^2}{2\sigma^2}\right)
 $$
 
 The partial derivative of the smoothed EDT along the $i$-th coordinate
 axis is:
 
 $$
-\partial_i \bigl(G_{\sigma_d} * D\bigr)(\mathbf{p})
-\;=\; \bigl(\partial_i G_{\sigma_d}\bigr) * D\;(\mathbf{p})
+\partial_i (G_{\sigma_d} * D)(\mathbf{p}) = (\partial_i G_{\sigma_d}) * D(\mathbf{p})
 $$
 
 where $*$ is convolution and $\sigma_d$ is the **derivative scale**,
-set to $\sigma_d = \max(1,\; \sigma / 3)$ with $\sigma$ being the
+set to $\sigma_d = \max(1, \sigma / 3)$ with $\sigma$ being the
 user-facing integration scale parameter.
 
 This yields a smoothed gradient vector at each pixel:
 
 $$
-\mathbf{g}(\mathbf{p})
-\;=\; \Bigl(\partial_1(G_{\sigma_d} * D),\;\ldots,\;\partial_S(G_{\sigma_d} * D)\Bigr)(\mathbf{p})
+\mathbf{g}(\mathbf{p}) = \left(\partial_1(G_{\sigma_d} * D), \ldots, \partial_S(G_{\sigma_d} * D)\right)(\mathbf{p})
 $$
 
 In the code the axes are ordered $(x, y) = (\text{col}, \text{row})$ in
@@ -96,7 +94,7 @@ indicator $\mathbf{1}_{M_k}$ to suppress artificial gradients at the mask
 boundary (where $D$ drops discontinuously to zero):
 
 $$
-\tilde{g}_i(\mathbf{p}) \;=\; \mathbf{1}_{M_k}(\mathbf{p}) \;\cdot\; \partial_i(G_{\sigma_d} * D)(\mathbf{p})
+\tilde{g}_i(\mathbf{p}) = \mathbf{1}_{M_k}(\mathbf{p}) \cdot \partial_i(G_{\sigma_d} * D)(\mathbf{p})
 $$
 
 ### 2.3 Raw Structure Tensor with Mask-Normalised Smoothing
@@ -108,11 +106,7 @@ be diluted by the surrounding zeros.  The mask-normalised form corrects
 for this:
 
 $$
-S_{ij}^{\,\text{raw}}(\mathbf{p})
-\;=\;
-\frac
-  {\bigl(G_\sigma * (\tilde{g}_i \,\tilde{g}_j)\bigr)(\mathbf{p})}
-  {\bigl(G_\sigma * \mathbf{1}_{M_k}\bigr)(\mathbf{p})}
+S_{ij}^{\text{raw}}(\mathbf{p}) = \frac{(G_\sigma * (\tilde{g}_i \tilde{g}_j))(\mathbf{p})}{(G_\sigma * \mathbf{1}_{M_k})(\mathbf{p})}
 $$
 
 The denominator $G_\sigma * \mathbf{1}_{M_k}$ is the local mask coverage
@@ -123,12 +117,7 @@ asymmetric zero-padding.
 In 2-D this gives a symmetric $2 \times 2$ matrix at each pixel:
 
 $$
-S^{\text{raw}}(\mathbf{p})
-\;=\;
-\begin{pmatrix}
-  S_{xx}^{\text{raw}} & S_{xy}^{\text{raw}} \\[4pt]
-  S_{xy}^{\text{raw}} & S_{yy}^{\text{raw}}
-\end{pmatrix}
+S^{\text{raw}}(\mathbf{p}) = \begin{pmatrix} S_{xx}^{\text{raw}} & S_{xy}^{\text{raw}} \\ S_{xy}^{\text{raw}} & S_{yy}^{\text{raw}} \end{pmatrix}
 $$
 
 where $x = \text{col}$ and $y = \text{row}$.  In 3-D the matrix is
@@ -146,10 +135,7 @@ Since $S^{\text{raw}}$ is real symmetric and positive-semi-definite, its
 eigendecomposition is:
 
 $$
-S^{\text{raw}} = V \,\Lambda\, V^\top
-\quad\text{with}\quad
-\Lambda = \text{diag}(\lambda_1,\;\ldots,\;\lambda_S),
-\quad \lambda_1 \le \cdots \le \lambda_S
+S^{\text{raw}} = V \Lambda V^\top, \quad \Lambda = \text{diag}(\lambda_1, \ldots, \lambda_S), \quad \lambda_1 \le \cdots \le \lambda_S
 $$
 
 where the columns of $V$ are orthonormal eigenvectors.
@@ -183,9 +169,7 @@ an isotropic matrix, controlled by the normalised EDT depth.
 Define the **depth weight**:
 
 $$
-w(\mathbf{p})
-\;=\; \left(\frac{D(\mathbf{p})}{D_\max}\right)^{\!\alpha}
-\qquad \alpha = 2
+w(\mathbf{p}) = \left(\frac{D(\mathbf{p})}{D_\max}\right)^{\alpha}, \quad \alpha = 2
 $$
 
 where $D_\max = \max_{\mathbf{q} \in M_k} D(\mathbf{q})$.  The weight
@@ -197,9 +181,7 @@ toward 1 in the interior.
 The **isotropic component** with the same energy (trace) is:
 
 $$
-S^{\text{iso}}(\mathbf{p})
-\;=\; \frac{\text{tr}\bigl(S^{\text{raw}}(\mathbf{p})\bigr)}{S} \; I_S
-\;=\; \frac{\lambda_1 + \cdots + \lambda_S}{S} \; I_S
+S^{\text{iso}}(\mathbf{p}) = \frac{\text{tr}(S^{\text{raw}}(\mathbf{p}))}{S} \cdot I_S = \frac{\lambda_1 + \cdots + \lambda_S}{S} \cdot I_S
 $$
 
 where $I_S$ is the $S \times S$ identity matrix.
@@ -207,50 +189,33 @@ where $I_S$ is the $S \times S$ identity matrix.
 The blended tensor is:
 
 $$
-\boxed{\;
-S(\mathbf{p})
-\;=\;
-\bigl(1 - w(\mathbf{p})\bigr)\; S^{\text{raw}}(\mathbf{p})
-\;+\;
-w(\mathbf{p})\; S^{\text{iso}}(\mathbf{p})
-\;}
+S(\mathbf{p}) = (1 - w(\mathbf{p})) \cdot S^{\text{raw}}(\mathbf{p}) + w(\mathbf{p}) \cdot S^{\text{iso}}(\mathbf{p})
 $$
 
 Expanding component-wise in 2-D:
 
 $$
-S_{ij}(\mathbf{p}) =
-\begin{cases}
-  (1 - w)\, S_{ij}^{\text{raw}} + w \,\dfrac{S_{xx}^{\text{raw}} + S_{yy}^{\text{raw}}}{2}
-    & \text{if } i = j \\[8pt]
-  (1 - w)\, S_{ij}^{\text{raw}}
-    & \text{if } i \ne j
-\end{cases}
+S_{ij}(\mathbf{p}) = \begin{cases} (1 - w) S_{ij}^{\text{raw}} + w \frac{S_{xx}^{\text{raw}} + S_{yy}^{\text{raw}}}{2} & \text{if } i = j \\ (1 - w) S_{ij}^{\text{raw}} & \text{if } i \ne j \end{cases}
 $$
 
 **Effect on eigenvalues.**  Writing the raw eigenvalues as
 $\lambda_\text{min}, \lambda_\text{max}$ and their mean as
-$\bar\lambda = (\lambda_\text{min} + \lambda_\text{max})/2$, the blended
+$\bar{\lambda} = (\lambda_\text{min} + \lambda_\text{max})/2$, the blended
 eigenvalues are:
 
 $$
-\lambda_i' \;=\; (1 - w)\,\lambda_i \;+\; w\,\bar\lambda
+\lambda_i' = (1 - w) \lambda_i + w \bar{\lambda}
 $$
 
 so the blended isotropy ratio becomes:
 
 $$
-r'
-\;=\; \frac{\lambda_\text{min}'}{\lambda_\text{max}'}
-\;=\; \frac{(1-w)\,\lambda_\text{min} + w\,\bar\lambda}
-           {(1-w)\,\lambda_\text{max} + w\,\bar\lambda}
+r' = \frac{\lambda_\text{min}'}{\lambda_\text{max}'} = \frac{(1-w) \lambda_\text{min} + w \bar{\lambda}}{(1-w) \lambda_\text{max} + w \bar{\lambda}}
 $$
 
-At the boundary ($w = 0$): $r' = \lambda_\text{min}/\lambda_\text{max} = r$
-(unchanged).
+At the boundary ($w = 0$): $r' = \lambda_\text{min}/\lambda_\text{max} = r$ (unchanged).
 
-At the medial axis ($w = 1$): $r' = \bar\lambda / \bar\lambda = 1$
-(perfectly isotropic).
+At the medial axis ($w = 1$): $r' = \bar{\lambda} / \bar{\lambda} = 1$ (perfectly isotropic).
 
 The blend is monotone in $w$: as $w$ increases from 0 to 1, $r'$
 increases from the raw ratio $r$ to 1.
@@ -262,9 +227,7 @@ $S = V \,\text{diag}(\lambda_1', \lambda_2') \, V^\top$ at pixel
 $\mathbf{p}$, the glyph ellipse is parameterised by:
 
 $$
-\text{width} = 2\,R, \qquad
-\text{height} = 2\,R \cdot r', \qquad
-\text{angle} = \arctan\!\frac{v_y^{(1)}}{v_x^{(1)}}
+\text{width} = 2R, \quad \text{height} = 2R \cdot r', \quad \text{angle} = \arctan\left(\frac{v_y^{(1)}}{v_x^{(1)}}\right)
 $$
 
 where $R$ is a fixed visual radius (`glyph_radius`),
@@ -365,11 +328,7 @@ $\{(x_n, y_n)\}_{n=1}^{N_k}$ where $x = \text{col}$, $y = \text{row}$,
 the **sample covariance matrix** is:
 
 $$
-C_k
-= \frac{1}{N_k - 1}
-  \sum_{n=1}^{N_k}
-  \begin{pmatrix} x_n - \bar{x} \\ y_n - \bar{y} \end{pmatrix}
-  \begin{pmatrix} x_n - \bar{x} \\ y_n - \bar{y} \end{pmatrix}^{\!\top}
+C_k = \frac{1}{N_k - 1} \sum_{n=1}^{N_k} \begin{pmatrix} x_n - \bar{x} \\ y_n - \bar{y} \end{pmatrix} \begin{pmatrix} x_n - \bar{x} \\ y_n - \bar{y} \end{pmatrix}^{\top}
 $$
 
 with centroid $(\bar{x}, \bar{y})$.  This is a single $2\times 2$ matrix
@@ -415,9 +374,7 @@ The projection maps the $E$-dimensional embedding $\mathbf{e}_\mathbf{p}$
 at pixel $\mathbf{p}$ to an $S^2$-dimensional prediction:
 
 $$
-\hat{\mathbf{s}}_\mathbf{p}
-= W_\text{cov}\, \mathbf{e}_\mathbf{p},
-\qquad W_\text{cov} \in \mathbb{R}^{S^2 \times E}
+\hat{\mathbf{s}}_{\mathbf{p}} = W_\text{cov} \mathbf{e}_{\mathbf{p}}, \quad W_\text{cov} \in \mathbb{R}^{S^2 \times E}
 $$
 
 The target $\mathbf{s}_\mathbf{p} \in \mathbb{R}^{S^2}$ is the
@@ -425,22 +382,13 @@ row-major flattening of $S(\mathbf{p})$.  The loss averages over all
 foreground pixels:
 
 $$
-\mathcal{L}_\text{cov}
-= \frac{1}{N_\text{fg}}
-  \sum_{\mathbf{p}\, \in\, \text{fg}}
-  \bigl\lVert \hat{\mathbf{s}}_\mathbf{p} - \mathbf{s}_\mathbf{p} \bigr\rVert^2
+\mathcal{L}_\text{cov} = \frac{1}{N_\text{fg}} \sum_{\mathbf{p} \in \text{fg}} \| \hat{\mathbf{s}}_{\mathbf{p}} - \mathbf{s}_{\mathbf{p}} \|^2
 $$
 
 and the total loss includes it weighted by $w_\text{cov}$:
 
 $$
-\mathcal{L}_\text{total}
-= A\,\mathcal{L}_\text{var}
-+ B\,\mathcal{L}_\text{dst}
-+ R\,\mathcal{L}_\text{reg}
-+ w_\text{dir}\,\mathcal{L}_\text{dir}
-+ w_\text{cov}\,\mathcal{L}_\text{cov}
-+ w_\text{raw}\,\mathcal{L}_\text{raw}
+\mathcal{L}_\text{total} = A \mathcal{L}_\text{var} + B \mathcal{L}_\text{dst} + R \mathcal{L}_\text{reg} + w_\text{dir} \mathcal{L}_\text{dir} + w_\text{cov} \mathcal{L}_\text{cov} + w_\text{raw} \mathcal{L}_\text{raw}
 $$
 
 By regressing the structure tensor, the network learns to encode local
