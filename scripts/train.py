@@ -68,8 +68,10 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         common_args["image_size"] = tuple(image_size) if isinstance(image_size, list) else image_size
 
     if dataset_type == "snemi3d":
+        patch_size = data_cfg.get("patch_size")
         return SNEMI3DDataModule(
             slice_mode=data_cfg.get("slice_mode", True),
+            patch_size=tuple(patch_size) if patch_size else None,
             **common_args,
         )
 
@@ -85,19 +87,23 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         )
 
     elif dataset_type == "microns":
+        patch_size = data_cfg.get("patch_size")
         return MICRONSDataModule(
             volume_file=data_cfg.get("volume_file", "volume"),
             segmentation_file=data_cfg.get("segmentation_file", "segmentation"),
             include_synapses=data_cfg.get("include_synapses", False),
             include_mitochondria=data_cfg.get("include_mitochondria", False),
             slice_mode=data_cfg.get("slice_mode", True),
+            patch_size=tuple(patch_size) if patch_size else None,
             **common_args,
         )
 
     elif dataset_type == "mitoem2":
+        patch_size = data_cfg.get("patch_size")
         return MitoEM2DataModule(
             split=data_cfg.get("split", "human"),
             slice_mode=data_cfg.get("slice_mode", True),
+            patch_size=tuple(patch_size) if patch_size else None,
             **common_args,
         )
 
@@ -200,6 +206,7 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
 
 def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     """Setup training callbacks from configuration."""
+    output_dir = cfg.get("output_dir", "outputs")
     callbacks: List[pl.Callback] = []
 
     callback_cfg = cfg.get("callbacks", {})
@@ -208,7 +215,7 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     if ckpt_cfg.get("enabled", True):
         callbacks.append(
             ModelCheckpoint(
-                dirpath=ckpt_cfg.get("dirpath", "checkpoints"),
+                dirpath=ckpt_cfg.get("dirpath") or str(Path(output_dir) / "checkpoints"),
                 filename=ckpt_cfg.get("filename", "{epoch:02d}-{val/loss:.4f}"),
                 save_top_k=ckpt_cfg.get("save_top_k", 3),
                 monitor=ckpt_cfg.get("monitor", "val/loss"),
@@ -234,6 +241,18 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     if callback_cfg.get("lr_monitor", {}).get("enabled", True):
         callbacks.append(LearningRateMonitor(logging_interval="step"))
 
+    img_cfg = callback_cfg.get("image_logger", {})
+    if img_cfg.get("enabled", False):
+        from neurons.callbacks import ImageLogger
+        spatial = cfg.get("model", {}).get("type", "vista2d")
+        callbacks.append(
+            ImageLogger(
+                every_n_epochs=img_cfg.get("every_n_epochs", 1),
+                max_images=img_cfg.get("max_images", 4),
+                spatial_dims=3 if "3d" in spatial else 2,
+            )
+        )
+
     callbacks.append(RichProgressBar())
     callbacks.append(ModelSummary(max_depth=2))
 
@@ -242,11 +261,12 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
 
 def setup_logger(cfg: DictConfig) -> Any:
     """Setup experiment logger."""
+    output_dir = cfg.get("output_dir", "outputs")
     logger_type = cfg.get("logger", "tensorboard")
 
     if logger_type == "tensorboard":
         return TensorBoardLogger(
-            save_dir=cfg.get("log_dir", "logs"),
+            save_dir=str(Path(output_dir) / "logs"),
             name=cfg.get("experiment_name", "neurons"),
             version=None,
         )
@@ -254,7 +274,7 @@ def setup_logger(cfg: DictConfig) -> Any:
         return WandbLogger(
             project=cfg.get("project_name", "neurons"),
             name=f"{cfg.get('experiment_name', 'run')}_{cfg.get('seed', 42)}",
-            save_dir=cfg.get("log_dir", "logs"),
+            save_dir=str(Path(output_dir) / "logs"),
         )
     else:
         return True
@@ -329,7 +349,8 @@ def main(cfg: DictConfig) -> None:
         raise
 
     if trainer.global_rank == 0:
-        final_path = Path("checkpoints") / "final_model.ckpt"
+        output_dir = cfg.get("output_dir", "outputs")
+        final_path = Path(output_dir) / "checkpoints" / "final_model.ckpt"
         final_path.parent.mkdir(parents=True, exist_ok=True)
         trainer.save_checkpoint(str(final_path))
         print(f"\nFinal model saved: {final_path}")

@@ -7,6 +7,7 @@ import torch
 
 from neurons.losses.discriminative import (
     CentroidEmbeddingLoss,
+    GeometryLoss,
     SkeletonEmbeddingLoss,
     DiscriminativeLoss,
     DiscriminativeLossVectorized,
@@ -16,40 +17,40 @@ from neurons.losses.vista3d_losses import Vista3DLoss
 
 
 # ---------------------------------------------------------------------------
-# CentroidEmbeddingLoss  (+ backward-compat aliases)
+# CentroidEmbeddingLoss  (pull / push / reg)
 # ---------------------------------------------------------------------------
 
 class TestCentroidEmbeddingLoss:
-    """Tests for CentroidEmbeddingLoss (discriminative loss + projection heads)."""
+    """Tests for CentroidEmbeddingLoss (pull/push/reg only)."""
 
     def test_return_dict_keys(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8)
+        loss_fn = CentroidEmbeddingLoss()
         embedding = torch.randn(1, 8, 16, 16)
         labels = torch.ones(1, 16, 16, dtype=torch.long)
         result = loss_fn(embedding, labels)
-        for key in ("loss", "l_var", "l_dst", "l_reg", "l_dir", "l_cov", "l_raw"):
+        for key in ("loss", "l_pull", "l_push", "l_reg"):
             assert key in result
 
     def test_zero_instances(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8)
+        loss_fn = CentroidEmbeddingLoss()
         embedding = torch.randn(2, 8, 16, 16)
         labels = torch.zeros(2, 16, 16, dtype=torch.long)
         result = loss_fn(embedding, labels)
         assert result["loss"].item() == 0.0
-        assert result["l_var"].item() == 0.0
-        assert result["l_dst"].item() == 0.0
+        assert result["l_pull"].item() == 0.0
+        assert result["l_push"].item() == 0.0
         assert result["l_reg"].item() == 0.0
 
     def test_single_instance(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8)
+        loss_fn = CentroidEmbeddingLoss()
         embedding = torch.randn(1, 8, 16, 16)
         labels = torch.ones(1, 16, 16, dtype=torch.long)
         result = loss_fn(embedding, labels)
         assert result["loss"].isfinite()
-        assert result["l_dst"].item() == 0.0
+        assert result["l_push"].item() == 0.0
 
     def test_multiple_instances(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(delta_var=0.5, delta_dst=1.5, emb_dim=8)
+        loss_fn = CentroidEmbeddingLoss(delta_pull=0.5, delta_push=1.5)
         embedding = torch.randn(2, 8, 32, 32)
         labels = torch.zeros(2, 32, 32, dtype=torch.long)
         labels[:, :16, :16] = 1
@@ -60,7 +61,7 @@ class TestCentroidEmbeddingLoss:
         assert result["loss"].item() >= 0.0
 
     def test_3d_input(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8, spatial_dims=3)
+        loss_fn = CentroidEmbeddingLoss()
         embedding = torch.randn(1, 8, 4, 16, 16)
         labels = torch.zeros(1, 4, 16, 16, dtype=torch.long)
         labels[:, :, :8, :8] = 1
@@ -69,7 +70,7 @@ class TestCentroidEmbeddingLoss:
         assert result["loss"].isfinite()
 
     def test_backward_pass(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8)
+        loss_fn = CentroidEmbeddingLoss()
         embedding = torch.randn(1, 8, 16, 16, requires_grad=True)
         labels = torch.zeros(1, 16, 16, dtype=torch.long)
         labels[:, :8, :] = 1
@@ -80,14 +81,23 @@ class TestCentroidEmbeddingLoss:
         assert embedding.grad.isfinite().all()
 
     def test_repr(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(delta_var=0.3, delta_dst=2.0, A=2.0)
+        loss_fn = CentroidEmbeddingLoss(delta_pull=0.3, delta_push=2.0, w_pull=2.0)
         r = repr(loss_fn)
         assert "CentroidEmbeddingLoss" in r
-        assert "delta_var=0.3" in r
+        assert "delta_pull=0.3" in r
 
     def test_backward_compat_aliases(self) -> None:
         assert DiscriminativeLoss is CentroidEmbeddingLoss
         assert DiscriminativeLossVectorized is CentroidEmbeddingLoss
+
+    def test_backward_compat_old_param_names(self) -> None:
+        """Old config names (delta_var, delta_dst, A, B, R) still work."""
+        loss_fn = CentroidEmbeddingLoss(delta_var=0.3, delta_dst=2.0, A=2.0, B=3.0, R=0.01)
+        assert loss_fn.delta_pull == 0.3
+        assert loss_fn.delta_push == 2.0
+        assert loss_fn.w_pull == 2.0
+        assert loss_fn.w_push == 3.0
+        assert loss_fn.w_reg == 0.01
 
     def test_alias_produces_same_results(self) -> None:
         torch.manual_seed(42)
@@ -97,129 +107,113 @@ class TestCentroidEmbeddingLoss:
         labels[:, :8, 8:] = 2
         labels[:, 8:, :] = 3
 
-        a = DiscriminativeLoss(delta_var=0.5, delta_dst=1.5, emb_dim=8)
-        b = DiscriminativeLossVectorized(delta_var=0.5, delta_dst=1.5, emb_dim=8)
+        a = DiscriminativeLoss(delta_var=0.5, delta_dst=1.5)
+        b = DiscriminativeLossVectorized(delta_var=0.5, delta_dst=1.5)
         ra = a(embedding, labels)
         rb = b(embedding, labels)
         assert torch.allclose(ra["loss"], rb["loss"], atol=1e-6)
 
-    # -- projection loss: backward compat (w_*=0 by default) --
 
-    def test_projections_disabled_by_default(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8)
-        embedding = torch.randn(1, 8, 16, 16)
-        labels = torch.ones(1, 16, 16, dtype=torch.long)
-        result = loss_fn(embedding, labels)
-        assert result["l_dir"].item() == 0.0
-        assert result["l_cov"].item() == 0.0
-        assert result["l_raw"].item() == 0.0
+# ---------------------------------------------------------------------------
+# GeometryLoss  (dir / cov / raw)
+# ---------------------------------------------------------------------------
 
-    # -- L_dir with centroid target --
+class TestGeometryLoss:
+    """Tests for GeometryLoss (geometry head supervision)."""
 
-    def test_l_dir_centroid_finite(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(
-            emb_dim=8, dir_target="centroid", w_dir=1.0,
-        )
-        embedding = torch.randn(1, 8, 16, 16)
-        labels = torch.zeros(1, 16, 16, dtype=torch.long)
+    S = 2
+    GEOM_CH = S + S * S + 4  # 10
+
+    def _make_inputs(self, B=1, H=16, W=16):
+        geometry = torch.randn(B, self.GEOM_CH, H, W, requires_grad=True)
+        labels = torch.zeros(B, H, W, dtype=torch.long)
         labels[:, :8, :8] = 1
         labels[:, 8:, :] = 2
-        result = loss_fn(embedding, labels)
+        return geometry, labels
+
+    def test_return_dict_keys(self) -> None:
+        loss_fn = GeometryLoss()
+        geometry, labels = self._make_inputs()
+        result = loss_fn(geometry, labels)
+        for key in ("loss", "l_dir", "l_cov", "l_raw"):
+            assert key in result
+
+    def test_all_finite(self) -> None:
+        loss_fn = GeometryLoss()
+        geometry, labels = self._make_inputs()
+        result = loss_fn(geometry, labels)
+        for v in result.values():
+            assert v.isfinite()
+
+    def test_zero_instances(self) -> None:
+        loss_fn = GeometryLoss()
+        geometry = torch.randn(1, self.GEOM_CH, 8, 8)
+        labels = torch.zeros(1, 8, 8, dtype=torch.long)
+        result = loss_fn(geometry, labels)
+        assert result["loss"].item() == 0.0
+
+    def test_backward_pass(self) -> None:
+        loss_fn = GeometryLoss()
+        geometry, labels = self._make_inputs()
+        result = loss_fn(geometry, labels)
+        result["loss"].backward()
+        assert geometry.grad is not None
+        assert geometry.grad.isfinite().all()
+
+    def test_dir_centroid(self) -> None:
+        loss_fn = GeometryLoss(dir_target="centroid", weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
+        geometry, labels = self._make_inputs()
+        result = loss_fn(geometry, labels)
         assert result["l_dir"].isfinite()
         assert result["l_dir"].item() >= 0.0
+        assert result["l_cov"].item() == 0.0
 
-    def test_l_dir_centroid_backward(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8, w_dir=1.0)
-        embedding = torch.randn(1, 8, 16, 16, requires_grad=True)
-        labels = torch.zeros(1, 16, 16, dtype=torch.long)
-        labels[:, :8, :] = 1
-        labels[:, 8:, :] = 2
-        result = loss_fn(embedding, labels)
-        result["loss"].backward()
-        assert embedding.grad is not None
-        assert loss_fn.proj_dir.weight.grad is not None
-
-    # -- L_dir with skeleton target --
-
-    def test_l_dir_skeleton_finite(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(
-            emb_dim=8, dir_target="skeleton", w_dir=1.0,
-        )
-        embedding = torch.randn(1, 8, 16, 16)
+    def test_dir_skeleton(self) -> None:
+        loss_fn = GeometryLoss(dir_target="skeleton", weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
+        geometry = torch.randn(1, self.GEOM_CH, 16, 16, requires_grad=True)
         labels = torch.zeros(1, 16, 16, dtype=torch.long)
         labels[:, 2:14, 2:7] = 1
         labels[:, 2:14, 9:14] = 2
-        result = loss_fn(embedding, labels)
+        result = loss_fn(geometry, labels)
         assert result["l_dir"].isfinite()
         assert result["l_dir"].item() >= 0.0
 
-    # -- L_cov --
-
-    def test_l_cov_finite(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8, w_cov=1.0)
-        embedding = torch.randn(1, 8, 16, 16)
-        labels = torch.zeros(1, 16, 16, dtype=torch.long)
-        labels[:, :8, :8] = 1
-        labels[:, 8:, :] = 2
-        result = loss_fn(embedding, labels)
+    def test_cov_finite(self) -> None:
+        loss_fn = GeometryLoss(weight_dir=0.0, weight_cov=1.0, weight_raw=0.0)
+        geometry, labels = self._make_inputs()
+        result = loss_fn(geometry, labels)
         assert result["l_cov"].isfinite()
         assert result["l_cov"].item() >= 0.0
 
-    def test_l_cov_backward(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8, w_cov=1.0)
-        embedding = torch.randn(1, 8, 16, 16, requires_grad=True)
-        labels = torch.zeros(1, 16, 16, dtype=torch.long)
-        labels[:, :8, :] = 1
-        labels[:, 8:, :] = 2
-        result = loss_fn(embedding, labels)
-        result["loss"].backward()
-        assert loss_fn.proj_cov.weight.grad is not None
-
-    # -- L_raw --
-
-    def test_l_raw_finite(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8, w_raw=1.0)
-        embedding = torch.randn(1, 8, 16, 16)
-        labels = torch.zeros(1, 16, 16, dtype=torch.long)
-        labels[:, :8, :] = 1
+    def test_raw_with_image(self) -> None:
+        loss_fn = GeometryLoss(weight_dir=0.0, weight_cov=0.0, weight_raw=1.0)
+        geometry, labels = self._make_inputs()
         gt_image = torch.rand(1, 1, 16, 16)
-        result = loss_fn(embedding, labels, raw_image=gt_image)
+        result = loss_fn(geometry, labels, raw_image=gt_image)
         assert result["l_raw"].isfinite()
         assert result["l_raw"].item() >= 0.0
 
-    def test_l_raw_zero_without_gt_image(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8, w_raw=1.0)
-        embedding = torch.randn(1, 8, 16, 16)
-        labels = torch.ones(1, 16, 16, dtype=torch.long)
-        result = loss_fn(embedding, labels)
+    def test_raw_zero_without_image(self) -> None:
+        loss_fn = GeometryLoss(weight_dir=0.0, weight_cov=0.0, weight_raw=1.0)
+        geometry, labels = self._make_inputs()
+        result = loss_fn(geometry, labels)
         assert result["l_raw"].item() == 0.0
 
-    def test_l_raw_backward(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(emb_dim=8, w_raw=1.0)
-        embedding = torch.randn(1, 8, 16, 16, requires_grad=True)
-        labels = torch.ones(1, 16, 16, dtype=torch.long)
-        gt_image = torch.rand(1, 1, 16, 16)
-        result = loss_fn(embedding, labels, raw_image=gt_image)
-        result["loss"].backward()
-        assert loss_fn.proj_raw.weight.grad is not None
-
-    # -- all projections enabled together --
-
-    def test_all_projections_together(self) -> None:
-        loss_fn = CentroidEmbeddingLoss(
-            emb_dim=8, w_dir=1.0, w_cov=1.0, w_raw=1.0,
-        )
-        embedding = torch.randn(2, 8, 16, 16, requires_grad=True)
-        labels = torch.zeros(2, 16, 16, dtype=torch.long)
-        labels[:, :8, :8] = 1
-        labels[:, :8, 8:] = 2
-        labels[:, 8:, :] = 3
+    def test_all_together(self) -> None:
+        loss_fn = GeometryLoss(weight_dir=1.0, weight_cov=1.0, weight_raw=1.0)
+        geometry, labels = self._make_inputs(B=2)
         gt_image = torch.rand(2, 1, 16, 16)
-        result = loss_fn(embedding, labels, raw_image=gt_image)
+        result = loss_fn(geometry, labels, raw_image=gt_image)
         assert result["loss"].isfinite()
         result["loss"].backward()
-        assert embedding.grad is not None
-        assert embedding.grad.isfinite().all()
+        assert geometry.grad is not None
+        assert geometry.grad.isfinite().all()
+
+    def test_repr(self) -> None:
+        loss_fn = GeometryLoss(weight_dir=2.0, weight_cov=0.5, weight_raw=0.0)
+        r = repr(loss_fn)
+        assert "GeometryLoss" in r
+        assert "weight_dir=2.0" in r
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +461,7 @@ class TestVista2DLoss:
         B, H, W = 1, 16, 16
         labels = torch.zeros(B, H, W, dtype=torch.long)
         labels[:, :8, :] = 1
-        w = loss_fn._get_weight_boundary(labels)
+        w = loss_fn.instance_loss._get_weight_boundary(labels)
         assert w.shape == (B, H, W)
         assert w.max() > 1.0
 
@@ -476,10 +470,10 @@ class TestVista2DLoss:
             weight_pull=2.0, weight_push=3.0, weight_norm=0.01,
             delta_v=0.3, delta_d=2.0,
         )
-        assert loss_fn.weight_pull == 2.0
-        assert loss_fn.weight_push == 3.0
-        assert loss_fn.delta_v == 0.3
-        assert loss_fn.delta_d == 2.0
+        assert loss_fn.instance_loss.weight_pull == 2.0
+        assert loss_fn.instance_loss.weight_push == 3.0
+        assert loss_fn.instance_loss.delta_v == 0.3
+        assert loss_fn.instance_loss.delta_d == 2.0
 
 
 class TestVista3DLoss:
@@ -538,7 +532,7 @@ class TestVista3DLoss:
         B, D, H, W = 1, 4, 8, 8
         labels = torch.zeros(B, D, H, W, dtype=torch.long)
         labels[:, :, :4, :] = 1
-        w = loss_fn._get_weight_boundary(labels)
+        w = loss_fn.instance_loss._get_weight_boundary(labels)
         assert w.shape == (B, D, H, W)
         assert w.max() > 1.0
 

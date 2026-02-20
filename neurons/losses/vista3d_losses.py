@@ -1,78 +1,57 @@
 """
-Vista3D combined loss for volumetric segmentation.
+Vista3D losses for volumetric segmentation.
 
-Computes semantic (CE + Dice) and instance (pull/push discriminative) losses
-for the 2-head Vista3D model.
+Public classes:
+- SemanticLoss:   CE + Dice on semantic logits
+- InstanceLoss:   pull/push/norm discriminative on instance embeddings (3D)
+- GeometryLoss:   dir/cov/raw regression (imported from discriminative.py)
+- Vista3DLoss:    composes SemanticLoss + InstanceLoss + GeometryLoss
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, reduce
-from scipy.ndimage import distance_transform_edt as _scipy_edt
+from einops import rearrange
+
+from neurons.losses.discriminative import GeometryLoss
 
 _SPATIAL_DIMS = 3
 _POOL_FN = F.max_pool3d
 _PAD_TUPLE = (1, 1, 1, 1, 1, 1)
-_REDUCE_PATTERN = "b ... -> b " + " ".join(["1"] * _SPATIAL_DIMS)
 
 
-class Vista3DLoss(nn.Module):
-    """
-    Combined loss for the Vista3D 2-head architecture.
+# ======================================================================
+# 1.  Semantic loss  (CE + Dice)
+# ======================================================================
 
-    Semantic branch:  ``ce_weight * CE  +  dice_weight * (1 - Dice)``
-    Instance branch:  weighted pull/push/norm discriminative loss.
+class SemanticLoss(nn.Module):
+    """Cross-entropy + optional Dice loss on semantic logits.
 
     Args:
-        weight_pull: Pull (variance) weight for instance embed.
-        weight_push: Push (distance) weight for instance embed.
-        weight_norm: Regularisation weight for instance embed.
-        weight_edge: Extra weight factor on boundary voxels.
-        weight_bone: Extra weight factor on skeleton (medial axis) voxels.
-        delta_v: Margin for the pull term.
-        delta_d: Margin for the push term.
-        ce_weight: Weight for CE loss in the semantic branch.
-        dice_weight: Weight for Dice loss in the semantic branch.
-        class_weights: Per-class weights for CE loss (length = num_classes).
-        ignore_index: Label value to ignore in CE loss.
+        weight_ce: scalar weight for CE term (default 1.0).
+        weight_dice: scalar weight for Dice term (default 0.0).
+        class_weights: per-class CE weights (optional).
+        ignore_index: label value to ignore (default -100).
     """
 
     def __init__(
         self,
-        weight_pull: float = 1.0,
-        weight_push: float = 1.0,
-        weight_norm: float = 0.001,
-        weight_edge: float = 10.0,
-        weight_bone: float = 10.0,
-        delta_v: float = 0.5,
-        delta_d: float = 1.5,
-        ce_weight: float = 1.0,
-        dice_weight: float = 0.0,
+        weight_ce: float = 1.0,
+        weight_dice: float = 0.0,
         class_weights: Optional[List[float]] = None,
         ignore_index: int = -100,
     ) -> None:
         super().__init__()
-        self.weight_pull = weight_pull
-        self.weight_push = weight_push
-        self.weight_norm = weight_norm
-        self.weight_edge = weight_edge
-        self.weight_bone = weight_bone
-        self.delta_v = delta_v
-        self.delta_d = delta_d
-        self.ce_weight = ce_weight
-        self.dice_weight = dice_weight
+        self.weight_ce = weight_ce
+        self.weight_dice = weight_dice
         self.ignore_index = ignore_index
 
         cw = torch.tensor(class_weights, dtype=torch.float32) if class_weights else None
         self.ce_loss = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index)
 
-    # ------------------------------------------------------------------
-    # Semantic helpers
-    # ------------------------------------------------------------------
     @staticmethod
     def _dice_loss(
         logits: torch.Tensor,
@@ -100,11 +79,71 @@ class Vista3DLoss(nn.Module):
         dice = (2.0 * intersection + eps) / (card_p + card_g + eps)
         return 1.0 - dice.mean()
 
-    # ------------------------------------------------------------------
-    # Weighting helpers
-    # ------------------------------------------------------------------
+    def forward(
+        self,
+        logits: torch.Tensor,
+        class_labels: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            logits: [B, C, *spatial] semantic logits.
+            class_labels: [B, *spatial] integer class labels.
+
+        Returns:
+            Dict with ``loss``, ``loss_ce``, ``loss_dice``.
+        """
+        loss_ce = self.ce_loss(logits, class_labels)
+        loss_dice = (
+            self._dice_loss(logits, class_labels, self.ignore_index)
+            if self.weight_dice > 0
+            else torch.tensor(0.0, device=logits.device)
+        )
+        loss = self.weight_ce * loss_ce + self.weight_dice * loss_dice
+        return {"loss": loss, "loss_ce": loss_ce, "loss_dice": loss_dice}
+
+
+# ======================================================================
+# 2.  Instance loss  (pull / push / norm + boundary / skeleton weighting)
+# ======================================================================
+
+class InstanceLoss(nn.Module):
+    """Weighted discriminative pull/push/norm loss on instance embeddings.
+
+    Boundary and skeleton weighting boost gradients near edges and the
+    medial axis respectively.
+
+    Args:
+        weight_pull: pull term weight.
+        weight_push: push term weight.
+        weight_norm: regularisation term weight.
+        weight_edge: multiplicative boost at instance boundaries.
+        weight_bone: multiplicative boost at skeleton / medial axis.
+        delta_v: pull hinge margin.
+        delta_d: push margin.
+    """
+
+    def __init__(
+        self,
+        weight_pull: float = 1.0,
+        weight_push: float = 1.0,
+        weight_norm: float = 0.001,
+        weight_edge: float = 10.0,
+        weight_bone: float = 10.0,
+        delta_v: float = 0.5,
+        delta_d: float = 1.5,
+    ) -> None:
+        super().__init__()
+        self.weight_pull = weight_pull
+        self.weight_push = weight_push
+        self.weight_norm = weight_norm
+        self.weight_edge = weight_edge
+        self.weight_bone = weight_bone
+        self.delta_v = delta_v
+        self.delta_d = delta_d
+
+    # ---- weighting helpers ----
+
     def _get_weight_boundary(self, label: torch.Tensor) -> torch.Tensor:
-        """Boundary weight map via morphological gradient."""
         gt_label_float = rearrange(label, "b ... -> b 1 ...").float()
         padded_arr = F.pad(gt_label_float, _PAD_TUPLE, mode="replicate")
         pooled_max = _POOL_FN(+padded_arr, 3, stride=1, padding=0)
@@ -114,7 +153,8 @@ class Vista3DLoss(nn.Module):
 
     @torch.no_grad()
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
-        """Skeleton (medial axis) weight map via scipy EDT."""
+        from scipy.ndimage import distance_transform_edt as _scipy_edt
+
         weight_bone = torch.ones_like(label, dtype=torch.float32)
         label_np = label.cpu().numpy()
 
@@ -134,49 +174,19 @@ class Vista3DLoss(nn.Module):
 
         return weight_bone
 
-    # ------------------------------------------------------------------
-    # Instance loss (pull / push / norm)
-    # ------------------------------------------------------------------
-    def _instance_loss(
+    # ---- core loss ----
+
+    def _loss_single(
         self,
         embed: torch.Tensor,
         label: torch.Tensor,
-        w_edge: torch.Tensor,
-        w_bone: torch.Tensor,
-        class_ids: Optional[torch.Tensor] = None,
+        weight_edge: torch.Tensor,
+        weight_bone: torch.Tensor,
     ) -> torch.Tensor:
-        """Discriminative instance loss on flattened spatial dims.
-
-        When ``class_ids`` is provided, pull/push is computed separately
-        per semantic class so that instances of different classes never
-        repel each other.
-        """
-        if class_ids is not None:
-            unique_classes = torch.unique(class_ids)
-            unique_classes = unique_classes[unique_classes > 0]
-            if len(unique_classes) == 0:
-                return self._instance_loss_single(embed, label, w_edge, w_bone)
-            total = torch.tensor(0.0, device=embed.device)
-            for cid in unique_classes:
-                class_mask = (class_ids == cid).long()
-                masked_label = label * class_mask
-                total = total + self._instance_loss_single(embed, masked_label, w_edge, w_bone)
-            return total / len(unique_classes)
-        return self._instance_loss_single(embed, label, w_edge, w_bone)
-
-    def _instance_loss_single(
-        self,
-        embed: torch.Tensor,
-        label: torch.Tensor,
-        w_edge: torch.Tensor,
-        w_bone: torch.Tensor,
-    ) -> torch.Tensor:
-        """Discriminative instance loss for a single class partition."""
         B = embed.shape[0]
         emb_flat = rearrange(embed, "b c ... -> b c (...)")
         lbl_flat = rearrange(label, "b ... -> b (...)")
-        w_combined = w_edge * w_bone
-        w_flat = rearrange(w_combined, "b ... -> b (...)")
+        weight_flat = rearrange(weight_edge * weight_bone, "b ... -> b (...)")
 
         loss_pull = torch.tensor(0.0, device=embed.device)
         loss_push = torch.tensor(0.0, device=embed.device)
@@ -193,7 +203,7 @@ class Vista3DLoss(nn.Module):
             centers = []
             for uid in ids:
                 mask = lbl_flat[b] == uid
-                w = w_flat[b, mask]
+                w = weight_flat[b, mask]
                 emb = emb_flat[b, :, mask]
                 center = (emb * rearrange(w, "n -> 1 n")).sum(1) / (w.sum() + 1e-8)
                 centers.append(center)
@@ -220,47 +230,145 @@ class Vista3DLoss(nn.Module):
             + self.weight_norm * loss_norm / n
         )
 
-    # ------------------------------------------------------------------
-    # Forward
-    # ------------------------------------------------------------------
+    def forward(
+        self,
+        embed: torch.Tensor,
+        label: torch.Tensor,
+        class_ids: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            embed: [B, E, *spatial] instance embedding.
+            label: [B, *spatial] instance labels (0 = background).
+            class_ids: [B, *spatial] optional semantic class ids.
+
+        Returns:
+            Dict with ``loss``.
+        """
+        weight_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else torch.ones_like(label, dtype=torch.float32)
+        weight_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else torch.ones_like(label, dtype=torch.float32)
+
+        if class_ids is not None:
+            unique_classes = torch.unique(class_ids)
+            unique_classes = unique_classes[unique_classes > 0]
+            if len(unique_classes) > 0:
+                total = torch.tensor(0.0, device=embed.device)
+                for cid in unique_classes:
+                    class_mask = (class_ids == cid).long()
+                    total = total + self._loss_single(embed, label * class_mask, weight_edge, weight_bone)
+                return {"loss": total / len(unique_classes)}
+
+        return {"loss": self._loss_single(embed, label, weight_edge, weight_bone)}
+
+
+# ======================================================================
+# 3.  Combined loss  (composes semantic + instance + geometry)
+# ======================================================================
+
+class Vista3DLoss(nn.Module):
+    """Combined loss for the Vista3D 3-head architecture.
+
+    Composes:
+    - ``SemanticLoss``:  CE + Dice on semantic logits.
+    - ``InstanceLoss``:  pull/push/norm on instance embeddings.
+    - ``GeometryLoss``:  dir/cov/raw on geometry head (optional).
+
+    Args:
+        weight_semantic: top-level weight for the semantic branch (default 1.0).
+        weight_instance: top-level weight for the instance branch (default 1.0).
+        weight_geometry: top-level weight for the geometry branch (default 0.0 = off).
+        weight_pull, weight_push, weight_norm, weight_edge, weight_bone,
+        delta_v, delta_d: forwarded to ``InstanceLoss``.
+        weight_ce, weight_dice, class_weights, ignore_index:
+            forwarded to ``SemanticLoss``.
+        geom_kwargs: extra kwargs forwarded to ``GeometryLoss``.
+    """
+
+    def __init__(
+        self,
+        weight_semantic: float = 1.0,
+        weight_instance: float = 1.0,
+        weight_geometry: float = 0.0,
+        weight_pull: float = 1.0,
+        weight_push: float = 1.0,
+        weight_norm: float = 0.001,
+        weight_edge: float = 10.0,
+        weight_bone: float = 10.0,
+        delta_v: float = 0.5,
+        delta_d: float = 1.5,
+        weight_ce: float = 1.0,
+        weight_dice: float = 0.0,
+        class_weights: Optional[List[float]] = None,
+        ignore_index: int = -100,
+        **geom_kwargs,
+    ) -> None:
+        super().__init__()
+        self.weight_semantic = weight_semantic
+        self.weight_instance = weight_instance
+        self.weight_geometry = weight_geometry
+
+        self.semantic_loss = SemanticLoss(
+            weight_ce=weight_ce,
+            weight_dice=weight_dice,
+            class_weights=class_weights,
+            ignore_index=ignore_index,
+        )
+        self.instance_loss = InstanceLoss(
+            weight_pull=weight_pull,
+            weight_push=weight_push,
+            weight_norm=weight_norm,
+            weight_edge=weight_edge,
+            weight_bone=weight_bone,
+            delta_v=delta_v,
+            delta_d=delta_d,
+        )
+        self.geometry_loss = GeometryLoss(
+            spatial_dims=_SPATIAL_DIMS, **geom_kwargs,
+        ) if weight_geometry > 0 else None
+
     def forward(
         self,
         predictions: Dict[str, torch.Tensor],
         targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute combined loss.
-
         Args:
-            predictions: Dict with 'semantic' and 'instance' tensors.
-            targets: Dict with 'class_labels' and 'labels'.
+            predictions: Dict with ``semantic``, ``instance``,
+                and optionally ``geometry`` tensors.
+            targets: Dict with ``class_labels`` and ``labels``.
 
         Returns:
-            Dict with 'loss', 'loss_sem', 'loss_ce', 'loss_dice', 'loss_ins'.
+            Dict with ``loss``, ``loss_sem``, ``loss_ce``, ``loss_dice``,
+            ``loss_ins``, and optionally ``loss_geom``.
         """
-        sem_logits = predictions["semantic"]
-        class_labels = targets["class_labels"]
-
-        loss_ce = self.ce_loss(sem_logits, class_labels)
-        loss_dice = (
-            self._dice_loss(sem_logits, class_labels, self.ignore_index)
-            if self.dice_weight > 0
-            else torch.tensor(0.0, device=sem_logits.device)
+        sem_out = self.semantic_loss(
+            predictions["semantic"], targets["class_labels"],
         )
-        loss_sem = self.ce_weight * loss_ce + self.dice_weight * loss_dice
 
-        labels = targets["labels"]
-        w_edge = self._get_weight_boundary(labels) if self.weight_edge > 1.0 else torch.ones_like(labels, dtype=torch.float32)
-        w_bone = self._get_weight_skeleton(labels) if self.weight_bone > 1.0 else torch.ones_like(labels, dtype=torch.float32)
         class_ids = targets.get("class_ids") or predictions.get("class_ids")
-        loss_ins = self._instance_loss(predictions["instance"], labels, w_edge, w_bone, class_ids)
+        ins_out = self.instance_loss(
+            predictions["instance"], targets["labels"], class_ids,
+        )
 
-        total = loss_sem + loss_ins
+        loss_sem = sem_out["loss"]
+        loss_ins = ins_out["loss"]
+        total = self.weight_semantic * loss_sem + self.weight_instance * loss_ins
 
-        return {
-            "loss": total,
+        out: Dict[str, torch.Tensor] = {
             "loss_sem": loss_sem,
-            "loss_ce": loss_ce,
-            "loss_dice": loss_dice,
+            "loss_ce": sem_out["loss_ce"],
+            "loss_dice": sem_out["loss_dice"],
             "loss_ins": loss_ins,
         }
+
+        if self.geometry_loss is not None and "geometry" in predictions:
+            geom_out = self.geometry_loss(
+                predictions["geometry"], targets["labels"],
+                raw_image=targets.get("raw_image"),
+            )
+            loss_geom = geom_out["loss"]
+            total = total + self.weight_geometry * loss_geom
+            out["loss_geom"] = loss_geom
+
+        out["loss"] = total
+        return out

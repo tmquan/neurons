@@ -431,7 +431,7 @@ to the last spatial axis (columns in 2-D) and $i = 1$ to the first
 | $\alpha$ | 2 | hard-coded | Exponent in $w = (D/D_\max)^\alpha$; higher values sharpen the boundary-to-interior transition |
 | `step` | 8 | notebook | Grid spacing for glyph subsampling (visualisation only) |
 | `glyph_radius` | `step * 0.4` | notebook | Visual half-width $R$ of each glyph ellipse (visualisation only) |
-| `w_cov` | 0.0 | `CentroidEmbeddingLoss(w_cov=...)` | Weight $w_\text{cov}$ of the structure-tensor regression loss |
+| `weight_cov` | 1.0 | `GeometryLoss(weight_cov=...)` | Weight of the structure-tensor regression loss |
 
 ---
 

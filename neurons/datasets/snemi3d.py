@@ -126,8 +126,9 @@ class SNEMI3DDataset(CircuitDataset):
         """
         Prepare data dictionaries based on split.
 
-        For train/valid: Uses AC4 volume with train_val_split.
-        For test: Uses AC3 volume.
+        For train/valid: Uses the full AC4 volume (no split — both
+        train and val see all slices; random crops differ).
+        For test: Uses the AC3 volume.
 
         Returns:
             List of dictionaries with 'image', 'label', and metadata.
@@ -154,17 +155,13 @@ class SNEMI3DDataset(CircuitDataset):
                 labels = None
 
         n_total = inputs.shape[0]
-        n_train = int(n_total * (1.0 - self.train_val_split))
 
-        if self.split == "train":
-            slice_range = range(n_train)
-            volume_name = "AC4_train"
-        elif self.split == "valid":
-            slice_range = range(n_train, n_total)
-            volume_name = "AC4_valid"
+        if self.split in ["train", "valid"]:
+            slice_range = range(n_total)
+            volume_name = "AC4"
         else:
             slice_range = range(n_total)
-            volume_name = "AC3_test"
+            volume_name = "AC3"
 
         if self.slice_mode:
             for i in slice_range:
@@ -179,7 +176,7 @@ class SNEMI3DDataset(CircuitDataset):
                 data_list.append(data_dict)
         else:
             vol_inputs = inputs[list(slice_range)]
-            data_dict = {
+            data_dict: Dict[str, Any] = {
                 "image": vol_inputs,
                 "volume": volume_name,
                 "idx": 0,
@@ -187,6 +184,7 @@ class SNEMI3DDataset(CircuitDataset):
             if labels is not None:
                 vol_labels = labels[list(slice_range)]
                 data_dict["label"] = vol_labels
-            data_list.append(data_dict)
+            n_repeats = max(len(slice_range), 1)
+            data_list.extend([data_dict] * n_repeats)
 
         return data_list

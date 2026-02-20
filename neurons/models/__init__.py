@@ -3,8 +3,8 @@ Model architectures for connectomics segmentation.
 
 Includes:
 - BaseModel: Abstract base class for all models
-- Vista3DWrapper: 3D Vista/GAPE architecture (semantic + instance + geometry)
-- Vista2DWrapper: 2D Vista/GAPE architecture (semantic + instance + geometry)
+- Vista3DWrapper: 3D Vista architecture (semantic + instance + geometry)
+- Vista2DWrapper: 2D Vista architecture (semantic + instance + geometry)
 - SegResNetWrapper: MONAI SegResNet fallback with customizable heads
 """
 

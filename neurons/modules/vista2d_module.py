@@ -1,7 +1,7 @@
 """
 Vista2D Lightning Module for image-based segmentation training.
 
-Uses the 2-head Vista2D model (semantic + instance) with
+Uses the 3-head Vista2D model (semantic + instance + geometry) with
 the Vista2DLoss for combined multi-task training.
 """
 
@@ -13,6 +13,14 @@ from einops import rearrange
 
 from neurons.models.vista2d_model import Vista2DWrapper as _Model
 from neurons.losses.vista2d_losses import Vista2DLoss as _Loss
+from neurons.inference.soft_clustering import SoftMeanShift
+from neurons.metrics import (
+    compute_per_batch_ari,
+    compute_per_batch_ami,
+    compute_per_batch_voi,
+    compute_per_batch_ted,
+    compute_per_batch_iou,
+)
 
 _SPATIAL_DIMS = 2
 _EXPAND_PATTERN = "b h w -> b 1 h w"
@@ -51,11 +59,14 @@ class Vista2DModule(pl.LightningModule):
             in_channels=model_config.get("in_channels", 1),
             num_classes=model_config.get("num_classes", 16),
             emb_dim=model_config.get("emb_dim", 16),
-            feature_size=model_config.get("feature_size", 48),
+            feature_size=model_config.get("feature_size", 64),
             encoder_name=model_config.get("encoder_name", "vista3d"),
         )
 
         self.criterion = _Loss(
+            weight_semantic=loss_config.get("weight_semantic", 1.0),
+            weight_instance=loss_config.get("weight_instance", 1.0),
+            weight_geometry=loss_config.get("weight_geometry", 0.0),
             weight_pull=loss_config.get("weight_pull", 1.0),
             weight_push=loss_config.get("weight_push", 1.0),
             weight_norm=loss_config.get("weight_norm", .001),
@@ -63,11 +74,13 @@ class Vista2DModule(pl.LightningModule):
             weight_bone=loss_config.get("weight_bone", 10.0),
             delta_v=loss_config.get("delta_v", 0.5),
             delta_d=loss_config.get("delta_d", 1.5),
-            ce_weight=loss_config.get("ce_weight", 1.0),
-            dice_weight=loss_config.get("dice_weight", 0.0),
+            weight_ce=loss_config.get("weight_ce", 1.0),
+            weight_dice=loss_config.get("weight_dice", 0.0),
             class_weights=loss_config.get("class_weights"),
             ignore_index=loss_config.get("ignore_index", -100),
         )
+
+        self._clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
 
     def forward(self, x: torch.Tensor, **kw: Any) -> Dict[str, torch.Tensor]:
         """Forward pass through 2-head model."""
@@ -103,6 +116,35 @@ class Vista2DModule(pl.LightningModule):
 
         return losses["loss"]
 
+    @torch.no_grad()
+    def _eval_metrics(
+        self, predictions: Dict[str, torch.Tensor],
+        targets: Dict[str, torch.Tensor], prefix: str, bs: int,
+    ) -> None:
+        """Compute and log semantic + instance metrics."""
+        sem_pred = predictions["semantic"].argmax(dim=1)
+        sem_gt = targets["class_labels"]
+        acc = (sem_pred == sem_gt).float().mean()
+        iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=predictions["semantic"].shape[1])
+        self.log(f"{prefix}/accuracy", acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/iou", iou, sync_dist=True, batch_size=bs)
+
+        fg_mask = targets["labels"] > 0
+        inst_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
+        inst_gt = targets["labels"]
+
+        ari = compute_per_batch_ari(inst_pred, inst_gt)
+        ami = compute_per_batch_ami(inst_pred, inst_gt)
+        voi = compute_per_batch_voi(inst_pred, inst_gt)
+        ted = compute_per_batch_ted(inst_pred, inst_gt)
+
+        self.log(f"{prefix}/ari", ari, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ami", ami, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/voi", voi.total, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/voi_split", voi.split, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/voi_merge", voi.merge, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ted", ted, sync_dist=True, batch_size=bs)
+
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Validation step."""
         images = batch["image"]
@@ -117,14 +159,11 @@ class Vista2DModule(pl.LightningModule):
         for name, val in losses.items():
             self.log(f"val/{name}", val, prog_bar=(name == "loss"), sync_dist=True, batch_size=bs)
 
-        preds = predictions["semantic"].argmax(dim=1)
-        acc = (preds == targets["class_labels"]).float().mean()
-        self.log("val/accuracy", acc, prog_bar=True, sync_dist=True, batch_size=bs)
-
+        self._eval_metrics(predictions, targets, "val", bs)
         return losses["loss"]
 
     def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Test step (same metrics as validation)."""
+        """Test step."""
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
@@ -137,10 +176,7 @@ class Vista2DModule(pl.LightningModule):
         for name, val in losses.items():
             self.log(f"test/{name}", val, sync_dist=True, batch_size=bs)
 
-        preds = predictions["semantic"].argmax(dim=1)
-        acc = (preds == targets["class_labels"]).float().mean()
-        self.log("test/accuracy", acc, sync_dist=True, batch_size=bs)
-
+        self._eval_metrics(predictions, targets, "test", bs)
         return losses["loss"]
 
     def configure_optimizers(self) -> Any:

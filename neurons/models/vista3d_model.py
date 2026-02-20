@@ -1,9 +1,10 @@
 """
 Vista3D model wrapper for volumetric connectomics segmentation.
 
-3D version of the Vista/GAPE architecture with two parallel task heads:
+3D version of the Vista architecture with three parallel task heads:
 - Semantic: per-voxel class logits (num_classes channels)
 - Instance: per-voxel embedding vectors for discriminative clustering (emb_dim channels)
+- Geometry: per-voxel direction, structure tensor, and RGBA reconstruction
 """
 
 from typing import Any, Dict, Optional
@@ -26,7 +27,7 @@ class Vista3DWrapper(nn.Module):
             Set higher than currently needed to leave headroom for
             future class additions without retraining the backbone.
         emb_dim: Instance embedding dimensionality (default: 16).
-        feature_size: Base feature dimension from backbone (default: 48).
+        feature_size: Base feature dimension from backbone (default: 64).
         encoder_name: Vista3D internal encoder ('segresnet' or 'swin').
 
     Example:
@@ -35,6 +36,7 @@ class Vista3DWrapper(nn.Module):
         >>> out = model(x)
         >>> out['semantic'].shape   # [1, 16, 64, 64, 64]
         >>> out['instance'].shape   # [1, 16, 64, 64, 64]
+        >>> out['geometry'].shape   # [1, 16, 64, 64, 64]  (dir=3 + cov=9 + raw=4)
     """
 
     def __init__(
@@ -42,7 +44,7 @@ class Vista3DWrapper(nn.Module):
         in_channels: int = 1,
         num_classes: int = 16,
         emb_dim: int = 16,
-        feature_size: int = 48,
+        feature_size: int = 64,
         encoder_name: str = "vista3d",
         **kwargs: Any,
     ) -> None:
@@ -51,6 +53,10 @@ class Vista3DWrapper(nn.Module):
         self.num_classes = num_classes
         self.emb_dim = emb_dim
         self.feature_size = feature_size
+        self.spatial_dims = _SPATIAL_DIMS
+
+        S = _SPATIAL_DIMS
+        self.geom_channels = S + S * S + 4  # dir + cov + rgba
 
         self._build_backbone(encoder_name, **kwargs)
 
@@ -61,6 +67,10 @@ class Vista3DWrapper(nn.Module):
         self.head_instance = nn.Sequential(
             _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
             _CONV(64, emb_dim, 1),
+        )
+        self.head_geometry = nn.Sequential(
+            _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
+            _CONV(64, self.geom_channels, 1),
         )
 
     def _build_backbone(self, encoder_name: str, **kwargs: Any) -> None:
@@ -89,7 +99,7 @@ class Vista3DWrapper(nn.Module):
         x: torch.Tensor,
         class_ids: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """Forward pass through backbone + two parallel heads.
+        """Forward pass through backbone + three parallel heads.
 
         Args:
             x: Input tensor [B, C, D, H, W].
@@ -101,6 +111,7 @@ class Vista3DWrapper(nn.Module):
         out: Dict[str, torch.Tensor] = {
             "semantic": self.head_semantic(feat),
             "instance": self.head_instance(feat),
+            "geometry": self.head_geometry(feat),
         }
         if class_ids is not None:
             out["class_ids"] = class_ids

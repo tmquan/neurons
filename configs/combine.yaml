@@ -91,8 +91,8 @@ optimizer:
 # Loss Configuration
 loss:
   # Semantic loss weights
-  ce_weight: 0.5
-  dice_weight: 0.5
+  weight_ce: 0.5
+  weight_dice: 0.5
   class_weights:
     - 0.10  # 0: background
     - 0.40  # 1: neuron

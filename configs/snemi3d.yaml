@@ -37,8 +37,11 @@ optimizer:
     eta_min: 1.0e-6
 
 loss:
-  ce_weight: 1.0
-  dice_weight: 0.0
+  weight_semantic: 1.0
+  weight_instance: 1.0
+  weight_geometry: 1.0
+  weight_ce: 1.0
+  weight_dice: 0.0
   weight_pull: 1.0
   weight_push: 1.0
   weight_norm: 0.001
