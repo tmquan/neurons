@@ -148,7 +148,7 @@ eigendecomposition is:
 $$
 S^{\text{raw}} = V \,\Lambda\, V^\top
 \quad\text{with}\quad
-\Lambda = \operatorname{diag}(\lambda_1,\;\ldots,\;\lambda_S),
+\Lambda = \text{diag}(\lambda_1,\;\ldots,\;\lambda_S),
 \quad \lambda_1 \le \cdots \le \lambda_S
 $$
 
@@ -198,7 +198,7 @@ The **isotropic component** with the same energy (trace) is:
 
 $$
 S^{\text{iso}}(\mathbf{p})
-\;=\; \frac{\operatorname{tr}\bigl(S^{\text{raw}}(\mathbf{p})\bigr)}{S} \; I_S
+\;=\; \frac{\text{tr}\bigl(S^{\text{raw}}(\mathbf{p})\bigr)}{S} \; I_S
 \;=\; \frac{\lambda_1 + \cdots + \lambda_S}{S} \; I_S
 $$
 
@@ -258,7 +258,7 @@ increases from the raw ratio $r$ to 1.
 ### 2.7 Glyph Geometry from the Blended Tensor
 
 Given the eigendecomposition of the blended tensor
-$S = V \operatorname{diag}(\lambda_1', \lambda_2') V^\top$ at pixel
+$S = V \,\text{diag}(\lambda_1', \lambda_2') \, V^\top$ at pixel
 $\mathbf{p}$, the glyph ellipse is parameterised by:
 
 $$
@@ -318,7 +318,7 @@ S_ij = gaussian_filter(g_i * g_j, sigma=sigma) / norm        # Eq. in sec 2.3
 ### 3.4 EDT-Blended Isotropy
 
 The depth weight $w(\mathbf{p}) = (D(\mathbf{p}) / D_\max)^2$ blends the
-diagonal components toward the isotropic value $\bar{S} = \operatorname{tr}(S^{\text{raw}}) / S$,
+diagonal components toward the isotropic value $\bar{S} = \text{tr}(S^{\text{raw}}) / S$,
 and shrinks the off-diagonal components toward zero:
 
 ```python
@@ -494,7 +494,7 @@ If tensor glyphs look wrong, check:
 1. **Interior glyphs are not isotropic (round)?**
    The EDT-blended isotropy step (section 3.4) must be present.  Verify
    that $w = (D / D_\max)^2$ is computed and that diagonal components
-   are blended toward $\operatorname{tr}(S)/S$ while off-diagonal
+   are blended toward $\text{tr}(S)/S$ while off-diagonal
    components are scaled by $(1 - w)$.
 
 2. **All glyphs are round (no boundary anisotropy)?**
