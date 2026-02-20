@@ -10,21 +10,22 @@ elliptical tensor glyphs in `notebooks/00_explore_utility.ipynb`.
 
 Instance segmentation losses benefit from per-pixel geometric targets that
 capture the local shape of each instance.  A natural choice is the
-**structure tensor** of the Euclidean distance transform (EDT): a
-symmetric positive-semi-definite 2x2 (or 3x3) matrix at every pixel that
-encodes both the *direction* and *magnitude* of morphological variation.
+**structure tensor** of the Euclidean distance transform (EDT): a symmetric
+positive-semi-definite matrix at every foreground pixel that encodes both
+the *direction* and *magnitude* of morphological variation.
 
-When visualised as an ellipse (a "tensor glyph"), the structure tensor
-reveals two things at a glance:
+When visualised as an ellipse (a "tensor glyph"), the final blended
+structure tensor reveals local geometry at a glance:
 
 | Region | Glyph shape | Interpretation |
 |---|---|---|
-| Near boundary | thin ellipse, elongated along boundary tangent | gradient is coherent and normal to the boundary |
-| Interior / medial axis | round circle | gradients arrive from all directions and average out |
-| Elongated interior | ellipse aligned with the short axis | nearest boundary is always on the same side |
+| Near boundary | thin ellipse along boundary tangent | gradient is coherent and perpendicular to the boundary |
+| Interior / medial axis | round circle | EDT-blended isotropy makes the interior direction-free |
+| Elongated interior | mild ellipse aligned with the short axis | blending preserves residual shape elongation |
 
-A learned linear projection `W_cov [E, S*S]` is trained to predict this
-tensor from the embedding, teaching the network to encode local shape.
+A learned linear projection $W_\text{cov} \in \mathbb{R}^{E \times S^2}$
+is trained to regress this tensor from the embedding, teaching the network
+to encode local shape.
 
 ---
 
@@ -32,85 +33,249 @@ tensor from the embedding, teaching the network to encode local shape.
 
 ### 2.1 Euclidean Distance Transform
 
-For a binary instance mask \( M_k \) (pixels belonging to instance \( k \)),
-the EDT assigns each interior pixel the Euclidean distance to the nearest
-boundary pixel:
+Let $M_k \subset \mathbb{Z}^S$ be the set of pixels belonging to instance
+$k$, where $S$ is the number of spatial dimensions (2 for images, 3 for
+volumes).  The EDT assigns each interior pixel $\mathbf{p} \in M_k$ the
+Euclidean distance to the nearest exterior pixel:
 
-\[
-  \mathrm{EDT}(\mathbf{p}) = \min_{\mathbf{q} \notin M_k} \|\mathbf{p} - \mathbf{q}\|_2
-\]
+$$
+D(\mathbf{p}) \;=\; \min_{\mathbf{q} \,\notin\, M_k} \lVert \mathbf{p} - \mathbf{q} \rVert_2
+$$
 
-Properties:
-- Zero at the boundary, maximal at the **medial axis** (skeleton ridge).
-- Gradient magnitude is 1 almost everywhere inside (except at the medial
-  axis where it is undefined).
-- The gradient direction points radially away from the nearest boundary.
+Key properties of $D$:
 
-### 2.2 Gaussian Derivatives of the EDT
+- $D(\mathbf{p}) = 0$ for every boundary pixel (adjacent to
+  $\mathbb{Z}^S \setminus M_k$).
+- $D$ reaches its maximum at the **medial axis** (the skeleton ridge).
+- The spatial gradient $\nabla D$ has unit magnitude almost everywhere
+  inside $M_k$; it is undefined on the medial axis where multiple nearest
+  boundary points exist.
+- The gradient direction at $\mathbf{p}$ points away from the nearest
+  boundary point.
 
-Rather than finite differences, the implementation uses Gaussian derivative
-kernels to obtain smooth gradient estimates.  For derivative scale
-\( \sigma_d \):
+We write $D_\max = \max_{\mathbf{p} \in M_k} D(\mathbf{p})$ for the
+deepest interior distance of the instance.
 
-\[
-  \nabla_{\sigma_d}\!\mathrm{EDT}
-  = \bigl(G_{\sigma_d}' * \mathrm{EDT}\bigr)
-  = \Bigl(\frac{\partial}{\partial x}(G_{\sigma_d} * \mathrm{EDT}),\;
-          \frac{\partial}{\partial y}(G_{\sigma_d} * \mathrm{EDT})\Bigr)
-\]
+### 2.2 Gaussian Derivative Kernels
 
-where \( G_\sigma \) is a Gaussian with standard deviation \( \sigma \),
-and \( * \) denotes convolution.  In the code `sigma_d = max(1.0, sigma / 3.0)`.
+The implementation computes smooth gradient estimates by convolving $D$
+with Gaussian derivative kernels rather than using finite differences.
 
-### 2.3 Structure Tensor
+Let $G_\sigma : \mathbb{R}^S \to \mathbb{R}$ denote the isotropic
+Gaussian of standard deviation $\sigma$:
 
-The structure tensor at pixel \( \mathbf{p} \) is the Gaussian-weighted
-average of the gradient outer product over a neighbourhood:
+$$
+G_\sigma(\mathbf{x}) \;=\; \frac{1}{(2\pi\sigma^2)^{S/2}} \exp\!\Bigl(-\frac{\lVert\mathbf{x}\rVert^2}{2\sigma^2}\Bigr)
+$$
 
-\[
-  S(\mathbf{p})
-  = \frac
-    {(G_{\sigma_\text{int}} * (\nabla\mathrm{EDT}\;\nabla\mathrm{EDT}^\top \cdot \mathbf{1}_M))(\mathbf{p})}
-    {(G_{\sigma_\text{int}} * \mathbf{1}_M)(\mathbf{p})}
-\]
+The partial derivative of the smoothed EDT along the $i$-th coordinate
+axis is:
 
-Key elements:
+$$
+\partial_i \bigl(G_{\sigma_d} * D\bigr)(\mathbf{p})
+\;=\; \bigl(\partial_i G_{\sigma_d}\bigr) * D\;(\mathbf{p})
+$$
 
-| Symbol | Meaning |
-|---|---|
-| \( \nabla\mathrm{EDT} \) | Gaussian derivative of the per-instance EDT (masked to the instance interior) |
-| \( \nabla\mathrm{EDT}\;\nabla\mathrm{EDT}^\top \) | rank-1 outer product at each pixel |
-| \( G_{\sigma_\text{int}} \) | integration Gaussian that averages the outer product |
-| \( \mathbf{1}_M \) | binary indicator of the instance mask |
-| denominator | mask-normalised average (avoids leakage from zero-padded exterior) |
+where $*$ is convolution and $\sigma_d$ is the **derivative scale**,
+set to $\sigma_d = \max(1,\; \sigma / 3)$ with $\sigma$ being the
+user-facing integration scale parameter.
 
-In 2-D, \( S \) is a 2x2 symmetric matrix:
+This yields a smoothed gradient vector at each pixel:
 
-\[
-  S = \begin{pmatrix} S_{xx} & S_{xy} \\ S_{xy} & S_{yy} \end{pmatrix}
-\]
+$$
+\mathbf{g}(\mathbf{p})
+\;=\; \Bigl(\partial_1(G_{\sigma_d} * D),\;\ldots,\;\partial_S(G_{\sigma_d} * D)\Bigr)(\mathbf{p})
+$$
 
-where \( x \) = column direction and \( y \) = row direction.
+In the code the axes are ordered $(x, y) = (\text{col}, \text{row})$ in
+2-D and $(x, y, z) = (\text{col}, \text{row}, \text{depth})$ in 3-D, so
+$g_1 = \partial D / \partial x_\text{col}$, etc.
 
-### 2.4 Eigendecomposition and Glyph Shape
+After convolution the gradient is multiplied by the instance mask
+indicator $\mathbf{1}_{M_k}$ to suppress artificial gradients at the mask
+boundary (where $D$ drops discontinuously to zero):
 
-The eigendecomposition \( S = V \Lambda V^\top \) yields:
+$$
+\tilde{g}_i(\mathbf{p}) \;=\; \mathbf{1}_{M_k}(\mathbf{p}) \;\cdot\; \partial_i(G_{\sigma_d} * D)(\mathbf{p})
+$$
 
-- \( \lambda_{\max} \) and its eigenvector: direction of strongest gradient
-  coherence (normal to the boundary).
-- \( \lambda_{\min} \) and its eigenvector: direction of weakest gradient
-  coherence (along the boundary tangent).
+### 2.3 Raw Structure Tensor with Mask-Normalised Smoothing
 
-The **isotropy ratio**:
+The classical structure tensor is the Gaussian-weighted local average of
+the gradient outer product.  Because the masked gradient
+$\tilde{\mathbf{g}}$ is zero outside $M_k$, a naive Gaussian average would
+be diluted by the surrounding zeros.  The mask-normalised form corrects
+for this:
 
-\[
-  r = \frac{\lambda_{\min}}{\lambda_{\max}} \in [0, 1]
-\]
+$$
+S_{ij}^{\,\text{raw}}(\mathbf{p})
+\;=\;
+\frac
+  {\bigl(G_\sigma * (\tilde{g}_i \,\tilde{g}_j)\bigr)(\mathbf{p})}
+  {\bigl(G_\sigma * \mathbf{1}_{M_k}\bigr)(\mathbf{p})}
+$$
 
-| \( r \) | Meaning |
-|---|---|
-| \(\approx 0\) | highly anisotropic (thin ellipse) |
-| \(\approx 1\) | isotropic (circle) |
+The denominator $G_\sigma * \mathbf{1}_{M_k}$ is the local mask coverage
+under the Gaussian kernel.  Dividing by it restricts the weighted average
+to instance-interior pixels only, preventing directional bias from
+asymmetric zero-padding.
+
+In 2-D this gives a symmetric $2 \times 2$ matrix at each pixel:
+
+$$
+S^{\text{raw}}(\mathbf{p})
+\;=\;
+\begin{pmatrix}
+  S_{xx}^{\text{raw}} & S_{xy}^{\text{raw}} \\[4pt]
+  S_{xy}^{\text{raw}} & S_{yy}^{\text{raw}}
+\end{pmatrix}
+$$
+
+where $x = \text{col}$ and $y = \text{row}$.  In 3-D the matrix is
+$3 \times 3$ with an analogous $z = \text{depth}$ axis.
+
+**Why normalisation matters.**  Without the denominator, a pixel near
+the boundary of a thin instance has most of its Gaussian window outside
+$M_k$.  The short-axis direction sees more exterior zeros than the
+long-axis direction, producing a spurious anisotropy that reflects the
+window's partial coverage rather than the local gradient field.
+
+### 2.4 Eigendecomposition of the Raw Tensor
+
+Since $S^{\text{raw}}$ is real symmetric and positive-semi-definite, its
+eigendecomposition is:
+
+$$
+S^{\text{raw}} = V \,\Lambda\, V^\top
+\quad\text{with}\quad
+\Lambda = \operatorname{diag}(\lambda_1,\;\ldots,\;\lambda_S),
+\quad \lambda_1 \le \cdots \le \lambda_S
+$$
+
+where the columns of $V$ are orthonormal eigenvectors.
+
+- $\lambda_S$ (largest eigenvalue): direction of strongest gradient
+  coherence, typically perpendicular to the nearest boundary.
+- $\lambda_1$ (smallest eigenvalue): direction of weakest gradient
+  coherence, typically along the boundary tangent.
+
+The **isotropy ratio** $r = \lambda_1 / \lambda_S \in [0, 1]$ measures
+how circular the glyph is.
+
+### 2.5 The Isotropy Problem with Fixed Integration Scale
+
+For a pixel deep inside the instance (large $D$), the integration
+Gaussian $G_\sigma$ with fixed $\sigma$ only "sees" nearby pixels whose
+gradients all point roughly toward the same nearest boundary segment.
+The raw structure tensor is therefore highly anisotropic even at the
+medial axis of a round instance.
+
+Scaling $\sigma$ to the instance size (e.g. $\sigma = D_\max$) does not
+solve this: a single large $\sigma$ makes $S^{\text{raw}}$ spatially
+uniform (the same global average everywhere), destroying both boundary
+anisotropy and any spatial variation.
+
+### 2.6 EDT-Blended Isotropy
+
+The solution is a post-hoc per-pixel blend of $S^{\text{raw}}$ toward
+an isotropic matrix, controlled by the normalised EDT depth.
+
+Define the **depth weight**:
+
+$$
+w(\mathbf{p})
+\;=\; \left(\frac{D(\mathbf{p})}{D_\max}\right)^{\!\alpha}
+\qquad \alpha = 2
+$$
+
+where $D_\max = \max_{\mathbf{q} \in M_k} D(\mathbf{q})$.  The weight
+satisfies $w = 0$ at the boundary and $w = 1$ at the deepest interior
+point.  The squared exponent ($\alpha = 2$) keeps $w$ small near the
+boundary, preserving local anisotropy there, while ramping quickly
+toward 1 in the interior.
+
+The **isotropic component** with the same energy (trace) is:
+
+$$
+S^{\text{iso}}(\mathbf{p})
+\;=\; \frac{\operatorname{tr}\bigl(S^{\text{raw}}(\mathbf{p})\bigr)}{S} \; I_S
+\;=\; \frac{\lambda_1 + \cdots + \lambda_S}{S} \; I_S
+$$
+
+where $I_S$ is the $S \times S$ identity matrix.
+
+The blended tensor is:
+
+$$
+\boxed{\;
+S(\mathbf{p})
+\;=\;
+\bigl(1 - w(\mathbf{p})\bigr)\; S^{\text{raw}}(\mathbf{p})
+\;+\;
+w(\mathbf{p})\; S^{\text{iso}}(\mathbf{p})
+\;}
+$$
+
+Expanding component-wise in 2-D:
+
+$$
+S_{ij}(\mathbf{p}) =
+\begin{cases}
+  (1 - w)\, S_{ij}^{\text{raw}} + w \,\dfrac{S_{xx}^{\text{raw}} + S_{yy}^{\text{raw}}}{2}
+    & \text{if } i = j \\[8pt]
+  (1 - w)\, S_{ij}^{\text{raw}}
+    & \text{if } i \ne j
+\end{cases}
+$$
+
+**Effect on eigenvalues.**  Writing the raw eigenvalues as
+$\lambda_\text{min}, \lambda_\text{max}$ and their mean as
+$\bar\lambda = (\lambda_\text{min} + \lambda_\text{max})/2$, the blended
+eigenvalues are:
+
+$$
+\lambda_i' \;=\; (1 - w)\,\lambda_i \;+\; w\,\bar\lambda
+$$
+
+so the blended isotropy ratio becomes:
+
+$$
+r'
+\;=\; \frac{\lambda_\text{min}'}{\lambda_\text{max}'}
+\;=\; \frac{(1-w)\,\lambda_\text{min} + w\,\bar\lambda}
+           {(1-w)\,\lambda_\text{max} + w\,\bar\lambda}
+$$
+
+At the boundary ($w = 0$): $r' = \lambda_\text{min}/\lambda_\text{max} = r$
+(unchanged).
+
+At the medial axis ($w = 1$): $r' = \bar\lambda / \bar\lambda = 1$
+(perfectly isotropic).
+
+The blend is monotone in $w$: as $w$ increases from 0 to 1, $r'$
+increases from the raw ratio $r$ to 1.
+
+### 2.7 Glyph Geometry from the Blended Tensor
+
+Given the eigendecomposition of the blended tensor
+$S = V \operatorname{diag}(\lambda_1', \lambda_2') V^\top$ at pixel
+$\mathbf{p}$, the glyph ellipse is parameterised by:
+
+$$
+\text{width} = 2\,R, \qquad
+\text{height} = 2\,R \cdot r', \qquad
+\text{angle} = \arctan\!\frac{v_y^{(1)}}{v_x^{(1)}}
+$$
+
+where $R$ is a fixed visual radius (`glyph_radius`),
+$r' = \lambda_1' / \lambda_2'$ is the blended isotropy ratio, and
+$\mathbf{v}^{(1)} = (v_x^{(1)}, v_y^{(1)})$ is the eigenvector of the
+*smaller* eigenvalue $\lambda_1'$.
+
+The matplotlib `Ellipse(angle=...)` parameter rotates the width axis
+(the longer one, since $r' \le 1$) to this angle, so the glyph is
+elongated along the **minor** eigenvector direction — the boundary
+tangent.
 
 ---
 
@@ -119,170 +284,169 @@ The **isotropy ratio**:
 ### 3.1 Per-Instance Loop
 
 `_compute_covariance` in `discriminative.py` processes each foreground
-instance independently.  For instance \( k \):
+instance independently.  For instance $k$:
 
-```
-mask   = (labels == k)              # binary mask
-dt     = scipy.ndimage.distance_transform_edt(mask)
-mask_f = mask.astype(float)
+```python
+mask   = (labels == k)
+dt     = scipy.ndimage.distance_transform_edt(mask)   # D(p)
+mask_f = mask.astype(float)                            # 1_{M_k}
+edt_max = dt.max()                                     # D_max
 ```
 
 ### 3.2 Gradient Masking
 
-The EDT is zero outside the instance mask.  Taking Gaussian derivatives
-across the mask boundary creates artificial gradients from the
-discontinuity.  These are suppressed by zeroing the gradient outside the
-mask before forming the outer product:
+The EDT is identically zero outside $M_k$.  Convolving with a Gaussian
+derivative kernel across the mask boundary produces an artificial spike
+from the discontinuity $D \to 0$.  The gradient is therefore zeroed
+outside the mask after convolution:
 
-```
+```python
 g = gaussian_filter(dt, sigma=sigma_d, order=derivative_order)
-g *= mask_f          # zero outside instance
+g *= mask_f          # g_i(p) * 1_{M_k}(p)
 ```
 
 ### 3.3 Mask-Normalised Smoothing
 
-Naively smoothing the outer product with `gaussian_filter` averages in
-zeros from outside the instance, directionally biasing the tensor (the
-short-axis boundary is closer, so more zeros leak in from that direction).
-Dividing by the smoothed mask corrects this:
+The outer product $\tilde{g}_i \tilde{g}_j$ is smoothed by $G_\sigma$ and
+divided by the smoothed mask to produce $S_{ij}^{\text{raw}}$:
 
+```python
+norm = max(gaussian_filter(mask_f, sigma=sigma), 1e-10)      # G_sigma * 1_M
+S_ij = gaussian_filter(g_i * g_j, sigma=sigma) / norm        # Eq. in sec 2.3
 ```
-norm = max(gaussian_filter(mask_f, sigma=sigma), 1e-10)
-
-S_ij = gaussian_filter(g_i * g_j, sigma=sigma) / norm
-```
-
-This is equivalent to computing the weighted average restricted to
-instance-interior pixels only.
 
 ### 3.4 EDT-Blended Isotropy
 
-The raw structure tensor from step 3.3 captures local boundary
-orientation well, but for non-circular instances it remains anisotropic
-even at the medial axis.  This is because a fixed-sigma integration
-window centred deep inside the instance sees only gradients pointing
-toward the nearest boundary — all in roughly the same direction.
-
-Scaling sigma to the instance size does not help: a per-instance global
-sigma makes the tensor spatially uniform (same value everywhere), losing
-both boundary anisotropy and interior isotropy.
-
-The solution is **depth-weighted blending toward isotropy**.  A mixing
-weight is computed from the normalised EDT:
-
-\[
-  w(\mathbf{p}) = \left(\frac{\mathrm{EDT}(\mathbf{p})}{\max_{\mathbf{q} \in M_k}\mathrm{EDT}(\mathbf{q})}\right)^{2}
-\]
-
-The blended tensor replaces the eigenvalues with a mix of the original
-values and their mean:
-
-\[
-  S_{\text{blend}}(\mathbf{p}) = (1 - w)\,S(\mathbf{p}) \;+\; w\,\frac{\mathrm{tr}(S(\mathbf{p}))}{S_{\text{dim}}}\,I
-\]
-
-| Location | \( w \) | Effect |
-|---|---|---|
-| Boundary (\(\mathrm{EDT} \approx 0\)) | \(\approx 0\) | raw anisotropic tensor preserved |
-| Medial axis (\(\mathrm{EDT} = \max\)) | \(\approx 1\) | eigenvalues collapse to their mean → isotropic |
-
-The squared exponent keeps the transition sharp near the boundary
-(preserving local edge orientation) while making the interior
-convincingly isotropic.
-
-In code:
+The depth weight $w(\mathbf{p}) = (D(\mathbf{p}) / D_\max)^2$ blends the
+diagonal components toward the isotropic value $\bar{S} = \operatorname{tr}(S^{\text{raw}}) / S$,
+and shrinks the off-diagonal components toward zero:
 
 ```python
-w = (dt / edt_max) ** 2          # [0, 1] per pixel
-trace = S_xx + S_yy
-iso   = trace / 2
+w   = (dt / edt_max) ** 2
+iso = (S_xx + S_yy) / 2               # tr(S) / S  for S=2
 
-S_xx_blend = (1 - w) * S_xx + w * iso
-S_yy_blend = (1 - w) * S_yy + w * iso
-S_xy_blend = (1 - w) * S_xy              # off-diag shrinks to 0
+S_xx = (1 - w) * S_xx + w * iso       # diagonal blended
+S_yy = (1 - w) * S_yy + w * iso
+S_xy = (1 - w) * S_xy                 # off-diag shrinks to 0
 ```
 
 ### 3.5 Storage Layout
 
-The structure tensor is stored as a `[S*S, N]` tensor in row-major order
-of the matrix indices, where `N = H * W` (flattened spatially in row-major
-order) and `S` is the number of spatial dimensions:
+The blended tensor is stored as a `[S*S, N]` tensor in row-major order of
+the matrix indices, where $N = H \times W$ (flattened spatially in
+row-major order) and $S$ is the number of spatial dimensions:
 
 ```
-# 2-D: indices [0..3] correspond to
-#   0 -> S_xx  (col-col)
-#   1 -> S_xy  (col-row)
-#   2 -> S_yx  (row-col)
-#   3 -> S_yy  (row-row)
+# 2-D (S=2): 4 components stored as indices 0..3
+#   0 -> S_xx  (col, col)
+#   1 -> S_xy  (col, row)
+#   2 -> S_yx  (row, col)  [= S_xy by symmetry]
+#   3 -> S_yy  (row, row)
+#
+# 3-D (S=3): 9 components stored as indices 0..8
+#   0 -> S_xx   1 -> S_xy   2 -> S_xz
+#   3 -> S_yx   4 -> S_yy   5 -> S_yz
+#   6 -> S_zx   7 -> S_zy   8 -> S_zz
 ```
 
-Background pixels are left as zero.
+Background pixels ($\text{label} = 0$) are left as zero.
 
 ---
 
 ## 4. Visualisation (Notebook)
 
-The notebook `00_explore_utility.ipynb` (cell 13) draws two panels:
+The notebook `00_explore_utility.ipynb` (cell 13) draws two side-by-side
+panels.
 
-### 4.1 Left Panel: Per-Instance Global Covariance
+### 4.1 Left Panel — Per-Instance Global Covariance
 
-For each instance, the **sample covariance matrix** of all pixel
-coordinates `(col, row)` is computed.  This is a single 2x2 matrix per
-instance, drawn as an ellipse at the centroid.  Axes lengths are
-`2 * sqrt(eigenvalue)`.  It captures the overall shape elongation of the
-instance.
+For each instance $k$ with pixel coordinates
+$\{(x_n, y_n)\}_{n=1}^{N_k}$ where $x = \text{col}$, $y = \text{row}$,
+the **sample covariance matrix** is:
 
-### 4.2 Right Panel: Local EDT Structure Tensor Glyphs
+$$
+C_k
+= \frac{1}{N_k - 1}
+  \sum_{n=1}^{N_k}
+  \begin{pmatrix} x_n - \bar{x} \\ y_n - \bar{y} \end{pmatrix}
+  \begin{pmatrix} x_n - \bar{x} \\ y_n - \bar{y} \end{pmatrix}^{\!\top}
+$$
 
-On a regular subsampled grid (`step = 8` pixels), each foreground pixel
-gets a small ellipse whose shape is derived from the local 2x2 structure
-tensor:
+with centroid $(\bar{x}, \bar{y})$.  This is a single $2\times 2$ matrix
+per instance.  Its eigenvalues $\mu_1 \le \mu_2$ determine the ellipse
+axes as $2\sqrt{\mu_1}$ and $2\sqrt{\mu_2}$, and the major eigenvector
+gives the orientation angle.  The ellipse is drawn at the centroid and
+captures the overall shape elongation of the instance.
+
+### 4.2 Right Panel — Local EDT Structure Tensor Glyphs
+
+On a regular subsampled grid with spacing `step` pixels, each foreground
+sample gets a small ellipse parameterised by the blended structure tensor
+$S(\mathbf{p})$ at that pixel (see section 2.7):
 
 ```python
-T = st_2d[:, :, r, c]                   # 2x2 structure tensor
-eigvals, eigvecs = np.linalg.eigh(T)     # eigendecomposition
-ratio = min_eigval / max_eigval          # isotropy ratio
-angle = atan2(minor_eigvec[1], minor_eigvec[0])
+T = st_2d[:, :, r, c]                        # 2x2 blended tensor
+eigvals, eigvecs = np.linalg.eigh(T)          # eigendecomposition
+abs_eig = np.abs(eigvals)
+idx_max, idx_min = abs_eig.argmax(), abs_eig.argmin()
+ratio = abs_eig[idx_min] / abs_eig[idx_max]  # r' = isotropy ratio
+angle = atan2(eigvecs[1, idx_min],            # minor eigvec direction
+              eigvecs[0, idx_min])
 ```
 
-The glyph is drawn as:
-
-| Parameter | Value | Meaning |
+| Ellipse parameter | Value | Meaning |
 |---|---|---|
-| centre | `(col, row)` on the subsampled grid | pixel location |
-| width  | `2 * glyph_radius` (fixed) | major axis = minor eigenvector direction |
-| height | `2 * glyph_radius * ratio` | minor axis, scaled by isotropy |
-| angle  | direction of the minor eigenvector | elongation along boundary tangent |
+| centre | $(c, r)$ on the subsampled grid | pixel location |
+| width | $2 R$ (fixed `glyph_radius`) | visual major axis aligned to `angle` |
+| height | $2 R \cdot r'$ | visual minor axis, scaled by isotropy ratio |
+| angle | $\arctan(v_y^{(1)} / v_x^{(1)})$ | minor eigenvector = boundary tangent |
 
-**Convention**: the ellipse is elongated along the **minor** eigenvector
-(direction of least gradient coherence), which corresponds to the boundary
-tangent.  Near the medial axis the ratio approaches 1 and the glyph
-becomes a circle.
+Near the boundary $r' \approx 0$ and the glyph is a thin line; at the
+medial axis $r' \approx 1$ and the glyph is a circle.
 
 ---
 
 ## 5. Role in the Loss
 
-`CentroidEmbeddingLoss` uses the structure tensor as a regression target
-for a learned linear projection head:
+`CentroidEmbeddingLoss` uses the blended structure tensor as a
+regression target for a learned linear projection head.
 
-```
-proj_cov: nn.Linear(E, S*S)    # E = embedding dim, S = spatial dims
-```
+The projection maps the $E$-dimensional embedding $\mathbf{e}_\mathbf{p}$
+at pixel $\mathbf{p}$ to an $S^2$-dimensional prediction:
 
-The loss is activated by setting `w_cov > 0`:
+$$
+\hat{\mathbf{s}}_\mathbf{p}
+= W_\text{cov}\, \mathbf{e}_\mathbf{p},
+\qquad W_\text{cov} \in \mathbb{R}^{S^2 \times E}
+$$
 
-```
-L_cov = (1 / N_fg) * sum_over_fg || W_cov @ e_p  -  S(p) ||^2
-```
+The target $\mathbf{s}_\mathbf{p} \in \mathbb{R}^{S^2}$ is the
+row-major flattening of $S(\mathbf{p})$.  The loss averages over all
+foreground pixels:
 
-where `e_p` is the E-dimensional embedding at pixel `p` and `S(p)` is the
-`S*S`-dimensional flattened structure tensor target.
+$$
+\mathcal{L}_\text{cov}
+= \frac{1}{N_\text{fg}}
+  \sum_{\mathbf{p}\, \in\, \text{fg}}
+  \bigl\lVert \hat{\mathbf{s}}_\mathbf{p} - \mathbf{s}_\mathbf{p} \bigr\rVert^2
+$$
 
-This teaches the embedding to encode local morphological shape: the
-network learns to distinguish boundary pixels (anisotropic target) from
-interior pixels (isotropic target), and to predict the boundary
-orientation where it exists.
+and the total loss includes it weighted by $w_\text{cov}$:
+
+$$
+\mathcal{L}_\text{total}
+= A\,\mathcal{L}_\text{var}
++ B\,\mathcal{L}_\text{dst}
++ R\,\mathcal{L}_\text{reg}
++ w_\text{dir}\,\mathcal{L}_\text{dir}
++ w_\text{cov}\,\mathcal{L}_\text{cov}
++ w_\text{raw}\,\mathcal{L}_\text{raw}
+$$
+
+By regressing the structure tensor, the network learns to encode local
+morphology: boundary pixels map to anisotropic targets (encoding
+orientation), while interior pixels map to isotropic targets (encoding
+depth without a preferred direction).
 
 ---
 
@@ -292,16 +456,21 @@ All spatial quantities use **(x, y) = (col, row)** ordering:
 
 | Index | Axis | Image convention |
 |---|---|---|
-| 0 | x = column | increases rightward |
-| 1 | y = row | increases downward |
+| 0 | $x$ = column | increases rightward |
+| 1 | $y$ = row | increases downward |
+| 2 (3-D only) | $z$ = depth | increases into the volume |
 
-The coordinate grid (`_make_coord_grid`) stores axes in reversed order
-relative to spatial dimensions: for `spatial_shape = (H, W)`,
-`coords[0]` is columns (x) and `coords[1]` is rows (y).
+The coordinate grid (`_make_coord_grid`) stacks axes in reversed order
+relative to the spatial dimensions tuple: for `spatial_shape = (H, W)`,
+`coords[0]` is columns ($x$) and `coords[1]` is rows ($y$).
 
 The structure tensor gradient indices follow the same convention:
-`grads[0]` = `dEDT/dx` (column derivative), `grads[1]` = `dEDT/dy`
-(row derivative).
+$\tilde{g}_0 = \partial D / \partial x$ (column derivative),
+$\tilde{g}_1 = \partial D / \partial y$ (row derivative).
+
+The gradient loop uses `order[S - 1 - i] = 1`, which maps index $i = 0$
+to the last spatial axis (columns in 2-D) and $i = 1$ to the first
+(rows in 2-D), producing the $(x, y, \ldots)$ ordering.
 
 ---
 
@@ -309,12 +478,12 @@ The structure tensor gradient indices follow the same convention:
 
 | Parameter | Default | Set by | Effect |
 |---|---|---|---|
-| `sigma` | 5.0 | `_compute_covariance(sigma=...)` | Integration scale for Gaussian smoothing; also controls `sigma_d = max(1, sigma/3)` for the derivative kernel |
-| `sigma_d` | `max(1.0, sigma / 3.0)` | computed once | Derivative kernel scale; kept small for sharp local gradients |
-| `w` exponent | 2 | hard-coded | Power applied to normalised EDT for the isotropy blend; higher = sharper transition, more boundary preserved |
+| `sigma` | 5.0 | `_compute_covariance(sigma=...)` | Integration scale $\sigma$ for the structure tensor Gaussian; also determines $\sigma_d = \max(1, \sigma/3)$ |
+| `sigma_d` | $\max(1, \sigma/3)$ | computed | Derivative kernel scale; kept small relative to $\sigma$ for sharp local gradients |
+| $\alpha$ | 2 | hard-coded | Exponent in $w = (D/D_\max)^\alpha$; higher values sharpen the boundary-to-interior transition |
 | `step` | 8 | notebook | Grid spacing for glyph subsampling (visualisation only) |
-| `glyph_radius` | `step * 0.4` | notebook | Half-width of each glyph ellipse (visualisation only) |
-| `w_cov` | 0.0 | `CentroidEmbeddingLoss(w_cov=...)` | Weight of the structure-tensor regression loss |
+| `glyph_radius` | `step * 0.4` | notebook | Visual half-width $R$ of each glyph ellipse (visualisation only) |
+| `w_cov` | 0.0 | `CentroidEmbeddingLoss(w_cov=...)` | Weight $w_\text{cov}$ of the structure-tensor regression loss |
 
 ---
 
@@ -324,33 +493,34 @@ If tensor glyphs look wrong, check:
 
 1. **Interior glyphs are not isotropic (round)?**
    The EDT-blended isotropy step (section 3.4) must be present.  Verify
-   that `w = (dt / edt_max) ** 2` is computed and applied to the diagonal
-   and off-diagonal components.
+   that $w = (D / D_\max)^2$ is computed and that diagonal components
+   are blended toward $\operatorname{tr}(S)/S$ while off-diagonal
+   components are scaled by $(1 - w)$.
 
 2. **All glyphs are round (no boundary anisotropy)?**
-   The blending exponent may be too low (blending too aggressively toward
-   isotropy).  Increasing the exponent from 2 to 3 or 4 preserves more
-   anisotropy near the boundary.  Also check that `sigma_d` is small;
-   a large derivative scale blurs the gradient field.
+   The blending exponent $\alpha$ may be too low.  Increasing it from 2
+   to 3 or 4 preserves more anisotropy near the boundary.  Also check
+   that $\sigma_d$ is small; a large derivative scale blurs the gradient
+   field.
 
 3. **Glyphs leak across instance boundaries?**
-   Verify that gradients are multiplied by `mask_f` before forming the
-   outer product, and that the Gaussian smoothing is divided by the
-   smoothed mask.
+   Verify that gradients are multiplied by $\mathbf{1}_{M_k}$ before
+   forming the outer product, and that the Gaussian smoothing is divided
+   by $G_\sigma * \mathbf{1}_{M_k}$.
 
 4. **Eigenvalues contain negatives or NaN?**
-   The structure tensor is PSD by construction; negative eigenvalues come
-   from numerical noise.  The code takes `abs(eigvals)` before computing
-   the ratio.
+   The blended tensor is PSD by construction (convex combination of PSD
+   matrices).  Negative eigenvalues are numerical noise; the notebook
+   takes `abs(eigvals)` before computing the ratio.
 
 5. **Orientation looks flipped?**
-   Matplotlib's `Ellipse(angle=...)` rotates in data coordinates.  With
-   an inverted y-axis (`set_ylim(H, 0)`), the visual rotation is
-   reflected.  The angle is `atan2(eigvec_y, eigvec_x)` in (col, row)
-   coordinates.
+   Matplotlib `Ellipse(angle=...)` rotates in data coordinates.  With an
+   inverted $y$-axis (`set_ylim(H, 0)`), the visual rotation is
+   reflected.  The angle is $\arctan(v_y / v_x)$ in $(x, y)$ =
+   $(\text{col}, \text{row})$ coordinates.
 
 6. **Tensor is spatially uniform across the instance?**
-   This happens when the integration sigma is set to the instance size
-   (e.g. `sigma = dt.max()`), making every pixel see the same global
-   average.  Use a fixed small sigma with the EDT-blending approach
-   instead.
+   This happens when the integration $\sigma$ is set to the instance size
+   (e.g. $\sigma = D_\max$), making every pixel see the same global
+   average.  The correct approach is a fixed small $\sigma$ combined with
+   the EDT-blending post-processing (section 2.6 / 3.4).
