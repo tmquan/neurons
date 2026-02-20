@@ -313,17 +313,24 @@ def _compute_covariance(
     gradient is obtained via Gaussian derivatives, and the smoothed outer
     product of the gradient (the *structure tensor*) is stored per pixel.
 
-    The structure tensor is always positive-semi-definite and varies
-    smoothly: near the medial axis opposing gradients cancel under the
-    integration window, giving isotropic (round) glyphs, while near
+    The integration scale adapts per-instance so that the smoothing
+    window at the medial axis reaches the boundaries: this guarantees
+    isotropic (round) glyphs deep inside each instance, while near
     boundaries the gradient is consistent, giving anisotropic glyphs
     elongated along the boundary tangent.
+
+    Gradients are masked to the instance interior and the Gaussian
+    integration is normalised by the mask coverage to avoid boundary
+    leakage from the zero-padded exterior.
 
     Args:
         lbl_flat: [N] instance labels (0 = background).
         coords: [S, N] pixel coordinates.
         spatial_shape: e.g. (H, W) or (D, H, W).  Required.
-        sigma: Integration scale for the structure tensor smoothing.
+        sigma: Minimum integration scale for structure tensor smoothing.
+            The actual scale is ``max(sigma, max_edt)`` per instance
+            so that boundary contributions from all directions have
+            substantial Gaussian weight at the medial axis.
 
     Returns:
         [S*S, N] structure tensor flattened row-major per pixel
@@ -348,17 +355,23 @@ def _compute_covariance(
         if mask.sum() < 2:
             continue
         dt = _scipy_edt(mask).astype(np.float64)
+        mask_f = mask.astype(np.float64)
+
+        sigma_int = max(sigma, dt.max())
+        norm = np.maximum(_gauss(mask_f, sigma=sigma_int), 1e-10)
 
         grads = []
         for i in range(S):
             order = [0] * S
             order[S - 1 - i] = 1
-            grads.append(_gauss(dt, sigma=sigma_d, order=order))
+            g = _gauss(dt, sigma=sigma_d, order=order)
+            g *= mask_f
+            grads.append(g)
 
         idx = 0
         for i in range(S):
             for j in range(S):
-                smoothed = _gauss(grads[i] * grads[j], sigma=sigma)
+                smoothed = _gauss(grads[i] * grads[j], sigma=sigma_int) / norm
                 st_np[idx][mask] = smoothed[mask]
                 idx += 1
 

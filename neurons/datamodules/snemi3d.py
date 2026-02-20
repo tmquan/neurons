@@ -116,11 +116,12 @@ class SNEMI3DDataModule(CircuitDataModule):
                 )
             )
 
+        rot_axes = (0, 1) if self.slice_mode else (1, 2)
         transforms.extend(
             [
                 RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
                 RandFlipd(keys=keys, prob=0.5, spatial_axis=1),
-                RandRotate90d(keys=keys, prob=0.5, spatial_axes=(1, 2)),
+                RandRotate90d(keys=keys, prob=0.5, spatial_axes=rot_axes),
                 RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
                 RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
                 ToTensord(keys=keys),

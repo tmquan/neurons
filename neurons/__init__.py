@@ -5,7 +5,7 @@ This library provides:
 - MONAI-compatible dataset classes with standardized interfaces
 - Preprocessor classes for handling multiple data formats (TIFF, HDF5, NRRD, NIfTI)
 - Distributed training scaffolding with PyTorch Lightning
-- Pre-built models including Vista3D and SegResNet for 3D segmentation
+- Pre-built models including Vista3D backbone for 2D and 3D segmentation
 - Connectomics-specific loss functions and evaluation metrics
 """
 

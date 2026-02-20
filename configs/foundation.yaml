@@ -53,7 +53,7 @@ data:
 # Model Configuration
 model:
   type: vista3d
-  encoder_name: segresnet
+  encoder_name: vista3d
   feature_size: 96
   in_channels: 1
   num_classes: 16

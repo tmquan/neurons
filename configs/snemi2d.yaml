@@ -1,0 +1,51 @@
+# SNEMI2D Configuration
+# Slice-based neuron segmentation (2D images)
+
+defaults:
+  - default
+
+experiment_name: snemi2d_instance_seg
+project_name: neurons-snemi2d
+
+data:
+  dataset: snemi3d
+  data_root: data/snemi3d
+  batch_size: 8
+  num_workers: 4
+  train_val_split: 0.2
+  cache_rate: 0.5
+  slice_mode: true
+
+model:
+  type: vista2d
+  in_channels: 1
+  num_classes: 16
+  emb_dim: 16
+  feature_size: 48
+
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  scheduler:
+    type: cosine
+    T_max: 100
+    eta_min: 1.0e-6
+
+loss:
+  ce_weight: 1.0
+  dice_weight: 0.0
+  weight_pull: 1.0
+  weight_push: 1.0
+  weight_norm: 0.001
+  delta_v: 0.5
+  delta_d: 1.5
+  weight_edge: 10.0
+  weight_bone: 10.0
+
+training:
+  max_epochs: 100
+  accelerator: auto
+  devices: 1
+  precision: 32-true
+  gradient_clip_val: 1.0

@@ -14,7 +14,7 @@ A modular, extensible PyTorch Lightning-based infrastructure for connectomics re
 
 - **Multi-Dataset Support** -- SNEMI3D, CREMI3D, MICRONS, MitoEM2, and combined multi-dataset training with unified label space
 - **Vista Architecture** -- Vista3D and Vista2D with semantic + instance dual heads
-- **Model Zoo** -- SegResNet and Vista3D wrappers via MONAI
+- **Model Zoo** -- Vista3D backbone via MONAI (SegResNet fallback)
 - **Geometric Instance Losses** -- Centroid and skeleton discriminative losses with learned projection heads for direction, structure tensor, and image reconstruction
 - **Evaluation Metrics** -- ARI, AMI, AXI, VOI, TED (instance); Dice, IoU (semantic)
 - **Hydra Configuration** -- YAML-based config with CLI overrides, no code changes needed
@@ -41,7 +41,7 @@ neurons/
 ├── neurons/
 │   ├── datasets/       # Dataset classes: SNEMI3D, CREMI3D, MICRONS, MitoEM2
 │   ├── datamodules/    # Lightning DataModules + CombineDataModule
-│   ├── models/         # Model wrappers: Vista3D, Vista2D, SegResNet
+│   ├── models/         # Model wrappers: Vista3D, Vista2D (SegResNet fallback)
 │   ├── modules/        # Lightning training modules: Vista3D, Vista2D
 │   ├── losses/         # Discriminative (centroid + skeleton), Vista2D, Vista3D
 │   ├── metrics/        # Instance (ARI, AMI, VOI, TED) and semantic (Dice, IoU)
@@ -127,7 +127,8 @@ All behavior is driven by YAML configs in `configs/`:
 | Config | Description |
 |--------|-------------|
 | `default.yaml` | Base configuration with all defaults |
-| `snemi3d.yaml` | SNEMI3D neuron segmentation |
+| `snemi2d.yaml` | SNEMI3D 2D slice segmentation (Vista2D) |
+| `snemi3d.yaml` | SNEMI3D 3D volumetric segmentation (Vista3D) |
 | `cremi3d.yaml` | CREMI3D multi-class segmentation |
 | `microns.yaml` | MICRONS large-scale connectomics |
 | `combine.yaml` | Multi-dataset Vista3D training |

@@ -1,5 +1,5 @@
 # SNEMI3D Configuration
-# Neuron segmentation in electron microscopy images
+# Volumetric neuron segmentation (3D patches)
 
 defaults:
   - default
@@ -7,30 +7,26 @@ defaults:
 experiment_name: snemi3d_instance_seg
 project_name: neurons-snemi3d
 
-# Data configuration for SNEMI3D
 data:
   dataset: snemi3d
   data_root: data/snemi3d
-  batch_size: 8
+  batch_size: 4
   num_workers: 4
   train_val_split: 0.2
   cache_rate: 0.5
-  slice_mode: true
+  slice_mode: false
+  patch_size:
+    - 32
+    - 128
+    - 128
 
-# Model configuration for instance segmentation
 model:
-  type: segresnet
+  type: vista3d
   in_channels: 1
-  out_channels: 2  # Background, Foreground
-  spatial_dims: 2
-  init_filters: 32
-  feature_dim: 64
+  num_classes: 16
   emb_dim: 16
-  dropout: 0.2
-  use_sem_head: true
-  use_ins_head: true
+  feature_size: 48
 
-# Optimizer tuned for SNEMI3D
 optimizer:
   type: adamw
   lr: 1.0e-4
@@ -40,22 +36,20 @@ optimizer:
     T_max: 100
     eta_min: 1.0e-6
 
-# Loss configuration for instance segmentation
 loss:
-  semantic_weight: 1.0
-  instance_weight: 1.0
-  discriminative:
-    delta_var: 0.5
-    delta_dist: 1.5
-    norm: 2
-    A: 1.0
-    B: 1.0
-    R: 0.001
+  ce_weight: 1.0
+  dice_weight: 0.0
+  weight_pull: 1.0
+  weight_push: 1.0
+  weight_norm: 0.001
+  delta_v: 0.5
+  delta_d: 1.5
+  weight_edge: 10.0
+  weight_bone: 10.0
 
-# Training configuration
 training:
   max_epochs: 100
   accelerator: auto
   devices: 1
-  precision: 32-true
+  precision: 16-mixed
   gradient_clip_val: 1.0

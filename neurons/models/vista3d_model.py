@@ -27,7 +27,7 @@ class Vista3DWrapper(nn.Module):
             future class additions without retraining the backbone.
         emb_dim: Instance embedding dimensionality (default: 16).
         feature_size: Base feature dimension from backbone (default: 48).
-        encoder_name: Backbone encoder ('segresnet' or 'swin').
+        encoder_name: Vista3D internal encoder ('segresnet' or 'swin').
 
     Example:
         >>> model = Vista3DWrapper(in_channels=1, num_classes=16, emb_dim=16)
@@ -43,7 +43,7 @@ class Vista3DWrapper(nn.Module):
         num_classes: int = 16,
         emb_dim: int = 16,
         feature_size: int = 48,
-        encoder_name: str = "segresnet",
+        encoder_name: str = "vista3d",
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -64,16 +64,16 @@ class Vista3DWrapper(nn.Module):
         )
 
     def _build_backbone(self, encoder_name: str, **kwargs: Any) -> None:
-        """Build backbone, falling back to SegResNet if Vista3D is unavailable."""
+        """Build Vista3D backbone, falling back to SegResNet if unavailable."""
         try:
             from monai.networks.nets import vista3d
-            self.vista3d = vista3d.Vista3D(
+            self.backbone = vista3d.Vista3D(
                 in_channels=self.in_channels,
                 encoder_name=encoder_name,
                 feature_size=self.feature_size,
                 **kwargs,
             )
-            self._has_vista3d = True
+            self._use_vista3d = True
         except (ImportError, AttributeError):
             from monai.networks.nets import SegResNet
             self.backbone = SegResNet(
@@ -82,7 +82,7 @@ class Vista3DWrapper(nn.Module):
                 out_channels=self.feature_size,
                 init_filters=self.feature_size,
             )
-            self._has_vista3d = False
+            self._use_vista3d = False
 
     def forward(
         self,
@@ -96,7 +96,7 @@ class Vista3DWrapper(nn.Module):
             class_ids: Optional per-voxel semantic class labels [B, D, H, W].
                 Passed through so the loss can compute per-class instance losses.
         """
-        feat = self.vista3d(x) if self._has_vista3d else self.backbone(x)
+        feat = self.backbone(x)
 
         out: Dict[str, torch.Tensor] = {
             "semantic": self.head_semantic(feat),

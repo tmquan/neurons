@@ -5,7 +5,7 @@ Includes:
 - BaseModel: Abstract base class for all models
 - Vista3DWrapper: 3D Vista/GAPE architecture (semantic + instance + geometry)
 - Vista2DWrapper: 2D Vista/GAPE architecture (semantic + instance + geometry)
-- SegResNetWrapper: MONAI SegResNet with customizable heads
+- SegResNetWrapper: MONAI SegResNet fallback with customizable heads
 """
 
 from neurons.models.base import BaseModel

@@ -52,13 +52,13 @@ class Vista2DModule(pl.LightningModule):
             num_classes=model_config.get("num_classes", 16),
             emb_dim=model_config.get("emb_dim", 16),
             feature_size=model_config.get("feature_size", 48),
-            encoder_name=model_config.get("encoder_name", "segresnet"),
+            encoder_name=model_config.get("encoder_name", "vista3d"),
         )
 
         self.criterion = _Loss(
             weight_pull=loss_config.get("weight_pull", 1.0),
             weight_push=loss_config.get("weight_push", 1.0),
-            weight_norm=loss_config.get("weight_norm", 0.001),
+            weight_norm=loss_config.get("weight_norm", .001),
             weight_edge=loss_config.get("weight_edge", 10.0),
             weight_bone=loss_config.get("weight_bone", 10.0),
             delta_v=loss_config.get("delta_v", 0.5),

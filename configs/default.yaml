@@ -24,7 +24,7 @@ data:
 
 # Model configuration
 model:
-  type: segresnet  # Options: segresnet, vista3d
+  type: vista3d  # Options: vista3d, vista2d, segresnet
   in_channels: 1
   out_channels: 2
   spatial_dims: 2
