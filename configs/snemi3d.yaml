@@ -11,11 +11,11 @@ data:
   dataset: snemi3d
   data_root: data/snemi3d
   batch_size: 4
-  num_workers: 32
+  num_workers: 8
   train_val_split: 0.2
   cache_rate: 0.5
   slice_mode: false
-  num_samples: 400  # random 3D crops per epoch (volume has 100 Z-slices)
+  num_samples: 200  # random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
     - 32
     - 128
