@@ -1,323 +1,341 @@
-# Training Guide
+# Training Modes
 
-## Prerequisites
-
-```bash
-conda create -n neurons python=3.12
-conda activate neurons
-
-pip install -e ".[dev]"
-```
-
-Verify the installation:
-
-```bash
-pytest tests/ -v
-```
-
-## Download Data
-
-Download scripts default to `data/<dataset>` if `--output` is omitted:
-
-```bash
-python scripts/download_snemi3d.py
-python scripts/download_cremi3d.py
-python scripts/download_mitoem2.py
-```
-
-Expected directory structure:
+The training loop supports two modes that run **in the same step** on every batch.
+When both are enabled the losses are averaged and a single backward pass updates all
+weights (backbone, task heads, and point prompt encoder together).
 
 ```
-data/
-├── snemi3d/
-│   ├── AC3_inputs.h5
-│   └── AC3_labels.h5
-├── cremi3d/
-│   ├── sampleA.h5
-│   ├── sampleB.h5
-│   └── sampleC.h5
-└── mitoem2/
-    ├── human/
-    └── rat/
+training_step(batch)
+│
+├── targets = _prepare_targets(batch)
+│       ├── semantic_labels   [B, *spatial]   (labels > 0).long()
+│       ├── labels            [B, *spatial]   instance ids (0 = bg)
+│       └── raw_image         [B, 1, *spatial] input image for L_raw
+│
+├── mode = "automatic"
+│   └── predictions = model(images)                        # no prompts
+│       └── loss_auto = criterion(predictions, targets)
+│
+├── mode = "proofread"
+│   ├── sub_mode?
+│   │   ├── fractionary  (labels contain ignore_index)
+│   │   │   └── resolve labels → model(images, semantic_ids=...)
+│   │   └── interactive  (fully annotated)
+│   │       └── sample points → model(images, point_prompts=...)
+│   └── loss_proof = criterion(predictions, targets)
+│
+└── total_loss = (loss_auto + loss_proof) / 2
 ```
 
-## Quick Start
-
-### Single-dataset training
-
-SNEMI3D 2D slices (Vista2D):
-
-```bash
-python scripts/train.py --config-name snemi2d
-```
-
-SNEMI3D 3D patches (Vista3D):
-
-```bash
-python scripts/train.py --config-name snemi3d
-```
-
-CREMI3D 3D patches (Vista3D):
-
-```bash
-python scripts/train.py --config-name cremi3d
-```
-
-### Multi-dataset training
-
-Combined SNEMI3D + CREMI3D with unified label space:
-
-```bash
-python scripts/train.py --config-name combine
-```
-
-### Foundation model training
-
-All datasets (SNEMI3D + CREMI3D + MitoEM2) with per-class instance loss,
-CE + Dice semantic loss, and bf16 mixed precision:
-
-```bash
-python scripts/train.py --config-name foundation
-```
-
-### Fast development run
-
-Runs one training batch and one validation batch to verify the pipeline:
-
-```bash
-python scripts/train.py --config-name foundation training.fast_dev_run=true
-```
-
-## Configuration
-
-All training is configured via YAML files in `configs/`. Every config inherits
-from `configs/default.yaml` and overrides only what it needs.
-
-| Config | Dataset | Model | Precision | Epochs |
-|---|---|---|---|---|
-| `default.yaml` | SNEMI3D (2D) | Vista3D | fp32 | 100 |
-| `snemi2d.yaml` | SNEMI3D (2D) | Vista2D | fp32 | 100 |
-| `snemi3d.yaml` | SNEMI3D (3D) | Vista3D | fp16 | 100 |
-| `cremi3d.yaml` | CREMI3D (3D) | Vista3D | fp16 | 200 |
-| `combine.yaml` | SNEMI3D + CREMI3D | Vista3D | fp16 | 300 |
-| `foundation.yaml` | All datasets | Vista3D | bf16 | 500 |
-
-### Override parameters via CLI
-
-Hydra allows overriding any config value from the command line:
-
-```bash
-python scripts/train.py --config-name foundation \
-    data.batch_size=4 \
-    optimizer.lr=1e-3
-
-python scripts/train.py --config-name foundation \
-    logger=tensorboard
-
-python scripts/train.py --config-name foundation \
-    training.max_epochs=10
-```
-
-## Architecture
-
-The Vista model has two parallel output heads:
-
-- **Semantic head** -- per-voxel class logits (CE + Dice loss)
-- **Instance head** -- per-voxel embeddings (pull/push discriminative loss)
-
-When `class_ids` are available in the batch (provided automatically by
-`CombineDataModule`), the instance loss is computed per semantic class --
-neurons only cluster with neurons, mitochondria only with mitochondria.
+Configure which modes run in `training.training_modes`:
 
 ```yaml
-model:
-  type: vista3d       # or vista2d for slice-based training
-  encoder_name: vista3d
-  feature_size: 48    # backbone width
-  num_classes: 16     # semantic classes (headroom for future additions)
-  emb_dim: 16         # instance embedding dimension
+training:
+  training_modes:
+    - automatic          # always recommended
+    - proofread          # adds the interactive/fractionary branch
+  num_pos_points: 5      # positive prompt points per sample
+  num_neg_points: 5      # negative prompt points per sample
+  point_sample_mode: instance  # "class" or "instance"
 ```
 
-For 2D slice-based training, set `model.type: vista2d` and `data.slice_mode: true`.
+---
 
-## Loss Configuration
+## 1. Automatic Mode
 
-### Semantic branch
+The baseline mode.  The model sees only the raw EM image and must predict
+everything from scratch — no hints, no prompts.
+
+### Forward path
+
+```
+image [B, 1, D, H, W]
+  │
+  ▼
+backbone (SegResNet / Vista3D)
+  │
+  ▼
+feat [B, F, D, H, W]        (F = feature_size, e.g. 64)
+  │
+  ├──▶ head_semantic  → semantic  [B, C, D, H, W]   class logits
+  ├──▶ head_instance  → instance  [B, E, D, H, W]   embedding vectors
+  └──▶ head_geometry  → geometry  [B, G, D, H, W]   dir + cov + raw
+```
+
+### Loss
+
+The criterion computes three terms on the predictions:
+
+| Term | Head | Components | Description |
+|------|------|------------|-------------|
+| **L_sem** | semantic | CE + IoU + Dice | Per-voxel class loss |
+| **L_ins** | instance | pull + push + norm | Discriminative clustering loss |
+| **L_geom** | geometry | L_dir + L_cov + L_raw | Geometry regression loss |
+
+```
+loss = w_sem * L_sem  +  w_ins * L_ins  +  w_geom * L_geom
+```
+
+All targets are derived from the instance label map alone (the ground truth):
+
+- **L_sem** — cross-entropy between predicted class logits and binary
+  foreground / background labels (or multi-class `semantic_ids` when
+  available).  Optional IoU and Dice soft losses are added.
+
+- **L_ins** — the discriminative loss from De Brabandere et al. (2017):
+  - *pull*: hinge-L2 from each voxel's embedding to its instance centroid.
+    Weighted by boundary (`weight_edge`) and skeleton depth (`weight_bone`)
+    maps, so the model pays more attention to boundaries and medial axes.
+    Averaged over instances, then over batch.
+  - *push*: pairwise margin on instance centroids — pushes different
+    instances apart by at least `2 * delta_d`.
+  - *norm*: L2 regularisation on centroid embeddings.
+
+- **L_geom** — per-voxel regression on three channel groups:
+  - *L_dir* (`S` channels): unit direction from each foreground voxel toward
+    its instance centroid (or nearest skeleton point if `dir_target=skeleton`).
+    Target computed on-the-fly.
+  - *L_cov* (`S*S` channels): EDT structure tensor — the smoothed outer
+    product of the distance-transform gradient, encoding local shape.
+    Blended toward isotropy at the medial axis.  Target computed on-the-fly.
+  - *L_raw* (`4` channels): RGBA reconstruction of the input image.
+    Target = `[R, G, B, alpha]` where RGB copies the grayscale input and
+    alpha = foreground mask.  Predicted through `sigmoid` so both prediction
+    and target live in `[0, 1]`.
+
+### When to use automatic alone
+
+- Early experiments / debugging (simpler, one forward pass per step).
+- When you only have fully-annotated data and do not need interactive
+  inference later.
+
+---
+
+## 2. Proofread Mode
+
+Proofread mode teaches the model to leverage **additional context** beyond
+the image — either partial annotation or point prompts.  This is critical
+for interactive segmentation at inference time: a human clicks on an object
+and the model refines its prediction.
+
+Proofread has two sub-modes, selected automatically per batch:
+
+### 2a. Interactive sub-mode (fully annotated data)
+
+Triggered when the labels do **not** contain any `ignore_index` values — the
+patch is fully annotated.  Since we already have full ground truth, we
+*simulate* an interactive session:
+
+1. **Sample a target** — pick a random foreground instance (mode `"instance"`)
+   or a random foreground class (mode `"class"`).
+
+2. **Sample point prompts** from ground truth:
+   - `num_pos_points` positive points sampled uniformly from the target mask.
+   - `num_neg_points` negative points sampled from everywhere else (background
+     + other instances).
+
+3. **Encode prompts** — the `PointPromptEncoder` builds a sparse indicator
+   volume with `num_classes + 3` channels:
+
+   | Channel(s) | Content |
+   |------------|---------|
+   | 0 | `+1` at each positive point |
+   | 1 | `+1` at each negative point |
+   | 2 .. 2+C-1 | one-hot of target semantic class at all point locations |
+   | -1 | binary instance indicator at positive points |
+
+   A small Conv + GroupNorm + ReLU block projects this to `[B, F, *spatial]`.
+
+4. **Residual injection** — the encoded prompt is **added** to the backbone
+   features before the task heads:
+
+   ```
+   feat_proofread = backbone(image) + point_encoder(prompts)
+   ```
+
+   At initialization the encoder's conv weights are near-zero (`std=1e-4`),
+   so the residual is negligible and the model starts as if in automatic mode.
+   As training progresses the encoder learns to modulate features based on
+   the user-provided points.
+
+5. **Full loss** — the same three-term criterion (L_sem + L_ins + L_geom)
+   is computed on the proofread predictions against the full targets.  The
+   model is expected to improve *all* predictions given the extra context,
+   not just the prompted instance.
+
+### 2b. Fractionary sub-mode (partially annotated data)
+
+Triggered when labels contain **both** valid foreground IDs and `ignore_index`
+values in the same patch — meaning the annotator labelled some regions but
+left others unknown.
+
+1. **Resolve labels** (`_resolve_fractionary_labels`):
+   - Semantic labels at unknown voxels → set to `ignore_index` (excluded
+     from CE loss).
+   - Instance labels at unknown voxels → set to 0 (treated as background
+     for the discriminative loss).
+   - Valid instance IDs are remapped to contiguous integers `1, 2, …`.
+   - A `semantic_ids` tensor is built so the instance loss can run per-class.
+
+2. **Forward with `semantic_ids`** — passed through the model so the
+   prediction dict carries class information for per-class instance loss.
+
+3. **Loss** — same criterion, but the CE loss automatically ignores
+   unknown voxels (via `ignore_index`), and the instance loss only sees
+   the remapped known foreground.
+
+### When to use proofread
+
+- You plan to deploy interactive segmentation (user clicks to refine).
+- You have a mix of fully- and partially-annotated volumes.
+- You want the model to learn prompt-conditioned behaviour alongside
+  automatic segmentation.
+
+---
+
+## 3. How the Two Modes Combine
+
+When both modes are enabled, every training step runs **two forward passes**
+through the model:
+
+```
+                     ┌──────────────────┐
+                     │   Same backbone  │
+                     │   Same heads     │
+  image ────────────▶│   Same weights   │
+                     └──────────────────┘
+                          │         │
+              automatic   │         │  proofread
+              (no prompts)│         │  (+ point encoder residual)
+                          ▼         ▼
+                     predictions₁  predictions₂
+                          │         │
+              criterion(p₁,tgt)  criterion(p₂,tgt)
+                          │         │
+                     loss_auto   loss_proof
+                          │         │
+                          ▼         ▼
+                total = (loss_auto + loss_proof) / 2
+                          │
+                          ▼
+                     backward()
+```
+
+Key properties:
+
+- **Shared weights** — both passes update the same backbone and task heads.
+  The point encoder is only exercised by proofread mode, so it only receives
+  gradients from that branch.
+
+- **Averaged loss** — the final scalar is the mean of both mode losses.
+  Per-mode sub-losses are logged separately under `train/automatic/*` and
+  `train/proofread/*` for TensorBoard inspection.
+
+- **No interference at init** — the point encoder starts near-zero, so
+  both modes produce nearly identical predictions at the beginning of
+  training.  The proofread branch gradually diverges as the encoder learns.
+
+---
+
+## 4. Loss Components Reference
+
+### Semantic loss
+
+```
+L_sem = w_ce * CrossEntropy  +  w_iou * (1 - SoftIoU)  +  w_dice * (1 - SoftDice)
+```
+
+### Instance loss
+
+```
+L_ins = w_pull * L_pull  +  w_push * L_push  +  w_norm * L_norm
+```
+
+- `L_pull`: per-instance weighted mean of `relu(||e_i - μ_k|| - δ_v)²`, where
+  weights come from `weight_edge` (boundary boost) and `weight_bone` (skeleton
+  depth boost).  Averaged over instances, then over batch.
+- `L_push`: `mean( relu(2·δ_d - ||μ_i - μ_j||)² )` over all centroid pairs.
+- `L_norm`: mean centroid L2 norm (regularisation).
+
+### Geometry loss
+
+```
+L_geom = w_dir * L_dir  +  w_cov * L_cov  +  w_raw * L_raw
+```
+
+All terms use foreground-masked MSE averaged over foreground voxels and
+channels.
+
+- `L_dir`: target = unit offset toward instance centroid (or skeleton).
+- `L_cov`: target = EDT structure tensor (smoothed gradient outer product).
+- `L_raw`: target = `[img, img, img, fg_mask]` in `[0, 1]`.
+  Prediction passed through `sigmoid` before MSE.
+
+---
+
+## 5. Configuration Quick Reference
 
 ```yaml
 loss:
-  ce_weight: 0.5        # cross-entropy weight
-  dice_weight: 0.5       # soft Dice weight (0 to disable)
-  class_weights: [...]   # per-class CE weights (length must equal num_classes)
-  ignore_index: -100     # label to ignore
+  # Top-level branch weights
+  weight_semantic: 1.0
+  weight_instance: 1.0
+  weight_geometry: 1.0      # set 0.0 to disable geometry head
+
+  # Semantic
+  weight_ce: 1.0
+  weight_iou: 1.0
+  weight_dice: 1.0
+
+  # Instance
+  weight_pull: 1.0
+  weight_push: 1.0
+  weight_norm: 0.001
+  delta_v: 0.5              # pull hinge margin
+  delta_d: 1.5              # push margin (centroids pushed apart by 2·δ_d)
+  weight_edge: 10.0         # boundary pixel weight multiplier
+  weight_bone: 10.0         # skeleton pixel weight multiplier
+
+  # Geometry
+  weight_dir: 1.0
+  weight_cov: 1.0
+  weight_raw: 1.0
+  dir_target: centroid       # "centroid" or "skeleton"
+
+training:
+  training_modes:
+    - automatic
+    - proofread
+  num_pos_points: 5
+  num_neg_points: 5
+  point_sample_mode: instance  # "class" or "instance"
 ```
 
-### Instance branch
+---
 
-```yaml
-loss:
-  weight_pull: 1.0       # pull embeddings toward cluster center
-  weight_push: 1.0       # push different cluster centers apart
-  weight_norm: 0.001     # regularize embedding norms
-  delta_v: 0.5           # pull margin
-  delta_d: 1.5           # push margin
-  weight_edge: 10.0      # extra weight on boundary voxels
-  weight_bone: 10.0      # extra weight on skeleton (medial axis) voxels
-```
+## 6. TensorBoard Logged Scalars
 
-## Multi-GPU / Distributed Training
+When both modes are active, the following keys are logged per step:
 
-```bash
-# Single GPU (default)
-python scripts/train.py --config-name foundation \
-    training.devices=1
+| Key pattern | Example | Description |
+|-------------|---------|-------------|
+| `train/loss` | — | Averaged total across modes (shown on progress bar) |
+| `train/{mode}/loss` | `train/automatic/loss` | Total loss for one mode |
+| `train/{mode}/loss_sem` | `train/proofread/loss_sem` | Semantic loss |
+| `train/{mode}/loss_sem/ce` | — | CE component |
+| `train/{mode}/loss_sem/iou` | — | IoU component |
+| `train/{mode}/loss_sem/dice` | — | Dice component |
+| `train/{mode}/loss_ins` | — | Instance loss |
+| `train/{mode}/loss_ins/pull` | — | Pull component |
+| `train/{mode}/loss_ins/push` | — | Push component |
+| `train/{mode}/loss_ins/norm` | — | Norm component |
+| `train/{mode}/loss_geom` | — | Geometry loss |
+| `train/{mode}/loss_geom/dir` | — | Direction component |
+| `train/{mode}/loss_geom/cov` | — | Covariance component |
+| `train/{mode}/loss_geom/raw` | — | RGBA reconstruction component |
 
-# Multi-GPU DDP
-python scripts/train.py --config-name foundation \
-    training.devices=4 \
-    training.strategy=ddp
-
-# DeepSpeed ZeRO Stage 2
-python scripts/train.py --config-name foundation \
-    training.devices=4 \
-    training.strategy=deepspeed_stage_2
-
-# FSDP
-python scripts/train.py --config-name foundation \
-    training.devices=4 \
-    training.strategy=fsdp
-```
-
-## Mixed Precision
-
-```bash
-# FP32
-python scripts/train.py --config-name foundation training.precision=32-true
-
-# FP16 mixed precision
-python scripts/train.py --config-name foundation training.precision=16-mixed
-
-# BF16 mixed precision (recommended for A100/H100)
-python scripts/train.py --config-name foundation training.precision=bf16-mixed
-```
-
-## Monitoring
-
-### TensorBoard
-
-```bash
-python scripts/train.py --config-name snemi3d logger=tensorboard
-tensorboard --logdir logs/
-```
-
-### Weights and Biases
-
-```bash
-wandb login
-python scripts/train.py --config-name foundation logger=wandb
-```
-
-### Logged metrics
-
-| Metric | Description |
-|---|---|
-| `train/loss` | Total training loss |
-| `train/loss_sem` | Semantic branch loss |
-| `train/loss_ce` | Cross-entropy component |
-| `train/loss_dice` | Dice component |
-| `train/loss_ins` | Instance branch loss |
-| `val/loss` | Total validation loss |
-| `val/loss_sem` | Semantic validation loss |
-| `val/loss_ins` | Instance validation loss |
-| `val/accuracy` | Semantic argmax accuracy |
-
-## Checkpoints
-
-Checkpoints are saved automatically:
-
-```yaml
-callbacks:
-  checkpoint:
-    dirpath: checkpoints
-    save_top_k: 3         # keep top 3 by val/loss
-    save_last: true       # always keep last epoch
-    monitor: val/loss
-```
-
-Resume training from a checkpoint by passing `ckpt_path` to the trainer.
-Add this to `train.py` or load manually:
-
-```python
-from neurons.modules import Vista3DModule
-module = Vista3DModule.load_from_checkpoint("checkpoints/last.ckpt")
-```
-
-## Inference
-
-After training, run sliding window inference on a full volume:
-
-```bash
-python scripts/infer_vista3d.py \
-    --checkpoint checkpoints/last.ckpt \
-    --input data/snemi3d/AC3_inputs.h5 \
-    --output output/AC3_segmentation.h5 \
-    --patch-size 64 128 128 \
-    --aggregation gaussian
-```
-
-Segment only a specific class (e.g., neurons = class 1):
-
-```bash
-python scripts/infer_vista3d.py \
-    --checkpoint checkpoints/last.ckpt \
-    --input data/volume.h5 \
-    --output output/neurons_only.h5 \
-    --class-id 1
-```
-
-Output semantic probabilities instead of instance labels:
-
-```bash
-python scripts/infer_vista3d.py \
-    --checkpoint checkpoints/last.ckpt \
-    --input data/volume.h5 \
-    --output output/probs.h5 \
-    --output-probs
-```
-
-All inference options: `python scripts/infer_vista3d.py --help`
-
-## Testing
-
-Run the full test suite:
-
-```bash
-pytest tests/ -v
-```
-
-Run a specific test file:
-
-```bash
-pytest tests/test_losses.py -v
-pytest tests/test_modules.py -v
-```
-
-## Troubleshooting
-
-**Out of memory** -- Reduce `data.batch_size` or `model.feature_size`, or use
-`training.accumulate_grad_batches` to simulate larger batches.
-
-**Slow data loading** -- Increase `data.num_workers` or set `data.cache_rate: 1.0`
-to cache the entire dataset in RAM.
-
-**NaN loss** -- Lower the learning rate, verify `training.gradient_clip_val` is
-set (default: 1.0), and check that `loss.class_weights` has exactly
-`model.num_classes` entries.
-
-**Hydra working directory** -- Hydra changes the working directory by default.
-Use absolute paths for `data.data_root` or add `hydra.run.dir=.` to stay in the
-project root.
-
-**Vista3D backbone unavailable** -- If MONAI's Vista3D is not installed, the
-model automatically falls back to SegResNet. Install a recent MONAI version
-(`pip install monai>=1.5`) to use the Vista3D backbone.
+Compare `train/automatic/loss` vs `train/proofread/loss` to check whether
+the proofread branch is training at a similar scale.  A large gap
+early on usually means the point encoder is disrupting backbone features
+(check GroupNorm initialisation) or that the prompted targets are
+misaligned.

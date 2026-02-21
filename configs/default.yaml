@@ -62,6 +62,12 @@ loss:
 
 # Training configuration
 training:
+  training_modes:
+    - automatic
+    - proofread
+  num_pos_points: 5
+  num_neg_points: 5
+  point_sample_mode: "instance"  # Options: class, instance
   max_epochs: 100
   accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: 1

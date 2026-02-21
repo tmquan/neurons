@@ -187,6 +187,7 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
     model_cfg = dict(cfg.get("model", {}))
     optimizer_cfg = dict(cfg.get("optimizer", {}))
     loss_cfg = dict(cfg.get("loss", {}))
+    training_cfg = dict(cfg.get("training", {}))
 
     model_type = model_cfg.pop("type", "vista3d").lower()
 
@@ -195,12 +196,14 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
             model_config=model_cfg,
             optimizer_config=optimizer_cfg,
             loss_config=loss_cfg,
+            training_config=training_cfg,
         )
 
     return Vista3DModule(
         model_config=model_cfg,
         optimizer_config=optimizer_cfg,
         loss_config=loss_cfg,
+        training_config=training_cfg,
     )
 
 

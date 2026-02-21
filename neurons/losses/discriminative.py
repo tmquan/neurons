@@ -726,17 +726,16 @@ class GeometryLoss(nn.Module):
                 L_cov = L_cov + self._fg_mse(pred_cov[b], cov_tgt, fg)
 
             if self.weight_raw > 0 and raw_image is not None:
-                img_flat = rearrange(raw_image[b], "c ... -> c (...)")
+                img_flat = rearrange(raw_image[b], "c ... -> c (...)").clamp(0.0, 1.0)
                 rgba_tgt = torch.cat([
                     img_flat.expand(3, -1),
                     fg.unsqueeze(0).float(),
                 ], dim=0)
-                L_raw = L_raw + self._fg_mse(pred_raw[b], rgba_tgt, fg)
+                raw_pred_b = torch.sigmoid(pred_raw[b])
+                L_raw = L_raw + self._fg_mse(raw_pred_b, rgba_tgt, fg)
 
         n = max(valid_b, 1)
-        L_dir, L_cov = L_dir / n, L_cov / n
-        if B > 0:
-            L_raw = L_raw / B
+        L_dir, L_cov, L_raw = L_dir / n, L_cov / n, L_raw / n
 
         total = self.weight_dir * L_dir + self.weight_cov * L_cov + self.weight_raw * L_raw
 

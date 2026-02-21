@@ -413,7 +413,7 @@ class TestVista2DLoss:
         labels[:, :8, :8] = 1
         labels[:, :8, 8:] = 2
         targets = {
-            "class_labels": (labels > 0).long(),
+            "semantic_labels": (labels > 0).long(),
             "labels": labels,
         }
         return predictions, targets
@@ -456,7 +456,7 @@ class TestVista2DLoss:
             "instance": torch.randn(B, 16, H, W),
         }
         targets = {
-            "class_labels": torch.zeros(B, H, W, dtype=torch.long),
+            "semantic_labels": torch.zeros(B, H, W, dtype=torch.long),
             "labels": torch.zeros(B, H, W, dtype=torch.long),
         }
         result = loss_fn(predictions, targets)
@@ -508,7 +508,7 @@ class TestVista3DLoss:
         labels[:, :, :4, :4] = 1
         labels[:, :, :4, 4:] = 2
         targets = {
-            "class_labels": (labels > 0).long(),
+            "semantic_labels": (labels > 0).long(),
             "labels": labels,
         }
         return predictions, targets
@@ -555,7 +555,7 @@ class TestVista3DLoss:
             "instance": torch.randn(B, 16, D, H, W),
         }
         targets = {
-            "class_labels": torch.zeros(B, D, H, W, dtype=torch.long),
+            "semantic_labels": torch.zeros(B, D, H, W, dtype=torch.long),
             "labels": torch.zeros(B, D, H, W, dtype=torch.long),
         }
         result = loss_fn(predictions, targets)
@@ -569,7 +569,7 @@ class TestVista3DLoss:
         }
         labels = torch.ones(B, D, H, W, dtype=torch.long)
         targets = {
-            "class_labels": torch.ones(B, D, H, W, dtype=torch.long),
+            "semantic_labels": torch.ones(B, D, H, W, dtype=torch.long),
             "labels": labels,
         }
         result = loss_fn(predictions, targets)

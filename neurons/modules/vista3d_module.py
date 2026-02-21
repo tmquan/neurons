@@ -1,11 +1,21 @@
 """
 Vista3D Lightning Module for volumetric segmentation training.
 
-Uses the 3-head Vista3D model (semantic + instance + geometry) with
-the Vista3DLoss for combined multi-task training.
+Supports two training modes that can be combined in a single step:
+
+- **automatic**: predict everything from the image alone.
+- **proofread**: additional context (fractionary labels or interactive
+  point prompts) is provided.  Sub-modes:
+
+  - *fractionary*: partial annotation exists — resolve labels and forward
+    with ``semantic_ids``.
+  - *interactive*: fully annotated — simulate point prompts sampled from GT.
+
+When ``training_modes`` contains both, every batch runs both forward passes
+and the losses are summed.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 import pytorch_lightning as pl
@@ -21,24 +31,30 @@ from neurons.metrics import (
     compute_per_batch_ted,
     compute_per_batch_iou,
 )
+from neurons.utils.point_sampling import sample_point_prompts
 
 _SPATIAL_DIMS = 3
 _EXPAND_PATTERN = "b d h w -> b 1 d h w"
 _SQUEEZE_PATTERN = "b 1 d h w -> b d h w"
+
+_DEFAULT_TRAINING_MODES: List[str] = ["automatic"]
 
 
 class Vista3DModule(pl.LightningModule):
     """
     PyTorch Lightning module for Vista3D-based volumetric segmentation.
 
-    Two-head architecture:
+    Three-head architecture:
     - semantic: per-voxel class logits  [B, C, D, H, W]
     - instance: per-voxel embeddings    [B, E, D, H, W]
+    - geometry: per-voxel geometry      [B, G, D, H, W]
 
     Args:
         model_config: Model configuration dict.
         optimizer_config: Optimizer configuration dict.
         loss_config: Loss function configuration dict.
+        training_config: Training configuration dict (contains
+            ``training_modes``, ``num_pos_points``, etc.).
     """
 
     def __init__(
@@ -46,6 +62,7 @@ class Vista3DModule(pl.LightningModule):
         model_config: Optional[Dict[str, Any]] = None,
         optimizer_config: Optional[Dict[str, Any]] = None,
         loss_config: Optional[Dict[str, Any]] = None,
+        training_config: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -54,6 +71,7 @@ class Vista3DModule(pl.LightningModule):
         model_config = model_config or {}
         self.optimizer_config = optimizer_config or {}
         loss_config = loss_config or {}
+        training_config = training_config or {}
 
         self.model = _Model(
             in_channels=model_config.get("in_channels", 1),
@@ -69,22 +87,42 @@ class Vista3DModule(pl.LightningModule):
             weight_geometry=loss_config.get("weight_geometry", 0.0),
             weight_pull=loss_config.get("weight_pull", 1.0),
             weight_push=loss_config.get("weight_push", 1.0),
-            weight_norm=loss_config.get("weight_norm", .001),
+            weight_norm=loss_config.get("weight_norm", 0.001),
             weight_edge=loss_config.get("weight_edge", 10.0),
             weight_bone=loss_config.get("weight_bone", 10.0),
             delta_v=loss_config.get("delta_v", 0.5),
             delta_d=loss_config.get("delta_d", 1.5),
             weight_ce=loss_config.get("weight_ce", 1.0),
+            weight_iou=loss_config.get("weight_iou", 0.0),
             weight_dice=loss_config.get("weight_dice", 0.0),
             class_weights=loss_config.get("class_weights"),
             ignore_index=loss_config.get("ignore_index", -100),
+            weight_dir=loss_config.get("weight_dir", 1.0),
+            weight_cov=loss_config.get("weight_cov", 1.0),
+            weight_raw=loss_config.get("weight_raw", 1.0),
+            dir_target=loss_config.get("dir_target", "centroid"),
         )
 
         self._clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
+        self._ignore_index = loss_config.get("ignore_index", -100)
+
+        self.training_modes: List[str] = list(
+            training_config.get("training_modes", _DEFAULT_TRAINING_MODES)
+        )
+        self._num_pos_points: int = training_config.get("num_pos_points", 5)
+        self._num_neg_points: int = training_config.get("num_neg_points", 5)
+        self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
 
     def forward(self, x: torch.Tensor, **kw: Any) -> Dict[str, torch.Tensor]:
-        """Forward pass through 3-head model."""
         return self.model(x, **kw)
+
+    # ------------------------------------------------------------------
+    # Target preparation
+    # ------------------------------------------------------------------
 
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Extract and reshape targets from batch dict."""
@@ -93,37 +131,154 @@ class Vista3DModule(pl.LightningModule):
             labels = rearrange(labels, _SQUEEZE_PATTERN)
 
         targets: Dict[str, Any] = {
-            "class_labels": batch.get("class_ids", (labels > 0).long()),
+            "semantic_labels": batch.get("semantic_ids", (labels > 0).long()),
             "labels": labels,
         }
-        if "class_ids" in batch:
-            targets["class_ids"] = batch["class_ids"]
+        if "semantic_ids" in batch:
+            targets["semantic_ids"] = batch["semantic_ids"]
+        if "image" in batch:
+            targets["raw_image"] = batch["image"]
         return targets
 
+    # ------------------------------------------------------------------
+    # Proofread helpers
+    # ------------------------------------------------------------------
+
+    def _get_proofread_sub_mode(
+        self, targets: Dict[str, torch.Tensor],
+    ) -> str:
+        """Determine proofread sub-mode for the current batch.
+
+        Returns ``"fractionary"`` when the labels contain a mix of valid
+        values and ``ignore_index`` (partial annotation), otherwise
+        ``"interactive"``.
+        """
+        labels = targets["labels"]
+        has_ignore = (labels == self._ignore_index).any()
+        has_valid_fg = (labels > 0).any() & (labels != self._ignore_index).any()
+        if has_ignore and has_valid_fg:
+            return "fractionary"
+        return "interactive"
+
+    def _resolve_fractionary_labels(
+        self, targets: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        """Prepare targets for a fractionary-annotated patch.
+
+        - Sets ``semantic_labels`` to ``ignore_index`` where annotation is
+          missing.
+        - Builds ``semantic_ids`` from the known voxels.
+        - Remaps instance ``labels`` to contiguous IDs for the known region.
+        """
+        targets = dict(targets)
+        labels = targets["labels"]
+        ignore = self._ignore_index
+        unknown = labels == ignore
+
+        sem = targets["semantic_labels"].clone()
+        sem[unknown] = ignore
+        targets["semantic_labels"] = sem
+
+        semantic_ids = sem.clone()
+        targets["semantic_ids"] = semantic_ids
+
+        inst = labels.clone()
+        inst[unknown] = 0
+        known_ids = inst.unique()
+        known_ids = known_ids[known_ids > 0]
+        remap = torch.zeros(int(known_ids.max().item()) + 1 if known_ids.numel() > 0 else 1,
+                            dtype=torch.long, device=labels.device)
+        for new_id, old_id in enumerate(known_ids, start=1):
+            remap[old_id] = new_id
+        flat = inst.view(-1)
+        mask = flat > 0
+        flat[mask] = remap[flat[mask]]
+        targets["labels"] = inst
+        return targets
+
+    # ------------------------------------------------------------------
+    # Per-mode forward + loss
+    # ------------------------------------------------------------------
+
+    def _run_automatic(
+        self,
+        images: torch.Tensor,
+        targets: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        """Automatic mode: forward without prompts."""
+        predictions = self.model(images)
+        return self.criterion(predictions, targets)
+
+    def _run_proofread(
+        self,
+        images: torch.Tensor,
+        targets: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        """Proofread mode: fractionary or interactive sub-mode."""
+        sub_mode = self._get_proofread_sub_mode(targets)
+
+        if sub_mode == "fractionary":
+            targets = self._resolve_fractionary_labels(targets)
+            predictions = self.model(
+                images, semantic_ids=targets.get("semantic_ids"),
+            )
+        else:
+            point_prompts = sample_point_prompts(
+                targets["semantic_labels"],
+                targets["labels"],
+                num_pos=self._num_pos_points,
+                num_neg=self._num_neg_points,
+                sample_mode=self._point_sample_mode,
+            )
+            predictions = self.model(images, point_prompts=point_prompts)
+
+        return self.criterion(predictions, targets)
+
+    # ------------------------------------------------------------------
+    # Training step
+    # ------------------------------------------------------------------
+
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Training step."""
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
         targets = self._prepare_targets(batch)
-        predictions = self.model(images, class_ids=targets.get("class_ids"))
-        losses = self.criterion(predictions, targets)
+
+        all_losses: Dict[str, torch.Tensor] = {}
+        mode_losses = []
+
+        for mode in self.training_modes:
+            if mode == "automatic":
+                losses = self._run_automatic(images, targets)
+            elif mode == "proofread":
+                losses = self._run_proofread(images, targets)
+            else:
+                raise ValueError(f"Unknown training mode: {mode}")
+            mode_losses.append(losses["loss"])
+            for k, v in losses.items():
+                all_losses[f"train/{mode}/{k}"] = v
+
+        total_loss = sum(mode_losses) / len(mode_losses)
 
         bs = images.shape[0]
-        for name, val in losses.items():
-            self.log(f"train/{name}", val, prog_bar=(name == "loss"), batch_size=bs)
+        for name, val in all_losses.items():
+            self.log(name, val, batch_size=bs)
+        self.log("train/loss", total_loss, prog_bar=True, batch_size=bs)
 
-        return losses["loss"]
+        return total_loss
+
+    # ------------------------------------------------------------------
+    # Eval
+    # ------------------------------------------------------------------
 
     @torch.no_grad()
     def _eval_metrics(
         self, predictions: Dict[str, torch.Tensor],
         targets: Dict[str, torch.Tensor], prefix: str, bs: int,
     ) -> None:
-        """Compute and log semantic + instance metrics."""
         sem_pred = predictions["semantic"].argmax(dim=1)
-        sem_gt = targets["class_labels"]
+        sem_gt = targets["semantic_labels"]
         acc = (sem_pred == sem_gt).float().mean()
         iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=predictions["semantic"].shape[1])
         self.log(f"{prefix}/accuracy", acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
@@ -146,13 +301,12 @@ class Vista3DModule(pl.LightningModule):
         self.log(f"{prefix}/ted", ted, sync_dist=True, batch_size=bs)
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Validation step."""
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
         targets = self._prepare_targets(batch)
-        predictions = self.model(images, class_ids=targets.get("class_ids"))
+        predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         losses = self.criterion(predictions, targets)
 
         bs = images.shape[0]
@@ -163,13 +317,12 @@ class Vista3DModule(pl.LightningModule):
         return losses["loss"]
 
     def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Test step."""
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
         targets = self._prepare_targets(batch)
-        predictions = self.model(images, class_ids=targets.get("class_ids"))
+        predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         losses = self.criterion(predictions, targets)
 
         bs = images.shape[0]
@@ -179,8 +332,11 @@ class Vista3DModule(pl.LightningModule):
         self._eval_metrics(predictions, targets, "test", bs)
         return losses["loss"]
 
+    # ------------------------------------------------------------------
+    # Optimizer
+    # ------------------------------------------------------------------
+
     def configure_optimizers(self) -> Any:
-        """Configure optimizer and scheduler."""
         lr = self.optimizer_config.get("lr", 1e-4)
         wd = self.optimizer_config.get("weight_decay", 1e-5)
 

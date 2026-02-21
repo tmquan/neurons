@@ -175,7 +175,7 @@ class CreateClassIds(Dataset):
                 class_ids[class_ids == cid] = 0
 
         sample = dict(sample)
-        sample["class_ids"] = torch.from_numpy(class_ids) if is_tensor else class_ids
+        sample["semantic_ids"] = torch.from_numpy(class_ids) if is_tensor else class_ids
         sample["dataset_type"] = self.dataset_type
         return sample
 

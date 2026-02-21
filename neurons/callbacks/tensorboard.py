@@ -1,14 +1,16 @@
 """
 TensorBoard image logger callback.
 
-Logs a visual grid at the end of each training epoch:
+Logs visual grids at the end of each training epoch for both automatic
+and proofread modes:
   raw image, instance label, semantic prediction,
-  instance embedding (PCA-projected), and geometry channels (dir / cov / raw).
+  instance embedding (PCA-projected), geometry channels (dir / cov / raw),
+  and point prompt overlay (proofread only).
 
 Works for both 2-D slices and 3-D volumes (takes a central slice).
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -67,24 +69,141 @@ def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
     return _normalise(proj)
 
 
+def _draw_points_on_image(
+    img_rgb: torch.Tensor,
+    pos_points: List[torch.Tensor],
+    neg_points: List[torch.Tensor],
+    spatial_dims: int,
+    center_depth: Optional[int] = None,
+    radius: int = 2,
+) -> torch.Tensor:
+    """Overlay sampled prompt points on an RGB image.
+
+    Args:
+        img_rgb: [B, 3, H, W] image to draw on (will be cloned).
+        pos_points: list of [N_pos, spatial_dims] coordinate tensors.
+        neg_points: list of [N_neg, spatial_dims] coordinate tensors.
+        spatial_dims: 2 or 3.
+        center_depth: for 3-D, the depth index of the displayed slice.
+            Points within ``radius`` slices of center are drawn.
+        radius: marker radius in pixels.
+
+    Returns:
+        [B, 3, H, W] image with green (pos) and red (neg) markers.
+    """
+    out = img_rgb.clone()
+    B, _, H, W = out.shape
+
+    for b in range(min(B, len(pos_points))):
+        for pts, color in [(pos_points[b], (0.0, 1.0, 0.0)),
+                           (neg_points[b], (1.0, 0.0, 0.0))]:
+            if pts.numel() == 0:
+                continue
+            coords = pts.long()
+            if spatial_dims == 3:
+                if center_depth is None:
+                    continue
+                depth_idx = coords[:, 0]
+                near = (depth_idx - center_depth).abs() <= radius
+                coords = coords[near]
+                if coords.shape[0] == 0:
+                    continue
+                ys, xs = coords[:, 1], coords[:, 2]
+            else:
+                ys, xs = coords[:, 0], coords[:, 1]
+
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if dy * dy + dx * dx > radius * radius:
+                        continue
+                    cy = (ys + dy).clamp(0, H - 1)
+                    cx = (xs + dx).clamp(0, W - 1)
+                    out[b, 0, cy, cx] = color[0]
+                    out[b, 1, cy, cx] = color[1]
+                    out[b, 2, cy, cx] = color[2]
+    return out
+
+
+def _log_predictions(
+    tb: Any,
+    tag: str,
+    images: torch.Tensor,
+    labels: torch.Tensor,
+    preds: Dict[str, torch.Tensor],
+    spatial_dims: int,
+    n: int,
+    epoch: int,
+) -> None:
+    """Log a standard set of prediction visualizations.
+
+    Args:
+        tb: TensorBoard SummaryWriter.
+        tag: tag prefix (e.g. ``"train_vis"`` or ``"train_vis_proofread"``).
+        images: [n, 1, H, W] input images (already 2-D sliced).
+        labels: [n, H, W] instance labels (already 2-D sliced).
+        preds: model output dict with ``semantic``, ``instance``, ``geometry``.
+        spatial_dims: 2 or 3 (controls geometry channel layout).
+        n: number of images.
+        epoch: global step for TensorBoard.
+    """
+    sem = preds["semantic"][:n]
+    inst = preds["instance"][:n]
+    geom = preds["geometry"][:n]
+
+    sem = _to_2d(sem)
+    inst = _to_2d(inst)
+    geom = _to_2d(geom)
+
+    S = spatial_dims
+    ch_dir = S
+    ch_cov = S * S
+
+    img_gray = _normalise(images).expand(-1, 3, -1, -1)
+    lbl_rgb = _label_to_rgb(labels.long())
+    sem_ids = sem.argmax(dim=1)
+    sem_rgb = _label_to_rgb(sem_ids)
+    inst_rgb = _pca_project(inst, n_components=3)
+
+    g_dir = _normalise(geom[:, :ch_dir])
+    if ch_dir < 3:
+        pad = torch.zeros(n, 3 - ch_dir, g_dir.shape[2], g_dir.shape[3],
+                          device=g_dir.device)
+        g_dir = torch.cat([g_dir, pad], dim=1)
+
+    trace = sum(geom[:, ch_dir + i * S + i: ch_dir + i * S + i + 1]
+                for i in range(S))
+    cov_heat = _normalise(trace).expand(-1, 3, -1, -1)
+
+    g_raw = torch.sigmoid(geom[:, ch_dir + ch_cov:])
+    g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
+
+    tb.add_images(f"{tag}/image", img_gray, global_step=epoch)
+    tb.add_images(f"{tag}/label", lbl_rgb, global_step=epoch)
+    tb.add_images(f"{tag}/semantic", sem_rgb, global_step=epoch)
+    tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
+    tb.add_images(f"{tag}/geometry_dir", g_dir, global_step=epoch)
+    tb.add_images(f"{tag}/geometry_cov_trace", cov_heat, global_step=epoch)
+    tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
+
+    return img_gray
+
+
 class ImageLogger(pl.Callback):
     """Log sample images to TensorBoard at the end of every *n*-th epoch.
 
-    Hooks into ``on_train_epoch_end`` to run a single forward pass on the
-    first training batch and log a visual grid of:
+    Logs visualizations for **automatic** mode (image-only forward) and,
+    when the module has ``"proofread"`` in its ``training_modes``, also
+    for **proofread** mode (with sampled point prompts overlaid).
 
-    1. **image** -- raw EM input (grayscale).
-    2. **label** -- ground-truth instance labels (colour-coded).
-    3. **semantic** -- argmax of the semantic logits (colour-coded).
-    4. **instance** -- PCA projection of the embedding to 3 channels (RGB).
-    5. **geometry/dir** -- first S channels (normalised).
-    6. **geometry/cov** -- next S*S channels, trace shown as heatmap.
-    7. **geometry/raw** -- last 4 channels (predicted RGBA).
+    Automatic-mode images are logged under ``train_vis/``.
+    Proofread-mode images are logged under ``train_vis_proofread/``,
+    with an extra ``prompt_overlay`` panel showing positive (green) and
+    negative (red) points on the input image.
 
     Args:
         every_n_epochs: log every *n* epochs (default 1).
         max_images: maximum batch elements to log (default 4).
-        spatial_dims: 2 or 3 — controls central-slice extraction for 3-D.
+        spatial_dims: 2 or 3 -- controls central-slice extraction for 3-D.
     """
 
     def __init__(
@@ -140,52 +259,51 @@ class ImageLogger(pl.Callback):
         if labels.dim() == self.spatial_dims + 2:
             labels = labels.squeeze(1)
 
-        preds = pl_module.model(images)
-
         n = min(images.shape[0], self.max_images)
-        images = images[:n]
-        labels = labels[:n]
-        sem = preds["semantic"][:n]
-        inst = preds["instance"][:n]
-        geom = preds["geometry"][:n]
 
-        images = _to_2d(images)
-        labels = _to_2d(labels.unsqueeze(1)).squeeze(1)
-        sem = _to_2d(sem)
-        inst = _to_2d(inst)
-        geom = _to_2d(geom)
+        # --- Automatic mode ---
+        preds_auto = pl_module.model(images)
 
-        S = self.spatial_dims
-        ch_dir = S
-        ch_cov = S * S
+        images_2d = _to_2d(images[:n])
+        labels_2d = _to_2d(labels[:n].unsqueeze(1)).squeeze(1)
 
-        img_gray = _normalise(images).expand(-1, 3, -1, -1)
+        _log_predictions(
+            tb, "train_vis", images_2d, labels_2d,
+            preds_auto, self.spatial_dims, n, epoch,
+        )
 
-        lbl_rgb = _label_to_rgb(labels.long())
+        # --- Proofread mode ---
+        training_modes = getattr(pl_module, "training_modes", [])
+        if "proofread" not in training_modes:
+            return
 
-        sem_ids = sem.argmax(dim=1)
-        sem_rgb = _label_to_rgb(sem_ids)
+        from neurons.utils.point_sampling import sample_point_prompts
 
-        inst_rgb = _pca_project(inst, n_components=3)
+        sem_labels = (labels > 0).long()
+        num_pos = getattr(pl_module, "_num_pos_points", 5)
+        num_neg = getattr(pl_module, "_num_neg_points", 5)
+        sample_mode = getattr(pl_module, "_point_sample_mode", "class")
 
-        g_dir = _normalise(geom[:, :ch_dir])
-        if ch_dir < 3:
-            pad = torch.zeros(n, 3 - ch_dir, g_dir.shape[2], g_dir.shape[3],
-                              device=g_dir.device)
-            g_dir = torch.cat([g_dir, pad], dim=1)
+        point_prompts = sample_point_prompts(
+            sem_labels, labels,
+            num_pos=num_pos,
+            num_neg=num_neg,
+            sample_mode=sample_mode,
+        )
 
-        trace = sum(geom[:, ch_dir + i * S + i: ch_dir + i * S + i + 1]
-                    for i in range(S))
-        cov_heat = _normalise(trace).expand(-1, 3, -1, -1)
+        preds_proof = pl_module.model(images, point_prompts=point_prompts)
 
-        g_raw = geom[:, ch_dir + ch_cov:]
-        g_raw_rgb = _normalise(g_raw[:, :3])
+        img_gray = _log_predictions(
+            tb, "train_vis_proofread", images_2d, labels_2d,
+            preds_proof, self.spatial_dims, n, epoch,
+        )
 
-        tag = "train_vis"
-        tb.add_images(f"{tag}/image", img_gray, global_step=epoch)
-        tb.add_images(f"{tag}/label", lbl_rgb, global_step=epoch)
-        tb.add_images(f"{tag}/semantic", sem_rgb, global_step=epoch)
-        tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
-        tb.add_images(f"{tag}/geometry_dir", g_dir, global_step=epoch)
-        tb.add_images(f"{tag}/geometry_cov_trace", cov_heat, global_step=epoch)
-        tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
+        center_d = images.shape[2] // 2 if self.spatial_dims == 3 else None
+        overlay = _draw_points_on_image(
+            img_gray,
+            point_prompts["pos_points"],
+            point_prompts["neg_points"],
+            spatial_dims=self.spatial_dims,
+            center_depth=center_d,
+        )
+        tb.add_images("train_vis_proofread/prompt_overlay", overlay, global_step=epoch)

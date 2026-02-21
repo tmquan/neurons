@@ -237,8 +237,10 @@ class InstanceLoss(nn.Module):
             if len(ids) == 0:
                 continue
             valid += 1
+            n_inst = len(ids)
 
             centers = []
+            b_pull = torch.tensor(0.0, device=embed.device)
             for uid in ids:
                 mask = lbl_flat[b] == uid
                 w = weight_flat[b, mask]
@@ -248,7 +250,9 @@ class InstanceLoss(nn.Module):
 
                 dist = torch.norm(emb - rearrange(center, "e -> e 1"), dim=0)
                 pull = F.relu(dist - self.delta_v) ** 2
-                loss_pull = loss_pull + (pull * w).mean()
+                b_pull = b_pull + (pull * w).mean()
+
+            loss_pull = loss_pull + b_pull / n_inst
 
             if len(centers) > 1:
                 c = torch.stack(centers)
@@ -379,7 +383,7 @@ class Vista3DLoss(nn.Module):
         Args:
             predictions: Dict with ``semantic``, ``instance``,
                 and optionally ``geometry`` tensors.
-            targets: Dict with ``class_labels`` and ``labels``.
+            targets: Dict with ``semantic_labels`` and ``labels``.
 
         Returns:
             Dict with hierarchical keys: ``loss``, ``loss_sem``,
@@ -389,10 +393,10 @@ class Vista3DLoss(nn.Module):
             ``loss_geom/dir``, ``loss_geom/cov``, ``loss_geom/raw``.
         """
         sem_out = self.semantic_loss(
-            predictions["semantic"], targets["class_labels"],
+            predictions["semantic"], targets["semantic_labels"],
         )
 
-        class_ids = targets.get("class_ids") or predictions.get("class_ids")
+        class_ids = targets.get("semantic_ids") or predictions.get("semantic_ids")
         ins_out = self.instance_loss(
             predictions["instance"], targets["labels"], class_ids,
         )
