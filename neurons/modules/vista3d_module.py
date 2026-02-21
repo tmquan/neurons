@@ -279,28 +279,28 @@ class Vista3DModule(pl.LightningModule):
     ) -> None:
         sem_pred = predictions["semantic"].argmax(dim=1)
         sem_gt = targets["semantic_labels"]
-        acc = (sem_pred == sem_gt).float().mean()
-        iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=predictions["semantic"].shape[1])
-        ari = compute_per_batch_ari(sem_pred, sem_gt)
-        self.log(f"{prefix}/acc", acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ari", ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/iou", iou, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+        sem_acc = (sem_pred == sem_gt).float().mean()
+        sem_iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=predictions["semantic"].shape[1])
+        sem_ari = compute_per_batch_ari(sem_pred, sem_gt)
+        self.log(f"{prefix}/sem_acc", sem_acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/sem_ari", sem_ari, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/sem_iou", sem_iou, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
 
         fg_mask = targets["labels"] > 0
-        inst_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
-        inst_gt = targets["labels"]
+        ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
+        ins_gt = targets["labels"]
 
-        ari = compute_per_batch_ari(inst_pred, inst_gt)
-        ami = compute_per_batch_ami(inst_pred, inst_gt)
-        voi = compute_per_batch_voi(inst_pred, inst_gt)
-        ted = compute_per_batch_ted(inst_pred, inst_gt)
+        ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
+        ins_ami = compute_per_batch_ami(ins_pred, ins_gt)
+        ins_voi = compute_per_batch_voi(ins_pred, ins_gt)
+        ins_ted = compute_per_batch_ted(ins_pred, ins_gt)
 
-        self.log(f"{prefix}/ari", ari, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ami", ami, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/voi", voi.total, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/voi_split", voi.split, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/voi_merge", voi.merge, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ted", ted, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ins_ari", ins_ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ins_ami", ins_ami, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ins_voi", ins_voi.total, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         images = batch["image"]
