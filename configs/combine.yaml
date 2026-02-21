@@ -41,19 +41,11 @@ data:
   cache_rate: 1.0
   train_val_split: 0.2
 
-  semantic_classes:
-    names:
-      - background
-      - neuron
-      - cleft
-      - mito
-    default_class: 1
-
 # Model Configuration
 model:
   type: vista3d
   encoder_name: vista3d
-  feature_size: 48
+  feature_size: 64
   in_channels: 1
   num_classes: 16
   emb_dim: 16
@@ -90,8 +82,9 @@ optimizer:
 
 # Loss Configuration
 loss:
-  # Semantic loss weights
+  weight_semantic: 1.0
   weight_ce: 0.5
+  weight_iou: 0.0
   weight_dice: 0.5
   class_weights:
     - 0.10  # 0: background
@@ -110,18 +103,19 @@ loss:
     - 0.00
     - 0.00
     - 0.00
-  ignore_index: -100
-
-  # Instance discriminative loss
+  weight_instance: 1.0
   weight_pull: 1.0
   weight_push: 1.0
   weight_norm: 0.001
   delta_v: 0.5
   delta_d: 1.5
-
-  # Geometry-aware weighting
   weight_edge: 10.0
   weight_bone: 10.0
+  weight_geometry: 0.0
+  weight_dir: 1.0
+  weight_cov: 1.0
+  weight_raw: 1.0
+  ignore_index: -100
 
 # Callbacks
 callbacks:

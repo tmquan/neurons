@@ -206,14 +206,14 @@ def _compute_centroid_offsets(
     lbl_flat: torch.Tensor,
     coords: torch.Tensor,
 ) -> torch.Tensor:
-    """Compute per-pixel offset toward the spatial centroid of its instance.
+    """Compute unit-normalised per-pixel direction toward the instance centroid.
 
     Args:
         lbl_flat: [N] instance labels (0 = background).
         coords: [S, N] pixel coordinates.
 
     Returns:
-        [S, N] offset vectors (0 for background pixels).
+        [S, N] unit direction vectors (0 for background pixels).
     """
     S, N = coords.shape
     device = coords.device
@@ -226,6 +226,10 @@ def _compute_centroid_offsets(
         centroid = coords[:, mask].mean(dim=1)               # [S]
         offsets[:, mask] = centroid.unsqueeze(1) - coords[:, mask]
 
+    norms = offsets.norm(dim=0, keepdim=True).clamp(min=1e-6)
+    offsets = offsets / norms
+    offsets[:, lbl_flat == 0] = 0.0
+
     return offsets
 
 
@@ -235,7 +239,7 @@ def _compute_skeleton_offsets(
     coords: torch.Tensor,
     spatial_shape: Tuple,
 ) -> torch.Tensor:
-    """Compute per-pixel offset toward the nearest skeleton point.
+    """Compute unit-normalised per-pixel direction toward the nearest skeleton point.
 
     Skeleton is extracted via the Menten et al. (ICCV 2023) topology-preserving
     skeletonization (pure PyTorch convolutions, 2-D and 3-D).
@@ -246,7 +250,7 @@ def _compute_skeleton_offsets(
         spatial_shape: original spatial dims, e.g. (H, W) or (D, H, W).
 
     Returns:
-        [S, N] offset vectors (0 for background pixels).
+        [S, N] unit direction vectors (0 for background pixels).
     """
     S = len(spatial_shape)
     N = coords.shape[1]
@@ -278,6 +282,10 @@ def _compute_skeleton_offsets(
         fi = _flat_indices(pixel_ij, spatial_shape)
         for s in range(S):
             offsets[s, fi] = off_xy[:, s]
+
+    norms = offsets.norm(dim=0, keepdim=True).clamp(min=1e-6)
+    offsets = offsets / norms
+    offsets[:, lbl_flat.reshape(-1) == 0] = 0.0
 
     return offsets
 
@@ -647,9 +655,11 @@ class GeometryLoss(nn.Module):
         self._ch_raw = 4
 
     @staticmethod
-    def _fg_l2(pred: torch.Tensor, target: torch.Tensor,
-               fg: torch.Tensor) -> torch.Tensor:
+    def _fg_mse(pred: torch.Tensor, target: torch.Tensor,
+                fg: torch.Tensor) -> torch.Tensor:
         """Foreground-masked mean squared error for one sample.
+
+        Averages over both channels and foreground pixels.
 
         Args:
             pred: [C, N] predicted channels (flattened spatial).
@@ -658,7 +668,7 @@ class GeometryLoss(nn.Module):
         """
         N_fg = fg.sum().float().clamp(min=1.0)
         diff = pred[:, fg] - target[:, fg]
-        return (diff ** 2).sum() / N_fg
+        return (diff ** 2).sum() / (N_fg * diff.shape[0])
 
     def forward(
         self,
@@ -709,11 +719,11 @@ class GeometryLoss(nn.Module):
                     dir_tgt = _compute_skeleton_offsets(
                         lbl_flat[b], coords, spatial_shape,
                     )
-                L_dir = L_dir + self._fg_l2(pred_dir[b], dir_tgt, fg)
+                L_dir = L_dir + self._fg_mse(pred_dir[b], dir_tgt, fg)
 
             if self.weight_cov > 0:
                 cov_tgt = _compute_covariance(lbl_flat[b], coords, spatial_shape)
-                L_cov = L_cov + self._fg_l2(pred_cov[b], cov_tgt, fg)
+                L_cov = L_cov + self._fg_mse(pred_cov[b], cov_tgt, fg)
 
             if self.weight_raw > 0 and raw_image is not None:
                 img_flat = rearrange(raw_image[b], "c ... -> c (...)")
@@ -721,7 +731,7 @@ class GeometryLoss(nn.Module):
                     img_flat.expand(3, -1),
                     fg.unsqueeze(0).float(),
                 ], dim=0)
-                L_raw = L_raw + self._fg_l2(pred_raw[b], rgba_tgt, fg)
+                L_raw = L_raw + self._fg_mse(pred_raw[b], rgba_tgt, fg)
 
         n = max(valid_b, 1)
         L_dir, L_cov = L_dir / n, L_cov / n
@@ -730,7 +740,7 @@ class GeometryLoss(nn.Module):
 
         total = self.weight_dir * L_dir + self.weight_cov * L_cov + self.weight_raw * L_raw
 
-        return {"loss": total, "l_dir": L_dir, "l_cov": L_cov, "l_raw": L_raw}
+        return {"loss": total, "dir": L_dir, "cov": L_cov, "raw": L_raw}
 
     def __repr__(self) -> str:
         return (

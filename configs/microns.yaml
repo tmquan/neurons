@@ -25,13 +25,9 @@ data:
 model:
   type: vista3d
   in_channels: 1
-  out_channels: 2
-  spatial_dims: 2
-  init_filters: 32
-  feature_dim: 64
-  dropout: 0.2
-  use_sem_head: true
-  use_ins_head: false
+  num_classes: 16
+  emb_dim: 16
+  feature_size: 64
 
 # Optimizer
 optimizer:
@@ -42,6 +38,26 @@ optimizer:
     type: cosine
     T_max: 100
     eta_min: 1.0e-6
+
+# Loss configuration
+loss:
+  weight_semantic: 1.0
+  weight_ce: 1.0
+  weight_iou: 0.0
+  weight_dice: 0.0
+  weight_instance: 1.0
+  weight_pull: 1.0
+  weight_push: 1.0
+  weight_norm: 0.001
+  delta_v: 0.5
+  delta_d: 1.5
+  weight_edge: 10.0
+  weight_bone: 10.0
+  weight_geometry: 0.0
+  weight_dir: 1.0
+  weight_cov: 1.0
+  weight_raw: 1.0
+  ignore_index: -100
 
 # Training
 training:

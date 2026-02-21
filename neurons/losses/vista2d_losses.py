@@ -2,7 +2,7 @@
 Vista2D losses for image-based segmentation.
 
 Public classes:
-- SemanticLoss:   CE + Dice on semantic logits
+- SemanticLoss:   CE + IoU + Dice on semantic logits
 - InstanceLoss:   pull/push/norm discriminative on instance embeddings (2D)
 - GeometryLoss:   dir/cov/raw regression (imported from discriminative.py)
 - Vista2DLoss:    composes SemanticLoss + InstanceLoss + GeometryLoss
@@ -24,14 +24,15 @@ _PAD_TUPLE = (1, 1, 1, 1)
 
 
 # ======================================================================
-# 1.  Semantic loss  (CE + Dice)
+# 1.  Semantic loss  (CE + IoU + Dice)
 # ======================================================================
 
 class SemanticLoss(nn.Module):
-    """Cross-entropy + optional Dice loss on semantic logits.
+    """Cross-entropy + optional IoU + optional Dice loss on semantic logits.
 
     Args:
         weight_ce: scalar weight for CE term (default 1.0).
+        weight_iou: scalar weight for IoU term (default 0.0).
         weight_dice: scalar weight for Dice term (default 0.0).
         class_weights: per-class CE weights (optional).
         ignore_index: label value to ignore (default -100).
@@ -40,17 +41,54 @@ class SemanticLoss(nn.Module):
     def __init__(
         self,
         weight_ce: float = 1.0,
+        weight_iou: float = 0.0,
         weight_dice: float = 0.0,
         class_weights: Optional[List[float]] = None,
         ignore_index: int = -100,
     ) -> None:
         super().__init__()
         self.weight_ce = weight_ce
+        self.weight_iou = weight_iou
         self.weight_dice = weight_dice
         self.ignore_index = ignore_index
 
         cw = torch.tensor(class_weights, dtype=torch.float32) if class_weights else None
         self.ce_loss = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index)
+
+    @staticmethod
+    def _soft_probs_and_one_hot(
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        ignore_index: int = -100,
+    ) -> tuple:
+        C = logits.shape[1]
+        probs = F.softmax(logits, dim=1)
+        valid = target != ignore_index
+        target_safe = target.clone()
+        target_safe[~valid] = 0
+        one_hot = F.one_hot(target_safe.long(), C).float()
+        one_hot = rearrange(one_hot, "b ... c -> b c ...")
+        valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
+        probs = probs * valid_mask
+        one_hot = one_hot * valid_mask
+        return probs, one_hot
+
+    @staticmethod
+    def _iou_loss(
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        ignore_index: int = -100,
+        eps: float = 1e-5,
+    ) -> torch.Tensor:
+        """Soft IoU loss averaged over classes (1 - IoU)."""
+        probs, one_hot = SemanticLoss._soft_probs_and_one_hot(
+            logits, target, ignore_index,
+        )
+        spatial = tuple(range(2, probs.dim()))
+        intersection = (probs * one_hot).sum(dim=spatial)
+        union = probs.sum(dim=spatial) + one_hot.sum(dim=spatial) - intersection
+        iou = (intersection + eps) / (union + eps)
+        return 1.0 - iou.mean()
 
     @staticmethod
     def _dice_loss(
@@ -60,22 +98,13 @@ class SemanticLoss(nn.Module):
         eps: float = 1e-5,
     ) -> torch.Tensor:
         """Soft Dice loss averaged over classes (1 - Dice)."""
-        C = logits.shape[1]
-        probs = F.softmax(logits, dim=1)
-        valid = target != ignore_index
-        target_safe = target.clone()
-        target_safe[~valid] = 0
-        one_hot = F.one_hot(target_safe.long(), C).float()
-        one_hot = rearrange(one_hot, "b ... c -> b c ...")
-        valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
-
-        probs = probs * valid_mask
-        one_hot = one_hot * valid_mask
-
-        intersection = (probs * one_hot).sum(dim=tuple(range(2, probs.dim())))
-        card_p = probs.sum(dim=tuple(range(2, probs.dim())))
-        card_g = one_hot.sum(dim=tuple(range(2, one_hot.dim())))
-
+        probs, one_hot = SemanticLoss._soft_probs_and_one_hot(
+            logits, target, ignore_index,
+        )
+        spatial = tuple(range(2, probs.dim()))
+        intersection = (probs * one_hot).sum(dim=spatial)
+        card_p = probs.sum(dim=spatial)
+        card_g = one_hot.sum(dim=spatial)
         dice = (2.0 * intersection + eps) / (card_p + card_g + eps)
         return 1.0 - dice.mean()
 
@@ -90,16 +119,25 @@ class SemanticLoss(nn.Module):
             class_labels: [B, *spatial] integer class labels.
 
         Returns:
-            Dict with ``loss``, ``loss_ce``, ``loss_dice``.
+            Dict with ``loss``, ``ce``, ``iou``, ``dice``.
         """
         loss_ce = self.ce_loss(logits, class_labels)
+        loss_iou = (
+            self._iou_loss(logits, class_labels, self.ignore_index)
+            if self.weight_iou > 0
+            else torch.tensor(0.0, device=logits.device)
+        )
         loss_dice = (
             self._dice_loss(logits, class_labels, self.ignore_index)
             if self.weight_dice > 0
             else torch.tensor(0.0, device=logits.device)
         )
-        loss = self.weight_ce * loss_ce + self.weight_dice * loss_dice
-        return {"loss": loss, "loss_ce": loss_ce, "loss_dice": loss_dice}
+        loss = (
+            self.weight_ce * loss_ce
+            + self.weight_iou * loss_iou
+            + self.weight_dice * loss_dice
+        )
+        return {"loss": loss, "ce": loss_ce, "iou": loss_iou, "dice": loss_dice}
 
 
 # ======================================================================
@@ -224,11 +262,11 @@ class InstanceLoss(nn.Module):
             loss_norm = loss_norm + torch.stack([c.norm() for c in centers]).mean()
 
         n = max(valid, 1)
-        return (
-            self.weight_pull * loss_pull / n
-            + self.weight_push * loss_push / n
-            + self.weight_norm * loss_norm / n
-        )
+        l_pull = loss_pull / n
+        l_push = loss_push / n
+        l_norm = loss_norm / n
+        total = self.weight_pull * l_pull + self.weight_push * l_push + self.weight_norm * l_norm
+        return {"loss": total, "pull": l_pull, "push": l_push, "norm": l_norm}
 
     def forward(
         self,
@@ -243,7 +281,7 @@ class InstanceLoss(nn.Module):
             class_ids: [B, *spatial] optional semantic class ids.
 
         Returns:
-            Dict with ``loss``.
+            Dict with ``loss``, ``pull``, ``push``, ``norm``.
         """
         weight_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else torch.ones_like(label, dtype=torch.float32)
         weight_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else torch.ones_like(label, dtype=torch.float32)
@@ -252,13 +290,17 @@ class InstanceLoss(nn.Module):
             unique_classes = torch.unique(class_ids)
             unique_classes = unique_classes[unique_classes > 0]
             if len(unique_classes) > 0:
-                total = torch.tensor(0.0, device=embed.device)
+                zero = torch.tensor(0.0, device=embed.device)
+                accum = {"loss": zero.clone(), "pull": zero.clone(), "push": zero.clone(), "norm": zero.clone()}
                 for cid in unique_classes:
                     class_mask = (class_ids == cid).long()
-                    total = total + self._loss_single(embed, label * class_mask, weight_edge, weight_bone)
-                return {"loss": total / len(unique_classes)}
+                    out = self._loss_single(embed, label * class_mask, weight_edge, weight_bone)
+                    for k in accum:
+                        accum[k] = accum[k] + out[k]
+                nc = len(unique_classes)
+                return {k: v / nc for k, v in accum.items()}
 
-        return {"loss": self._loss_single(embed, label, weight_edge, weight_bone)}
+        return self._loss_single(embed, label, weight_edge, weight_bone)
 
 
 # ======================================================================
@@ -279,7 +321,7 @@ class Vista2DLoss(nn.Module):
         weight_geometry: top-level weight for the geometry branch (default 0.0 = off).
         weight_pull, weight_push, weight_norm, weight_edge, weight_bone,
         delta_v, delta_d: forwarded to ``InstanceLoss``.
-        weight_ce, weight_dice, class_weights, ignore_index:
+        weight_ce, weight_iou, weight_dice, class_weights, ignore_index:
             forwarded to ``SemanticLoss``.
         geom_kwargs: extra kwargs forwarded to ``GeometryLoss``.
     """
@@ -297,6 +339,7 @@ class Vista2DLoss(nn.Module):
         delta_v: float = 0.5,
         delta_d: float = 1.5,
         weight_ce: float = 1.0,
+        weight_iou: float = 0.0,
         weight_dice: float = 0.0,
         class_weights: Optional[List[float]] = None,
         ignore_index: int = -100,
@@ -309,6 +352,7 @@ class Vista2DLoss(nn.Module):
 
         self.semantic_loss = SemanticLoss(
             weight_ce=weight_ce,
+            weight_iou=weight_iou,
             weight_dice=weight_dice,
             class_weights=class_weights,
             ignore_index=ignore_index,
@@ -338,8 +382,11 @@ class Vista2DLoss(nn.Module):
             targets: Dict with ``class_labels`` and ``labels``.
 
         Returns:
-            Dict with ``loss``, ``loss_sem``, ``loss_ce``, ``loss_dice``,
-            ``loss_ins``, and optionally ``loss_geom``.
+            Dict with hierarchical keys: ``loss``, ``loss_sem``,
+            ``loss_sem/ce``, ``loss_sem/iou``, ``loss_sem/dice``,
+            ``loss_ins``, ``loss_ins/pull``, ``loss_ins/push``,
+            ``loss_ins/norm``, and optionally ``loss_geom``,
+            ``loss_geom/dir``, ``loss_geom/cov``, ``loss_geom/raw``.
         """
         sem_out = self.semantic_loss(
             predictions["semantic"], targets["class_labels"],
@@ -355,10 +402,14 @@ class Vista2DLoss(nn.Module):
         total = self.weight_semantic * loss_sem + self.weight_instance * loss_ins
 
         out: Dict[str, torch.Tensor] = {
-            "loss_sem": loss_sem,
-            "loss_ce": sem_out["loss_ce"],
-            "loss_dice": sem_out["loss_dice"],
-            "loss_ins": loss_ins,
+            "loss_sem":       loss_sem,
+            "loss_sem/ce":    sem_out["ce"],
+            "loss_sem/iou":   sem_out["iou"],
+            "loss_sem/dice":  sem_out["dice"],
+            "loss_ins":       loss_ins,
+            "loss_ins/pull":  ins_out["pull"],
+            "loss_ins/push":  ins_out["push"],
+            "loss_ins/norm":  ins_out["norm"],
         }
 
         if self.geometry_loss is not None and "geometry" in predictions:
@@ -368,7 +419,10 @@ class Vista2DLoss(nn.Module):
             )
             loss_geom = geom_out["loss"]
             total = total + self.weight_geometry * loss_geom
-            out["loss_geom"] = loss_geom
+            out["loss_geom"]      = loss_geom
+            out["loss_geom/dir"]  = geom_out["dir"]
+            out["loss_geom/cov"]  = geom_out["cov"]
+            out["loss_geom/raw"]  = geom_out["raw"]
 
         out["loss"] = total
         return out

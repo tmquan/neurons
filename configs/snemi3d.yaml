@@ -25,7 +25,7 @@ model:
   in_channels: 1
   num_classes: 16
   emb_dim: 16
-  feature_size: 48
+  feature_size: 64
 
 optimizer:
   type: adamw
@@ -38,10 +38,10 @@ optimizer:
 
 loss:
   weight_semantic: 1.0
-  weight_instance: 1.0
-  weight_geometry: 1.0
   weight_ce: 1.0
-  weight_dice: 0.0
+  weight_iou: 1.0
+  weight_dice: 1.0
+  weight_instance: 1.0
   weight_pull: 1.0
   weight_push: 1.0
   weight_norm: 0.001
@@ -49,6 +49,11 @@ loss:
   delta_d: 1.5
   weight_edge: 10.0
   weight_bone: 10.0
+  weight_geometry: 1.0
+  weight_dir: 1.0
+  weight_cov: 1.0
+  weight_raw: 1.0
+  ignore_index: -100
 
 training:
   max_epochs: 100

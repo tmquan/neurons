@@ -24,17 +24,11 @@ data:
 
 # Model configuration
 model:
-  type: vista3d  # Options: vista3d, vista2d, segresnet
+  type: vista3d  # Options: vista3d, vista2d
   in_channels: 1
-  out_channels: 2
-  spatial_dims: 2
-  init_filters: 32
-  feature_dim: 64
+  num_classes: 16
   emb_dim: 16
-  dropout: 0.2
-  use_sem_head: true
-  use_ins_head: false
-  use_boundary_head: false
+  feature_size: 64
 
 # Optimizer configuration
 optimizer:
@@ -48,15 +42,23 @@ optimizer:
 
 # Loss configuration
 loss:
-  semantic_weight: 1.0
-  instance_weight: 1.0
-  discriminative:
-    delta_var: 0.5
-    delta_dist: 1.5
-    norm: 2
-    A: 1.0
-    B: 1.0
-    R: 0.001
+  weight_semantic: 1.0
+  weight_ce: 1.0
+  weight_iou: 1.0
+  weight_dice: 1.0
+  weight_instance: 1.0
+  weight_pull: 1.0
+  weight_push: 1.0
+  weight_norm: 0.001
+  delta_v: 0.5
+  delta_d: 1.5
+  weight_edge: 10.0
+  weight_bone: 10.0
+  weight_geometry: 0.0
+  weight_dir: 1.0
+  weight_cov: 1.0
+  weight_raw: 1.0
+  ignore_index: -100
 
 # Training configuration
 training:

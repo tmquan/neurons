@@ -135,7 +135,7 @@ class TestGeometryLoss:
         loss_fn = GeometryLoss()
         geometry, labels = self._make_inputs()
         result = loss_fn(geometry, labels)
-        for key in ("loss", "l_dir", "l_cov", "l_raw"):
+        for key in ("loss", "dir", "cov", "raw"):
             assert key in result
 
     def test_all_finite(self) -> None:
@@ -164,9 +164,9 @@ class TestGeometryLoss:
         loss_fn = GeometryLoss(dir_target="centroid", weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
         geometry, labels = self._make_inputs()
         result = loss_fn(geometry, labels)
-        assert result["l_dir"].isfinite()
-        assert result["l_dir"].item() >= 0.0
-        assert result["l_cov"].item() == 0.0
+        assert result["dir"].isfinite()
+        assert result["dir"].item() >= 0.0
+        assert result["cov"].item() == 0.0
 
     def test_dir_skeleton(self) -> None:
         loss_fn = GeometryLoss(dir_target="skeleton", weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
@@ -175,29 +175,29 @@ class TestGeometryLoss:
         labels[:, 2:14, 2:7] = 1
         labels[:, 2:14, 9:14] = 2
         result = loss_fn(geometry, labels)
-        assert result["l_dir"].isfinite()
-        assert result["l_dir"].item() >= 0.0
+        assert result["dir"].isfinite()
+        assert result["dir"].item() >= 0.0
 
     def test_cov_finite(self) -> None:
         loss_fn = GeometryLoss(weight_dir=0.0, weight_cov=1.0, weight_raw=0.0)
         geometry, labels = self._make_inputs()
         result = loss_fn(geometry, labels)
-        assert result["l_cov"].isfinite()
-        assert result["l_cov"].item() >= 0.0
+        assert result["cov"].isfinite()
+        assert result["cov"].item() >= 0.0
 
     def test_raw_with_image(self) -> None:
         loss_fn = GeometryLoss(weight_dir=0.0, weight_cov=0.0, weight_raw=1.0)
         geometry, labels = self._make_inputs()
         gt_image = torch.rand(1, 1, 16, 16)
         result = loss_fn(geometry, labels, raw_image=gt_image)
-        assert result["l_raw"].isfinite()
-        assert result["l_raw"].item() >= 0.0
+        assert result["raw"].isfinite()
+        assert result["raw"].item() >= 0.0
 
     def test_raw_zero_without_image(self) -> None:
         loss_fn = GeometryLoss(weight_dir=0.0, weight_cov=0.0, weight_raw=1.0)
         geometry, labels = self._make_inputs()
         result = loss_fn(geometry, labels)
-        assert result["l_raw"].item() == 0.0
+        assert result["raw"].item() == 0.0
 
     def test_all_together(self) -> None:
         loss_fn = GeometryLoss(weight_dir=1.0, weight_cov=1.0, weight_raw=1.0)
@@ -421,7 +421,7 @@ class TestVista2DLoss:
     def test_forward_returns_required_keys(self, loss_fn, sample_inputs) -> None:
         predictions, targets = sample_inputs
         result = loss_fn(predictions, targets)
-        for key in ("loss", "loss_sem", "loss_ins"):
+        for key in ("loss", "loss_sem", "loss_sem/ce", "loss_sem/iou", "loss_sem/dice", "loss_ins"):
             assert key in result
 
     def test_total_loss_is_finite(self, loss_fn, sample_inputs) -> None:
@@ -433,6 +433,12 @@ class TestVista2DLoss:
         predictions, targets = sample_inputs
         result = loss_fn(predictions, targets)
         assert result["loss_sem"].item() >= 0.0
+
+    def test_iou_loss_activates(self, sample_inputs) -> None:
+        loss_fn = Vista2DLoss(weight_iou=1.0, weight_edge=1.0, weight_bone=1.0)
+        predictions, targets = sample_inputs
+        result = loss_fn(predictions, targets)
+        assert result["loss_sem/iou"].item() > 0.0
 
     def test_backward_pass(self, loss_fn, sample_inputs) -> None:
         predictions, targets = sample_inputs
@@ -510,13 +516,19 @@ class TestVista3DLoss:
     def test_forward_returns_required_keys(self, loss_fn, sample_inputs) -> None:
         predictions, targets = sample_inputs
         result = loss_fn(predictions, targets)
-        for key in ("loss", "loss_sem", "loss_ins"):
+        for key in ("loss", "loss_sem", "loss_sem/ce", "loss_sem/iou", "loss_sem/dice", "loss_ins"):
             assert key in result
 
     def test_total_loss_is_finite(self, loss_fn, sample_inputs) -> None:
         predictions, targets = sample_inputs
         result = loss_fn(predictions, targets)
         assert result["loss"].isfinite()
+
+    def test_iou_loss_activates(self, sample_inputs) -> None:
+        loss_fn = Vista3DLoss(weight_iou=1.0, weight_edge=1.0, weight_bone=1.0)
+        predictions, targets = sample_inputs
+        result = loss_fn(predictions, targets)
+        assert result["loss_sem/iou"].item() > 0.0
 
     def test_backward_pass(self, loss_fn, sample_inputs) -> None:
         predictions, targets = sample_inputs
