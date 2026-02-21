@@ -2,6 +2,15 @@
 
 A web-based neuroglancer-style volume viewer with 4-panel layout (axial, coronal, sagittal, 3D anisotropic Gaussian splats), built with FastAPI + vanilla JS + Three.js.
 
+## Screenshot
+
+![Neurons Volume Visualizer](../../images/visualizer.png)
+
+Light-gray theme with studio lighting. Multiple segments selected simultaneously —
+each rendered as translucent anisotropic Gaussian splats in the 3D panel.
+Crosshairs synchronized across all three orthogonal slice panels.
+Overlay toggle, opacity slider, filled/surface switch, and selection chips in toolbar.
+
 ## Architecture
 
 ```
