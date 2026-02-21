@@ -27,7 +27,7 @@ neurons/visualizer/
 ```
 
 ```
-┌─────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────-───┐
 │                  Browser (SPA)                   │
 │ ┌───────────┬───────────┐                        │
 │ │ Axial XY  │ Sagittal  │  app.js: slice extract │
@@ -39,14 +39,14 @@ neurons/visualizer/
 │ [Overlay][Opacity][Filled][Colormap][Instance]   │
 └──────────────────────┬──────────────────────────-┘
                        │ fetch /api/…
-              ┌────────▼────────┐
-              │   FastAPI app   │
-              │   (app.py)      │
-              │ ┌──────────────┐│
-              │ │ VolumeLoader ││
-              │ │ (HDF5/TIFF…) ││
-              │ └──────────────┘│
-              └─────────────────┘
+              ┌────────▼───────-─┐
+              │   FastAPI app    │
+              │   (app.py)       │
+              │ ┌──────────────┐ │
+              │ │ VolumeLoader │ │
+              │ │ (HDF5/TIFF…) │ │
+              │ └──────────────┘ │
+              └─────────────────-┘
 ```
 
 ## Step-by-Step Implementation
