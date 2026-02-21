@@ -9,21 +9,49 @@
 
 "use strict";
 
-/* ── Gaussian splat shaders (GLSL 300 ES for RawShaderMaterial) ── */
+/* ── Anisotropic 3D Gaussian splat shaders (GLSL 300 ES) ────── */
 
 const SPLAT_VERT = `
 in vec3 position;
 in vec3 color;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
-uniform float uVoxelSize;
+uniform vec3 uSigma;
 uniform float uScreenHeight;
 out vec3 vColor;
+flat out vec3 vInvCov;
+flat out float vPtSize;
+
 void main() {
     vColor = color;
     vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
-    float dist = max(-mvPos.z, 0.01);
-    gl_PointSize = clamp(uVoxelSize * projectionMatrix[1][1] * uScreenHeight / dist, 1.0, 256.0);
+    float z = max(-mvPos.z, 0.01);
+
+    mat3 R = mat3(modelViewMatrix);
+    vec3 ax = uSigma.x * R[0];
+    vec3 ay = uSigma.y * R[1];
+    vec3 az = uSigma.z * R[2];
+
+    float cxx = ax.x*ax.x + ay.x*ay.x + az.x*az.x;
+    float cxy = ax.x*ax.y + ay.x*ay.y + az.x*az.y;
+    float cyy = ax.y*ax.y + ay.y*ay.y + az.y*az.y;
+
+    float focal = projectionMatrix[1][1] * uScreenHeight * 0.5;
+    float s = focal / z;
+    cxx *= s * s;  cxy *= s * s;  cyy *= s * s;
+
+    float mid = 0.5 * (cxx + cyy);
+    float det = cxx * cyy - cxy * cxy;
+    float disc = max(mid * mid - det, 0.0);
+    float lambda_max = mid + sqrt(disc);
+    float radius = ceil(3.0 * sqrt(max(lambda_max, 0.1)));
+    float ptSz = clamp(2.0 * radius, 1.0, 512.0);
+    gl_PointSize = ptSz;
+    vPtSize = ptSz;
+
+    float invDet = 1.0 / max(det, 1e-6);
+    vInvCov = vec3(cyy * invDet, -cxy * invDet, cxx * invDet);
+
     gl_Position = projectionMatrix * mvPos;
 }
 `;
@@ -32,14 +60,17 @@ const SPLAT_FRAG = `
 precision highp float;
 uniform float uOpacity;
 in vec3 vColor;
+flat in vec3 vInvCov;
+flat in float vPtSize;
 out vec4 fragColor;
 void main() {
-    vec2 c = gl_PointCoord - 0.5;
-    float d2 = dot(c, c);
-    if (d2 > 0.25) discard;
-    float gauss = exp(-d2 * 14.0);
-    float a = gauss * gauss * uOpacity;
-    fragColor = vec4(vColor * (0.6 + 0.4 * gauss), a);
+    vec2 d = vec2(gl_PointCoord.x - 0.5, 0.5 - gl_PointCoord.y) * vPtSize;
+    float maha = d.x * d.x * vInvCov.x + 2.0 * d.x * d.y * vInvCov.y + d.y * d.y * vInvCov.z;
+    float gauss = exp(-0.5 * maha);
+    if (gauss < 0.02) discard;
+    float a = gauss * uOpacity;
+    vec3 lit = vColor * (0.55 + 0.45 * gauss) + vec3(0.12 * gauss * gauss);
+    fragColor = vec4(lit, a);
 }
 `;
 
@@ -206,7 +237,7 @@ async function initVolumeRenderer() {
     renderer.setSize(rect.width, rect.height);
 
     const scene  = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
+    scene.background = new THREE.Color(0xf0f0f4);
     const camera = new THREE.PerspectiveCamera(50, rect.width / rect.height, 0.001, 50);
 
     /* ── 3D textures (for slice planes) ───────────────────────── */
@@ -245,30 +276,48 @@ async function initVolumeRenderer() {
         uHasSelection:{ value: false },
     };
 
-    /* ── lighting ─────────────────────────────────────────────── */
-    scene.add(new THREE.HemisphereLight(0xc8d8f0, 0x443322, 0.6));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
-    keyLight.position.set(1, 2, 1.5);
+    /* ── lighting (soft studio style) ────────────────────────── */
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xd0d0d8, 0.7));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    keyLight.position.set(2, 3, 2);
     scene.add(keyLight);
+    const fillLight = new THREE.DirectionalLight(0xe8e8f0, 0.4);
+    fillLight.position.set(-2, 0.5, -1);
+    scene.add(fillLight);
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
+    rimLight.position.set(0, -2, 1);
+    scene.add(rimLight);
 
     /* ── Gaussian splat state ─────────────────────────────────── */
     let splatPoints = null;
-    const voxelSizeGeo = Math.cbrt((nx / dx) * (ny / dy) * (nz / dz));
+    const sigmaX = (nx / dx) * 0.75;
+    const sigmaY = (ny / dy) * 0.75;
+    const sigmaZ = (nz / dz) * 0.75;
 
     const splatMat = new THREE.RawShaderMaterial({
         glslVersion: THREE.GLSL3,
         vertexShader: SPLAT_VERT,
         fragmentShader: SPLAT_FRAG,
         uniforms: {
-            uVoxelSize:    { value: voxelSizeGeo * 2.0 },
+            uSigma:        { value: new THREE.Vector3(sigmaX, sigmaY, sigmaZ) },
             uScreenHeight: { value: rect.height },
-            uOpacity:      { value: 0.18 },
+            uOpacity:      { value: 0.15 },
         },
         transparent: true,
         depthWrite: false,
         depthTest: true,
         blending: THREE.NormalBlending,
     });
+
+    function isSurface(off, id, x, y, z) {
+        if (x === 0 || x === dx - 1 || y === 0 || y === dy - 1 || z === 0 || z === dz - 1) return true;
+        const s = dy * dx;
+        return segIdData[off - 1]  !== id || segIdData[off + 1]  !== id ||
+               segIdData[off - dx] !== id || segIdData[off + dx] !== id ||
+               segIdData[off - s]  !== id || segIdData[off + s]  !== id;
+    }
+
+    let splatFilled = true;
 
     function buildSplats(selectedIdSet) {
         if (splatPoints) {
@@ -278,10 +327,17 @@ async function initVolumeRenderer() {
         }
         if (!segIdData || !segData || selectedIdSet.size === 0) return;
 
+        const filled = splatFilled;
         let totalVox = 0;
-        for (let i = 0; i < segIdData.length; i++) {
-            if (selectedIdSet.has(segIdData[i])) totalVox++;
-        }
+        for (let z = 0; z < dz; z++)
+            for (let y = 0; y < dy; y++)
+                for (let x = 0; x < dx; x++) {
+                    const off = z * dy * dx + y * dx + x;
+                    const id = segIdData[off];
+                    if (!selectedIdSet.has(id)) continue;
+                    if (!filled && !isSurface(off, id, x, y, z)) continue;
+                    totalVox++;
+                }
         if (totalVox === 0) return;
 
         const MAX_SPLATS = 300000;
@@ -298,6 +354,7 @@ async function initVolumeRenderer() {
                     const off = z * dy * dx + y * dx + x;
                     const id = segIdData[off];
                     if (!selectedIdSet.has(id)) continue;
+                    if (!filled && !isSurface(off, id, x, y, z)) continue;
 
                     skip++;
                     if (stride > 1 && skip % stride !== 0) continue;
@@ -323,9 +380,10 @@ async function initVolumeRenderer() {
         geom.setAttribute("position", new THREE.BufferAttribute(positions.slice(0, cnt * 3), 3));
         geom.setAttribute("color",    new THREE.BufferAttribute(colors.slice(0, cnt * 3), 3));
 
+        splatMat.uniforms.uOpacity.value = filled ? 0.15 : 0.35;
         splatPoints = new THREE.Points(geom, splatMat);
         scene.add(splatPoints);
-        console.log(`Gaussian splats: ${cnt} points (stride ${stride})`);
+        console.log(`Gaussian splats: ${cnt} points (${filled ? "filled" : "surface"}, stride ${stride})`);
     }
 
     /* ── 3 orthogonal slice planes ────────────────────────────── */
@@ -423,10 +481,19 @@ async function initVolumeRenderer() {
         buildSplats(new Set(selectedIds));
     };
 
+    window._set3dFilled = function(filled) {
+        splatFilled = filled;
+        console.log("Filled mode:", filled);
+        const st = window.NV;
+        if (st.selected.size > 0) {
+            buildSplats(new Set(st.selected));
+        }
+    };
+
     /* ── bounding box wireframe ───────────────────────────────── */
     const bbGeom = new THREE.BoxGeometry(nx, ny, nz);
     const bbEdge = new THREE.EdgesGeometry(bbGeom);
-    const bbLine = new THREE.LineSegments(bbEdge, new THREE.LineBasicMaterial({ color: 0x333355 }));
+    const bbLine = new THREE.LineSegments(bbEdge, new THREE.LineBasicMaterial({ color: 0xb0b0b8 }));
     bbLine.position.set(nx / 2, ny / 2, nz / 2);
     scene.add(bbLine);
 
@@ -435,15 +502,15 @@ async function initVolumeRenderer() {
     const axHelper = new THREE.Group();
     axHelper.add(new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(axLen,0,0)]),
-        new THREE.LineBasicMaterial({ color: 0xff4444 })
+        new THREE.LineBasicMaterial({ color: 0xcc3333 })
     ));
     axHelper.add(new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,axLen,0)]),
-        new THREE.LineBasicMaterial({ color: 0x44ff44 })
+        new THREE.LineBasicMaterial({ color: 0x33aa33 })
     ));
     axHelper.add(new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,axLen)]),
-        new THREE.LineBasicMaterial({ color: 0x4488ff })
+        new THREE.LineBasicMaterial({ color: 0x3366cc })
     ));
     axHelper.position.set(-0.05, -0.05, -0.05);
     scene.add(axHelper);

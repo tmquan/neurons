@@ -220,7 +220,7 @@ function drawPanel(axis) {
     const imgData = panelImageData[axis];
     if (!imgData) return;
 
-    ctx.fillStyle = "#111";
+    ctx.fillStyle = "#f0f0f4";
     ctx.fillRect(0, 0, t.cw, t.ch);
     ctx.imageSmoothingEnabled = false;
 
@@ -265,12 +265,12 @@ function drawCrosshair(axis) {
     const py = t.dy + ((crossRow + 0.5) / t.imgH) * t.dh;
 
     ctx.save();
-    ctx.strokeStyle = "rgba(80, 220, 255, 0.7)";
+    ctx.strokeStyle = "rgba(30, 120, 200, 0.6)";
     ctx.lineWidth = 1;
     ctx.setLineDash([]);
     ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, t.ch); ctx.stroke();
 
-    ctx.strokeStyle = "rgba(255, 220, 60, 0.7)";
+    ctx.strokeStyle = "rgba(200, 120, 30, 0.6)";
     ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(t.cw, py); ctx.stroke();
     ctx.restore();
 }
@@ -502,6 +502,12 @@ slOpacity.addEventListener("input", () => {
     }
 });
 
+document.getElementById("cb-filled").addEventListener("change", (e) => {
+    if (typeof window._set3dFilled === "function") {
+        window._set3dFilled(e.target.checked);
+    }
+});
+
 /* ── cache management ──────────────────────────────────────────── */
 
 document.getElementById("btn-clear-cache").addEventListener("click", async () => {
@@ -553,7 +559,7 @@ async function boot() {
 
     const loadingEl = document.createElement("div");
     loadingEl.id = "loading-overlay";
-    loadingEl.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:999;color:#6cf;font-size:16px;font-family:system-ui;flex-direction:column;gap:8px";
+    loadingEl.style.cssText = "position:fixed;inset:0;background:rgba(240,240,244,0.95);display:flex;align-items:center;justify-content:center;z-index:999;color:#4080d0;font-size:16px;font-family:system-ui;flex-direction:column;gap:8px";
     loadingEl.innerHTML = '<div id="load-msg">Loading volume data...</div>';
     document.body.appendChild(loadingEl);
     const loadMsg = document.getElementById("load-msg");
