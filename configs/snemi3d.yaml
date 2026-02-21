@@ -10,7 +10,7 @@ project_name: neurons-snemi3d
 data:
   dataset: snemi3d
   data_root: data/snemi3d
-  batch_size: 4
+  batch_size: 2
   num_workers: 8
   train_val_split: 0.2
   cache_rate: 0.5
