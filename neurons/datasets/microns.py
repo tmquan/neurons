@@ -66,6 +66,7 @@ class MICRONSDataset(CircuitDataset):
         slice_mode: bool = True,
         patch_size: Optional[Tuple[int, int, int]] = None,
         patch_overlap: float = 0.25,
+        num_samples: Optional[int] = None,
         num_workers: int = 0,
     ) -> None:
         self.volume_file = volume_file
@@ -75,6 +76,7 @@ class MICRONSDataset(CircuitDataset):
         self.slice_mode = slice_mode
         self.patch_size = patch_size
         self.patch_overlap = patch_overlap
+        self._num_samples = num_samples
 
         self._hdf5_preprocessor = HDF5Preprocessor()
         self._tiff_preprocessor = TIFFPreprocessor()
@@ -232,19 +234,23 @@ class MICRONSDataset(CircuitDataset):
         synapses_split = synapses[z_list] if synapses is not None else None
         mito_split = mitochondria[z_list] if mitochondria is not None else None
 
+        n_slices = inputs_split.shape[0]
+
         if self.slice_mode:
-            for i in range(inputs_split.shape[0]):
+            n_out = self._num_samples if self._num_samples is not None else n_slices
+            for i in range(n_out):
+                si = i % n_slices
                 data_dict: Dict[str, Any] = {
-                    "image": inputs_split[i],
-                    "slice_idx": z_range[i] if isinstance(z_range, range) else i,
+                    "image": inputs_split[si],
+                    "slice_idx": z_range[si] if isinstance(z_range, range) else si,
                     "idx": len(data_list),
                 }
                 if labels_split is not None:
-                    data_dict["label"] = labels_split[i]
+                    data_dict["label"] = labels_split[si]
                 if synapses_split is not None:
-                    data_dict["synapses"] = synapses_split[i]
+                    data_dict["synapses"] = synapses_split[si]
                 if mito_split is not None:
-                    data_dict["mitochondria"] = mito_split[i]
+                    data_dict["mitochondria"] = mito_split[si]
                 data_list.append(data_dict)
 
         elif self.patch_size is not None:
@@ -274,6 +280,7 @@ class MICRONSDataset(CircuitDataset):
                 data_dict["synapses"] = synapses_split
             if mito_split is not None:
                 data_dict["mitochondria"] = mito_split
-            data_list.append(data_dict)
+            n_out = self._num_samples if self._num_samples is not None else n_slices
+            data_list.extend([data_dict] * n_out)
 
         return data_list

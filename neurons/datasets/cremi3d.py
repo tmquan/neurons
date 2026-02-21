@@ -56,11 +56,13 @@ class CREMI3DDataset(CircuitDataset):
         volumes: Optional[List[str]] = None,
         include_clefts: bool = True,
         include_mito: bool = False,
+        num_samples: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         self.volumes = volumes if volumes is not None else ["A", "B"]
         self.include_clefts = include_clefts
         self.include_mito = include_mito
+        self._num_samples = num_samples
         self._image_data: Optional[np.ndarray] = None
         self._label_data: Optional[np.ndarray] = None
 
@@ -119,14 +121,14 @@ class CREMI3DDataset(CircuitDataset):
             label = label[:train_end]
             volume_name = f"CREMI_{volumes_str}_train"
 
-        return [
-            {
-                "image": image,
-                "label": label,
-                "volume": volume_name,
-                "idx": 0,
-            }
-        ]
+        data_dict = {
+            "image": image,
+            "label": label,
+            "volume": volume_name,
+            "idx": 0,
+        }
+        n_samples = self._num_samples if self._num_samples is not None else image.shape[0]
+        return [data_dict] * n_samples
 
     def _load_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """Load and merge CREMI volumes."""

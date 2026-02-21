@@ -41,12 +41,16 @@ class SNEMI3DDataModule(CircuitDataModule):
         image_size: Optional resize dimensions (D, H, W).
         patch_size: Random crop size (D, H, W) for training.
         slice_mode: Return 2D slices if True (default: False for 3D).
+        num_samples: Number of samples per epoch.  Controls how many
+            random crops/augmentations are drawn.  Defaults to the
+            number of Z slices in the volume when ``None``.
 
     Example:
         >>> dm = SNEMI3DDataModule(
         ...     data_root="/path/to/snemi3d",
         ...     batch_size=8,
         ...     patch_size=(32, 128, 128),
+        ...     num_samples=500,
         ... )
         >>> dm.setup("fit")
         >>> for batch in dm.train_dataloader():
@@ -67,9 +71,11 @@ class SNEMI3DDataModule(CircuitDataModule):
         image_size: Optional[Tuple[int, ...]] = None,
         patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
         slice_mode: bool = False,
+        num_samples: Optional[int] = None,
         persistent_workers: bool = True,
     ) -> None:
         self.slice_mode = slice_mode
+        self.num_samples = num_samples
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
@@ -83,7 +89,10 @@ class SNEMI3DDataModule(CircuitDataModule):
         )
 
     def _get_dataset_kwargs(self) -> dict:
-        return {"slice_mode": self.slice_mode}
+        kwargs = {"slice_mode": self.slice_mode}
+        if self.num_samples is not None:
+            kwargs["num_samples"] = self.num_samples
+        return kwargs
 
     def get_train_transforms(self) -> Compose:
         """

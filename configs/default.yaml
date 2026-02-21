@@ -21,6 +21,7 @@ data:
   pin_memory: true
   image_size: null  # Optional resize, e.g., [256, 256]
   slice_mode: true  # Return 2D slices
+  num_samples: null  # Samples per epoch (null = auto from volume size)
 
 # Model configuration
 model:

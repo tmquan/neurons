@@ -42,6 +42,11 @@ class SNEMI3DDataset(CircuitDataset):
         train_val_split: Fraction for validation split (default: 0.2).
         slice_mode: If True, return individual 2D slices; if False, return
             3D volume patches (default: True).
+        num_samples: Number of samples (random crops/augmentations) per epoch.
+            In slice_mode, defaults to the number of Z slices.
+            In 3D mode, defaults to the number of Z slices (each sample
+            is a random crop from the full volume).  Set explicitly to
+            control epoch length independently of volume size.
     """
 
     _paper = (
@@ -59,9 +64,11 @@ class SNEMI3DDataset(CircuitDataset):
         cache_rate: float = 1.0,
         train_val_split: float = 0.2,
         slice_mode: bool = True,
+        num_samples: Optional[int] = None,
         num_workers: int = 0,
     ) -> None:
         self.slice_mode = slice_mode
+        self._num_samples = num_samples
         self._hdf5_preprocessor = HDF5Preprocessor()
         self._tiff_preprocessor = TIFFPreprocessor()
 
@@ -154,37 +161,31 @@ class SNEMI3DDataset(CircuitDataset):
             except FileNotFoundError:
                 labels = None
 
-        n_total = inputs.shape[0]
-
-        if self.split in ["train", "valid"]:
-            slice_range = range(n_total)
-            volume_name = "AC4"
-        else:
-            slice_range = range(n_total)
-            volume_name = "AC3"
+        n_slices = inputs.shape[0]
+        volume_name = "AC4" if self.split in ["train", "valid"] else "AC3"
 
         if self.slice_mode:
-            for i in slice_range:
+            n_samples = self._num_samples if self._num_samples is not None else n_slices
+            for i in range(n_samples):
+                si = i % n_slices
                 data_dict: Dict[str, Any] = {
-                    "image": inputs[i],
-                    "slice_idx": i,
+                    "image": inputs[si],
+                    "slice_idx": si,
                     "volume": volume_name,
                     "idx": i,
                 }
                 if labels is not None:
-                    data_dict["label"] = labels[i]
+                    data_dict["label"] = labels[si]
                 data_list.append(data_dict)
         else:
-            vol_inputs = inputs[list(slice_range)]
             data_dict: Dict[str, Any] = {
-                "image": vol_inputs,
+                "image": inputs,
                 "volume": volume_name,
                 "idx": 0,
             }
             if labels is not None:
-                vol_labels = labels[list(slice_range)]
-                data_dict["label"] = vol_labels
-            n_repeats = max(len(slice_range), 1)
-            data_list.extend([data_dict] * n_repeats)
+                data_dict["label"] = labels
+            n_samples = self._num_samples if self._num_samples is not None else n_slices
+            data_list.extend([data_dict] * n_samples)
 
         return data_list

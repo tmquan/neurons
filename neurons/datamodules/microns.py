@@ -40,6 +40,7 @@ class MICRONSDataModule(CircuitDataModule):
         include_mitochondria: bool = False,
         slice_mode: bool = True,
         patch_size: Optional[Tuple[int, int, int]] = None,
+        num_samples: Optional[int] = None,
         persistent_workers: bool = True,
     ) -> None:
         self.volume_file = volume_file
@@ -48,6 +49,7 @@ class MICRONSDataModule(CircuitDataModule):
         self.include_mitochondria = include_mitochondria
         self.slice_mode = slice_mode
         self.patch_size = patch_size
+        self.num_samples = num_samples
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
@@ -60,7 +62,7 @@ class MICRONSDataModule(CircuitDataModule):
         )
 
     def _get_dataset_kwargs(self) -> dict:
-        return {
+        kwargs = {
             "volume_file": self.volume_file,
             "segmentation_file": self.segmentation_file,
             "include_synapses": self.include_synapses,
@@ -68,3 +70,6 @@ class MICRONSDataModule(CircuitDataModule):
             "slice_mode": self.slice_mode,
             "patch_size": self.patch_size,
         }
+        if self.num_samples is not None:
+            kwargs["num_samples"] = self.num_samples
+        return kwargs

@@ -56,11 +56,13 @@ class CREMI3DDataModule(CircuitDataModule):
         volumes: Optional[List[str]] = None,
         include_clefts: bool = True,
         include_mito: bool = False,
+        num_samples: Optional[int] = None,
         persistent_workers: bool = True,
     ) -> None:
         self.volumes = volumes if volumes is not None else ["A", "B"]
         self.include_clefts = include_clefts
         self.include_mito = include_mito
+        self.num_samples = num_samples
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
@@ -74,11 +76,14 @@ class CREMI3DDataModule(CircuitDataModule):
         )
 
     def _get_dataset_kwargs(self) -> dict:
-        return {
+        kwargs = {
             "volumes": self.volumes,
             "include_clefts": self.include_clefts,
             "include_mito": self.include_mito,
         }
+        if self.num_samples is not None:
+            kwargs["num_samples"] = self.num_samples
+        return kwargs
 
     def get_train_transforms(self) -> Compose:
         """Get training transforms optimized for CREMI3D."""

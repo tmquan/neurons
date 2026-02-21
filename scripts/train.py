@@ -71,6 +71,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         patch_size = data_cfg.get("patch_size")
         return SNEMI3DDataModule(
             slice_mode=data_cfg.get("slice_mode", True),
+            num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             **common_args,
         )
@@ -82,6 +83,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             volumes=list(volumes) if volumes else None,
             include_clefts=data_cfg.get("include_clefts", True),
             include_mito=data_cfg.get("include_mito", False),
+            num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             **common_args,
         )
@@ -94,6 +96,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             include_synapses=data_cfg.get("include_synapses", False),
             include_mitochondria=data_cfg.get("include_mitochondria", False),
             slice_mode=data_cfg.get("slice_mode", True),
+            num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             **common_args,
         )
@@ -103,6 +106,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         return MitoEM2DataModule(
             split=data_cfg.get("split", "human"),
             slice_mode=data_cfg.get("slice_mode", True),
+            num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             **common_args,
         )

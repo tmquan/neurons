@@ -63,10 +63,12 @@ class MitoEM2DataModule(CircuitDataModule):
         patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
         dataset_name: Optional[str] = None,
         slice_mode: bool = True,
+        num_samples: Optional[int] = None,
         persistent_workers: bool = True,
     ) -> None:
         self.dataset_name = dataset_name
         self.slice_mode = slice_mode
+        self.num_samples = num_samples
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
@@ -80,10 +82,13 @@ class MitoEM2DataModule(CircuitDataModule):
         )
 
     def _get_dataset_kwargs(self) -> dict:
-        return {
+        kwargs = {
             "dataset_name": self.dataset_name,
             "slice_mode": self.slice_mode,
         }
+        if self.num_samples is not None:
+            kwargs["num_samples"] = self.num_samples
+        return kwargs
 
     def get_train_transforms(self) -> Compose:
         """Training transforms for MitoEM2 (3-class semantic segmentation)."""

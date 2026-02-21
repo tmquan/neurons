@@ -73,9 +73,11 @@ class MitoEM2Dataset(CircuitDataset):
         num_workers: int = 0,
         dataset_name: Optional[str] = None,
         slice_mode: bool = True,
+        num_samples: Optional[int] = None,
     ) -> None:
         self.dataset_name = dataset_name
         self.slice_mode = slice_mode
+        self._num_samples = num_samples
         self._nfty = NFTYPreprocessor()
 
         super().__init__(
@@ -190,5 +192,10 @@ class MitoEM2Dataset(CircuitDataset):
                     if label is not None:
                         entry["label"] = label.astype(np.int64)
                     data_list.append(entry)
+
+        if self._num_samples is not None and len(data_list) > 0:
+            n = self._num_samples
+            original = data_list
+            data_list = [original[i % len(original)] for i in range(n)]
 
         return data_list
