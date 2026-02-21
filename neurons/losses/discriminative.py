@@ -1,21 +1,22 @@
 """
 Discriminative Loss for Instance Segmentation.
 
-Two vectorized variants:
+Three loss modules in logical order:
 
-1. **CentroidEmbeddingLoss** — classic De Brabandere et al. (2017) with
-   optional multi-projection heads (direction, covariance, raw reconstruction).
+1. **CentroidEmbeddingLoss** — classic De Brabandere et al. (2017).
    Pull embeddings toward their instance *centroid* (mean embedding),
-   push centroids apart, regularise norms.  Three learned linear projections
-   decode geometric properties from the full E-dim embedding so that any
-   dimensionality reduction reveals direction toward the target, local shape,
-   and image intensity.
+   push centroids apart, regularise norms.
 
 2. **SkeletonEmbeddingLoss** — geometry-aware variant.
    Pull embeddings toward the nearest *skeleton* point, push instance
    centres apart, and add two geometric terms:
      * *boundary penalty*  — cosine alignment with the DT gradient
      * *skeleton benefit*  — differentiable sampling of the normalised DT
+
+3. **GeometryLoss** — regression loss for the geometry head
+   (direction, covariance, raw reconstruction).  Each sub-loss supports
+   configurable loss type: ``mse``, ``l1``, or ``smooth_l1``.
+   Defaults: Smooth-L1 for direction, MSE for covariance, L1 for raw.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -493,7 +494,6 @@ class CentroidEmbeddingLoss(nn.Module):
         w_pull: float = 1.0,
         w_push: float = 1.0,
         w_reg: float = 0.001,
-        # keep old names as silent aliases so existing configs don't break
         delta_var: Optional[float] = None,
         delta_dst: Optional[float] = None,
         A: Optional[float] = None,
@@ -607,151 +607,7 @@ DiscriminativeLossVectorized = CentroidEmbeddingLoss
 
 
 # ======================================================================
-# 2.  Geometry head loss  (dir + cov + raw)
-# ======================================================================
-
-class GeometryLoss(nn.Module):
-    """L2 regression loss for the geometry head output.
-
-    Supervises three groups of channels produced by the model's
-    ``head_geometry`` against on-the-fly computed targets:
-
-    * **L_dir**  (first S channels):  per-pixel offset toward instance
-      centroid or nearest skeleton point.
-    * **L_cov**  (next S*S channels):  EDT structure tensor with
-      depth-blended isotropy (see ``_compute_covariance``).
-    * **L_raw**  (last 4 channels):  RGBA reconstruction of the input
-      image (requires ``raw_image``).
-
-    The channel layout of the geometry tensor is ``[dir, cov, raw]``
-    with a total of ``S + S*S + 4`` channels.
-
-    Args:
-        spatial_dims: 2 or 3 (default 2).
-        dir_target: ``"centroid"`` or ``"skeleton"`` (default ``"centroid"``).
-        weight_dir: weight for L_dir (default 1.0).
-        weight_cov: weight for L_cov (default 1.0).
-        weight_raw: weight for L_raw (default 1.0).
-    """
-
-    def __init__(
-        self,
-        spatial_dims: int = 2,
-        dir_target: str = "centroid",
-        weight_dir: float = 1.0,
-        weight_cov: float = 1.0,
-        weight_raw: float = 1.0,
-    ) -> None:
-        super().__init__()
-        self.spatial_dims = spatial_dims
-        self.dir_target = dir_target
-        self.weight_dir = weight_dir
-        self.weight_cov = weight_cov
-        self.weight_raw = weight_raw
-
-        S = spatial_dims
-        self._ch_dir = S
-        self._ch_cov = S * S
-        self._ch_raw = 4
-
-    @staticmethod
-    def _fg_mse(pred: torch.Tensor, target: torch.Tensor,
-                fg: torch.Tensor) -> torch.Tensor:
-        """Foreground-masked mean squared error for one sample.
-
-        Averages over both channels and foreground pixels.
-
-        Args:
-            pred: [C, N] predicted channels (flattened spatial).
-            target: [C, N] target channels.
-            fg: [N] bool foreground mask.
-        """
-        N_fg = fg.sum().float().clamp(min=1.0)
-        diff = pred[:, fg] - target[:, fg]
-        return (diff ** 2).sum() / (N_fg * diff.shape[0])
-
-    def forward(
-        self,
-        geometry: torch.Tensor,
-        ins_label: torch.Tensor,
-        raw_image: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            geometry: [B, S+S*S+4, *spatial] geometry head prediction.
-            ins_label: [B, *spatial] instance labels (0 = background).
-            raw_image: [B, 1, *spatial] (optional, for L_raw target).
-
-        Returns:
-            Dict with keys ``loss``, ``l_dir``, ``l_cov``, ``l_raw``.
-        """
-        B = geometry.shape[0]
-        spatial_shape = geometry.shape[2:]
-        dev = geometry.device
-        zero = torch.tensor(0.0, device=dev, dtype=torch.float32)
-
-        L_dir, L_cov, L_raw = zero.clone(), zero.clone(), zero.clone()
-        valid_b = 0
-
-        geom_flat = rearrange(geometry, "b c ... -> b c (...)")
-        c1 = self._ch_dir
-        c2 = c1 + self._ch_cov
-        c3 = c2 + self._ch_raw
-        pred_dir = geom_flat[:, :c1]
-        pred_cov = geom_flat[:, c1:c2]
-        pred_raw = geom_flat[:, c2:c3]
-
-        lbl_flat = rearrange(ins_label, "b ... -> b (...)").long()
-        coords = _make_coord_grid(spatial_shape, dev)
-
-        for b in range(B):
-            uids = torch.unique(lbl_flat[b])
-            uids = uids[uids > 0]
-            if len(uids) == 0:
-                continue
-            valid_b += 1
-            fg = lbl_flat[b] > 0
-
-            if self.weight_dir > 0:
-                if self.dir_target == "centroid":
-                    dir_tgt = _compute_centroid_offsets(lbl_flat[b], coords)
-                else:
-                    dir_tgt = _compute_skeleton_offsets(
-                        lbl_flat[b], coords, spatial_shape,
-                    )
-                L_dir = L_dir + self._fg_mse(pred_dir[b], dir_tgt, fg)
-
-            if self.weight_cov > 0:
-                cov_tgt = _compute_covariance(lbl_flat[b], coords, spatial_shape)
-                L_cov = L_cov + self._fg_mse(pred_cov[b], cov_tgt, fg)
-
-            if self.weight_raw > 0 and raw_image is not None:
-                img_flat = rearrange(raw_image[b], "c ... -> c (...)").clamp(0.0, 1.0)
-                rgba_tgt = torch.cat([
-                    img_flat.expand(3, -1),
-                    fg.unsqueeze(0).float(),
-                ], dim=0)
-                raw_pred_b = torch.sigmoid(pred_raw[b])
-                L_raw = L_raw + self._fg_mse(raw_pred_b, rgba_tgt, fg)
-
-        n = max(valid_b, 1)
-        L_dir, L_cov, L_raw = L_dir / n, L_cov / n, L_raw / n
-
-        total = self.weight_dir * L_dir + self.weight_cov * L_cov + self.weight_raw * L_raw
-
-        return {"loss": total, "dir": L_dir, "cov": L_cov, "raw": L_raw}
-
-    def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}("
-            f"spatial_dims={self.spatial_dims}, "
-            f"dir_target='{self.dir_target}', "
-            f"weight_dir={self.weight_dir}, weight_cov={self.weight_cov}, weight_raw={self.weight_raw})"
-        )
-
-
-# ======================================================================
-# 3.  Skeleton variant  (geometry-aware)
+# 2.  Skeleton variant  (geometry-aware)
 # ======================================================================
 
 class SkeletonEmbeddingLoss(nn.Module):
@@ -934,4 +790,204 @@ class SkeletonEmbeddingLoss(nn.Module):
             f"delta_push={self.delta_push}, "
             f"w_pull={self.w_pull}, w_push={self.w_push}, "
             f"w_penalty={self.w_penalty}, w_benefit={self.w_benefit})"
+        )
+
+
+# ======================================================================
+# 3.  Geometry head loss  (dir + cov + raw)
+# ======================================================================
+
+_LOSS_FN_REGISTRY = {
+    "mse": "mse",
+    "l2": "mse",
+    "l1": "l1",
+    "mae": "l1",
+    "smooth_l1": "smooth_l1",
+    "huber": "smooth_l1",
+}
+
+
+def _resolve_loss_fn(name: str) -> str:
+    key = name.lower().replace("-", "_")
+    if key not in _LOSS_FN_REGISTRY:
+        raise ValueError(
+            f"Unknown loss type '{name}'. "
+            f"Choose from: {sorted(set(_LOSS_FN_REGISTRY.values()))}"
+        )
+    return _LOSS_FN_REGISTRY[key]
+
+
+class GeometryLoss(nn.Module):
+    """Regression loss for the geometry head output.
+
+    Supervises three groups of channels produced by the model's
+    ``head_geometry`` against on-the-fly computed targets:
+
+    * **L_dir**  (first S channels):  per-pixel offset toward instance
+      centroid or nearest skeleton point.
+    * **L_cov**  (next S*S channels):  EDT structure tensor with
+      depth-blended isotropy (see ``_compute_covariance``).
+    * **L_raw**  (last 4 channels):  RGBA reconstruction of the input
+      image (requires ``raw_image``).
+
+    The channel layout of the geometry tensor is ``[dir, cov, raw]``
+    with a total of ``S + S*S + 4`` channels.
+
+    Each sub-loss supports a configurable loss type:
+
+    * ``"mse"`` / ``"l2"``  — mean squared error
+    * ``"l1"`` / ``"mae"``  — mean absolute error (sharper)
+    * ``"smooth_l1"`` / ``"huber"``  — Smooth-L1 (robust to outliers)
+
+    Defaults: Smooth-L1 for direction (outlier-robust offset regression),
+    MSE for covariance (Frobenius-norm on tensors), L1 for raw
+    reconstruction (sharper image quality).
+
+    Args:
+        spatial_dims: 2 or 3 (default 2).
+        dir_target: ``"centroid"`` or ``"skeleton"`` (default ``"centroid"``).
+        weight_dir: weight for L_dir (default 1.0).
+        weight_cov: weight for L_cov (default 1.0).
+        weight_raw: weight for L_raw (default 1.0).
+        loss_dir: loss type for L_dir (default ``"smooth_l1"``).
+        loss_cov: loss type for L_cov (default ``"mse"``).
+        loss_raw: loss type for L_raw (default ``"l1"``).
+        smooth_l1_beta: beta parameter for Smooth-L1 (default 1.0).
+    """
+
+    def __init__(
+        self,
+        spatial_dims: int = 2,
+        dir_target: str = "centroid",
+        weight_dir: float = 1.0,
+        weight_cov: float = 1.0,
+        weight_raw: float = 1.0,
+        loss_dir: str = "smooth_l1",
+        loss_cov: str = "mse",
+        loss_raw: str = "l1",
+        smooth_l1_beta: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.spatial_dims = spatial_dims
+        self.dir_target = dir_target
+        self.weight_dir = weight_dir
+        self.weight_cov = weight_cov
+        self.weight_raw = weight_raw
+        self.loss_dir = _resolve_loss_fn(loss_dir)
+        self.loss_cov = _resolve_loss_fn(loss_cov)
+        self.loss_raw = _resolve_loss_fn(loss_raw)
+        self.smooth_l1_beta = smooth_l1_beta
+
+        S = spatial_dims
+        self._ch_dir = S
+        self._ch_cov = S * S
+        self._ch_raw = 4
+
+    def _fg_loss(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        fg: torch.Tensor,
+        loss_type: str,
+    ) -> torch.Tensor:
+        """Foreground-masked regression loss for one sample.
+
+        Args:
+            pred: [C, N] predicted channels (flattened spatial).
+            target: [C, N] target channels.
+            fg: [N] bool foreground mask.
+            loss_type: one of ``"mse"``, ``"l1"``, ``"smooth_l1"``.
+        """
+        N_fg = fg.sum().float().clamp(min=1.0)
+        diff = pred[:, fg] - target[:, fg]
+        numel = N_fg * diff.shape[0]
+
+        if loss_type == "mse":
+            return (diff ** 2).sum() / numel
+        elif loss_type == "l1":
+            return diff.abs().sum() / numel
+        else:
+            return F.smooth_l1_loss(
+                diff, torch.zeros_like(diff),
+                beta=self.smooth_l1_beta, reduction="sum",
+            ) / numel
+
+    def forward(
+        self,
+        geometry: torch.Tensor,
+        ins_label: torch.Tensor,
+        raw_image: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            geometry: [B, S+S*S+4, *spatial] geometry head prediction.
+            ins_label: [B, *spatial] instance labels (0 = background).
+            raw_image: [B, 1, *spatial] (optional, for L_raw target).
+
+        Returns:
+            Dict with keys ``loss``, ``dir``, ``cov``, ``raw``.
+        """
+        B = geometry.shape[0]
+        spatial_shape = geometry.shape[2:]
+        dev = geometry.device
+        zero = torch.tensor(0.0, device=dev, dtype=torch.float32)
+
+        L_dir, L_cov, L_raw = zero.clone(), zero.clone(), zero.clone()
+        valid_b = 0
+
+        geom_flat = rearrange(geometry, "b c ... -> b c (...)")
+        c1 = self._ch_dir
+        c2 = c1 + self._ch_cov
+        c3 = c2 + self._ch_raw
+        pred_dir = geom_flat[:, :c1]
+        pred_cov = geom_flat[:, c1:c2]
+        pred_raw = geom_flat[:, c2:c3]
+
+        lbl_flat = rearrange(ins_label, "b ... -> b (...)").long()
+        coords = _make_coord_grid(spatial_shape, dev)
+
+        for b in range(B):
+            uids = torch.unique(lbl_flat[b])
+            uids = uids[uids > 0]
+            if len(uids) == 0:
+                continue
+            valid_b += 1
+            fg = lbl_flat[b] > 0
+
+            if self.weight_dir > 0:
+                if self.dir_target == "centroid":
+                    dir_tgt = _compute_centroid_offsets(lbl_flat[b], coords)
+                else:
+                    dir_tgt = _compute_skeleton_offsets(
+                        lbl_flat[b], coords, spatial_shape,
+                    )
+                L_dir = L_dir + self._fg_loss(pred_dir[b], dir_tgt, fg, self.loss_dir)
+
+            if self.weight_cov > 0:
+                cov_tgt = _compute_covariance(lbl_flat[b], coords, spatial_shape)
+                L_cov = L_cov + self._fg_loss(pred_cov[b], cov_tgt, fg, self.loss_cov)
+
+            if self.weight_raw > 0 and raw_image is not None:
+                img_flat = rearrange(raw_image[b], "c ... -> c (...)").clamp(0.0, 1.0)
+                rgba_tgt = torch.cat([
+                    img_flat.expand(3, -1),
+                    fg.unsqueeze(0).float(),
+                ], dim=0)
+                raw_pred_b = torch.sigmoid(pred_raw[b])
+                L_raw = L_raw + self._fg_loss(raw_pred_b, rgba_tgt, fg, self.loss_raw)
+
+        n = max(valid_b, 1)
+        L_dir, L_cov, L_raw = L_dir / n, L_cov / n, L_raw / n
+
+        total = self.weight_dir * L_dir + self.weight_cov * L_cov + self.weight_raw * L_raw
+
+        return {"loss": total, "dir": L_dir, "cov": L_cov, "raw": L_raw}
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"spatial_dims={self.spatial_dims}, "
+            f"dir_target='{self.dir_target}', "
+            f"loss_dir='{self.loss_dir}', loss_cov='{self.loss_cov}', loss_raw='{self.loss_raw}', "
+            f"weight_dir={self.weight_dir}, weight_cov={self.weight_cov}, weight_raw={self.weight_raw})"
         )

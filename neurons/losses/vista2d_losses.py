@@ -28,18 +28,32 @@ _PAD_TUPLE = (1, 1, 1, 1)
 # ======================================================================
 
 class SemanticLoss(nn.Module):
-    """Cross-entropy + optional IoU + optional Dice loss on semantic logits.
+    """Semantic segmentation loss supporting both multi-label (sigmoid)
+    and mutually-exclusive (softmax) modes.
+
+    * **sigmoid** (default):  per-class binary cross-entropy.  Each class
+      is an independent binary classifier — a pixel can belong to multiple
+      classes simultaneously (e.g. neuron AND mitochondrion).
+      Target: ``[B, C, *spatial]`` multi-hot float or ``[B, *spatial]`` int
+      (auto-converted to one-hot).
+    * **softmax**:  standard cross-entropy with softmax.  Classes are
+      mutually exclusive — each pixel belongs to exactly one class.
+      Target: ``[B, *spatial]`` integer class labels.
+
+    Both modes support optional soft IoU and soft Dice auxiliary losses.
 
     Args:
-        weight_ce: scalar weight for CE term (default 1.0).
+        mode: ``"sigmoid"`` (multi-label, default) or ``"softmax"``(mutually exclusive).
+        weight_ce: scalar weight for CE/BCE term (default 1.0).
         weight_iou: scalar weight for IoU term (default 0.0).
         weight_dice: scalar weight for Dice term (default 0.0).
-        class_weights: per-class CE weights (optional).
-        ignore_index: label value to ignore (default -100).
+        class_weights: per-class weights (optional).
+        ignore_index: label value to ignore in softmax mode (default -100).
     """
 
     def __init__(
         self,
+        mode: str = "sigmoid",
         weight_ce: float = 1.0,
         weight_iou: float = 0.0,
         weight_dice: float = 0.0,
@@ -47,64 +61,87 @@ class SemanticLoss(nn.Module):
         ignore_index: int = -100,
     ) -> None:
         super().__init__()
+        if mode not in ("sigmoid", "softmax"):
+            raise ValueError(f"mode must be 'sigmoid' or 'softmax', got '{mode}'")
+        self.mode = mode
         self.weight_ce = weight_ce
         self.weight_iou = weight_iou
         self.weight_dice = weight_dice
         self.ignore_index = ignore_index
 
         cw = torch.tensor(class_weights, dtype=torch.float32) if class_weights else None
-        self.ce_loss = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index)
+        if mode == "softmax":
+            self.ce_loss = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index)
+        else:
+            self.ce_loss = nn.BCEWithLogitsLoss(
+                pos_weight=cw, reduction="none",
+            )
 
-    @staticmethod
-    def _soft_probs_and_one_hot(
+    def _to_probs_and_target(
+        self,
         logits: torch.Tensor,
-        target: torch.Tensor,
-        ignore_index: int = -100,
+        class_labels: torch.Tensor,
     ) -> tuple:
+        """Convert logits + labels to (probs [B,C,*], target [B,C,*])."""
         C = logits.shape[1]
-        probs = F.softmax(logits, dim=1)
-        valid = target != ignore_index
-        target_safe = target.clone()
-        target_safe[~valid] = 0
-        one_hot = F.one_hot(target_safe.long(), C).float()
-        one_hot = rearrange(one_hot, "b ... c -> b c ...")
-        valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
-        probs = probs * valid_mask
-        one_hot = one_hot * valid_mask
-        return probs, one_hot
 
-    @staticmethod
-    def _iou_loss(
+        if self.mode == "softmax":
+            probs = F.softmax(logits, dim=1)
+            valid = class_labels != self.ignore_index
+            target_safe = class_labels.clone()
+            target_safe[~valid] = 0
+            one_hot = F.one_hot(target_safe.long(), C).float()
+            one_hot = rearrange(one_hot, "b ... c -> b c ...")
+            valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
+            return probs * valid_mask, one_hot * valid_mask
+        else:
+            probs = torch.sigmoid(logits)
+            if class_labels.dim() == logits.dim():
+                target = class_labels.float()
+            else:
+                target_safe = class_labels.clone().long()
+                target_safe[target_safe < 0] = 0
+                target = F.one_hot(target_safe, C).float()
+                target = rearrange(target, "b ... c -> b c ...")
+            return probs, target
+
+    def _compute_ce(
+        self,
         logits: torch.Tensor,
-        target: torch.Tensor,
-        ignore_index: int = -100,
+        class_labels: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.mode == "softmax":
+            return self.ce_loss(logits, class_labels)
+        else:
+            _, target = self._to_probs_and_target(logits, class_labels)
+            return self.ce_loss(logits, target).mean()
+
+    def _iou_loss(
+        self,
+        logits: torch.Tensor,
+        class_labels: torch.Tensor,
         eps: float = 1e-5,
     ) -> torch.Tensor:
         """Soft IoU loss averaged over classes (1 - IoU)."""
-        probs, one_hot = SemanticLoss._soft_probs_and_one_hot(
-            logits, target, ignore_index,
-        )
+        probs, target = self._to_probs_and_target(logits, class_labels)
         spatial = tuple(range(2, probs.dim()))
-        intersection = (probs * one_hot).sum(dim=spatial)
-        union = probs.sum(dim=spatial) + one_hot.sum(dim=spatial) - intersection
+        intersection = (probs * target).sum(dim=spatial)
+        union = probs.sum(dim=spatial) + target.sum(dim=spatial) - intersection
         iou = (intersection + eps) / (union + eps)
         return 1.0 - iou.mean()
 
-    @staticmethod
     def _dice_loss(
+        self,
         logits: torch.Tensor,
-        target: torch.Tensor,
-        ignore_index: int = -100,
+        class_labels: torch.Tensor,
         eps: float = 1e-5,
     ) -> torch.Tensor:
         """Soft Dice loss averaged over classes (1 - Dice)."""
-        probs, one_hot = SemanticLoss._soft_probs_and_one_hot(
-            logits, target, ignore_index,
-        )
+        probs, target = self._to_probs_and_target(logits, class_labels)
         spatial = tuple(range(2, probs.dim()))
-        intersection = (probs * one_hot).sum(dim=spatial)
+        intersection = (probs * target).sum(dim=spatial)
         card_p = probs.sum(dim=spatial)
-        card_g = one_hot.sum(dim=spatial)
+        card_g = target.sum(dim=spatial)
         dice = (2.0 * intersection + eps) / (card_p + card_g + eps)
         return 1.0 - dice.mean()
 
@@ -116,19 +153,21 @@ class SemanticLoss(nn.Module):
         """
         Args:
             logits: [B, C, *spatial] semantic logits.
-            class_labels: [B, *spatial] integer class labels.
+            class_labels: [B, C, *spatial] multi-hot (sigmoid mode) or
+                [B, *spatial] integer labels (softmax mode).  Integer
+                labels are auto-converted to one-hot in sigmoid mode.
 
         Returns:
             Dict with ``loss``, ``ce``, ``iou``, ``dice``.
         """
-        loss_ce = self.ce_loss(logits, class_labels)
+        loss_ce = self._compute_ce(logits, class_labels)
         loss_iou = (
-            self._iou_loss(logits, class_labels, self.ignore_index)
+            self._iou_loss(logits, class_labels)
             if self.weight_iou > 0
             else torch.tensor(0.0, device=logits.device)
         )
         loss_dice = (
-            self._dice_loss(logits, class_labels, self.ignore_index)
+            self._dice_loss(logits, class_labels)
             if self.weight_dice > 0
             else torch.tensor(0.0, device=logits.device)
         )
@@ -323,10 +362,10 @@ class Vista2DLoss(nn.Module):
         weight_semantic: top-level weight for the semantic branch (default 1.0).
         weight_instance: top-level weight for the instance branch (default 1.0).
         weight_geometry: top-level weight for the geometry branch (default 0.0 = off).
+        semantic_mode: ``"sigmoid"`` (multi-label, default) or ``"softmax"``(mutually exclusive).  Forwarded to ``SemanticLoss``.
         weight_pull, weight_push, weight_norm, weight_edge, weight_bone,
         delta_v, delta_d: forwarded to ``InstanceLoss``.
-        weight_ce, weight_iou, weight_dice, class_weights, ignore_index:
-            forwarded to ``SemanticLoss``.
+        weight_ce, weight_iou, weight_dice, class_weights, ignore_index: forwarded to ``SemanticLoss``.
         geom_kwargs: extra kwargs forwarded to ``GeometryLoss``.
     """
 
@@ -335,6 +374,7 @@ class Vista2DLoss(nn.Module):
         weight_semantic: float = 1.0,
         weight_instance: float = 1.0,
         weight_geometry: float = 0.0,
+        semantic_mode: str = "sigmoid",
         weight_pull: float = 1.0,
         weight_push: float = 1.0,
         weight_norm: float = 0.001,
@@ -355,6 +395,7 @@ class Vista2DLoss(nn.Module):
         self.weight_geometry = weight_geometry
 
         self.semantic_loss = SemanticLoss(
+            mode=semantic_mode,
             weight_ce=weight_ce,
             weight_iou=weight_iou,
             weight_dice=weight_dice,

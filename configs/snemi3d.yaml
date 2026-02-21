@@ -37,6 +37,7 @@ optimizer:
     eta_min: 1.0e-6
 
 loss:
+  semantic_mode: sigmoid     # sigmoid (multi-label: mito inside neuron) or softmax (mutually exclusive)
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
@@ -50,9 +51,13 @@ loss:
   weight_edge: 10.0
   weight_bone: 10.0
   weight_geometry: 1.0
+  dir_target: skeleton         # skeleton (geometry-aware) or centroid
   weight_dir: 1.0
   weight_cov: 1.0
   weight_raw: 1.0
+  loss_dir: smooth_l1          # smooth_l1 (robust offsets), mse, or l1
+  loss_cov: mse                # mse (Frobenius-norm), l1, or smooth_l1
+  loss_raw: l1                 # l1 (sharp reconstruction), mse, or smooth_l1
   ignore_index: -100
 
 training:

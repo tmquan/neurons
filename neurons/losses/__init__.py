@@ -2,11 +2,11 @@
 Loss functions for connectomics segmentation.
 
 Includes:
-- SemanticLoss:  CE + Dice on semantic logits (2D and 3D variants)
-- InstanceLoss:  pull/push/norm discriminative on instance embeddings (2D and 3D)
-- GeometryLoss:  dir/cov/raw L2 regression for the geometry head
 - CentroidEmbeddingLoss: Classic discriminative loss (pull/push/reg on centroids)
 - SkeletonEmbeddingLoss: Geometry-aware loss (pull to skeleton, DT sampling)
+- GeometryLoss: dir/cov/raw regression (configurable: smooth_l1, mse, l1)
+- SemanticLoss: CE + Dice on semantic logits (2D and 3D variants)
+- InstanceLoss: pull/push/norm discriminative on instance embeddings (2D and 3D)
 - Vista3DLoss: Combined semantic + instance + geometry loss for 3D
 - Vista2DLoss: Combined semantic + instance + geometry loss for 2D
 - DiscriminativeLoss: Alias for CentroidEmbeddingLoss (backward compat)
@@ -15,8 +15,8 @@ Includes:
 
 from neurons.losses.discriminative import (
     CentroidEmbeddingLoss,
-    GeometryLoss,
     SkeletonEmbeddingLoss,
+    GeometryLoss,
     DiscriminativeLoss,
     DiscriminativeLossVectorized,
 )
@@ -32,13 +32,13 @@ from neurons.losses.vista2d_losses import (
 )
 
 __all__ = [
+    "CentroidEmbeddingLoss",
+    "SkeletonEmbeddingLoss",
+    "GeometryLoss",
     "SemanticLoss2D",
     "SemanticLoss3D",
     "InstanceLoss2D",
     "InstanceLoss3D",
-    "GeometryLoss",
-    "CentroidEmbeddingLoss",
-    "SkeletonEmbeddingLoss",
     "Vista3DLoss",
     "Vista2DLoss",
     "DiscriminativeLoss",

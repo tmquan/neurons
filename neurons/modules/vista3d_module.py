@@ -281,8 +281,10 @@ class Vista3DModule(pl.LightningModule):
         sem_gt = targets["semantic_labels"]
         acc = (sem_pred == sem_gt).float().mean()
         iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=predictions["semantic"].shape[1])
-        self.log(f"{prefix}/accuracy", acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/iou", iou, sync_dist=True, batch_size=bs)
+        ari = compute_per_batch_ari(sem_pred, sem_gt)
+        self.log(f"{prefix}/acc", acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/ari", ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/iou", iou, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
 
         fg_mask = targets["labels"] > 0
         inst_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)

@@ -47,8 +47,8 @@ optimizer:
 loss:
   weight_semantic: 1.0
   weight_ce: 1.0
-  weight_iou: 0.0
-  weight_dice: 0.0
+  weight_iou: 1.0
+  weight_dice: 1.0
   class_weights:
     - 0.1
     - 0.5
@@ -61,7 +61,8 @@ loss:
   delta_d: 1.5
   weight_edge: 10.0
   weight_bone: 10.0
-  weight_geometry: 0.0
+  weight_geometry: 1.0
+  dir_target: "skeleton"
   weight_dir: 1.0
   weight_cov: 1.0
   weight_raw: 1.0
