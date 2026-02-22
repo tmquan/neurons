@@ -77,7 +77,7 @@ training:
   max_epochs: 100
   accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: auto
-  strategy: auto
+  strategy: ddp  # Explicit DDP for even GPU memory distribution
   precision: 32-true  # Options: 32-true, 16-mixed, bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1

@@ -204,12 +204,18 @@ class MICRONSDataset(CircuitDataset):
 
         inputs = self._load_volume(str(files["vol"]))
         assert inputs is not None
+        inputs = inputs.astype(np.float32)
+        vmin, vmax = float(inputs.min()), float(inputs.max())
+        if vmax > vmin:
+            inputs = (inputs - vmin) / (vmax - vmin)
 
         labels: Optional[np.ndarray] = None
         if self.split in ["train", "valid"]:
             labels = self._load_volume(str(files["seg"]), required=True)
         else:
             labels = self._load_volume(str(files["seg"]), required=False)
+        if labels is not None:
+            labels = labels.astype(np.int64)
 
         synapses: Optional[np.ndarray] = None
         mitochondria: Optional[np.ndarray] = None

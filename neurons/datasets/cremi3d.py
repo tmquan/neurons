@@ -99,6 +99,12 @@ class CREMI3DDataset(CircuitDataset):
     def _prepare_data(self) -> List[Dict[str, Any]]:
         """Prepare list of data dictionaries for each sample."""
         image, label = self._load_data()
+
+        vmin, vmax = float(image.min()), float(image.max())
+        if vmax > vmin:
+            image = (image - vmin) / (vmax - vmin)
+        label = label.astype(np.int64)
+
         self._image_data = image
         self._label_data = label
 

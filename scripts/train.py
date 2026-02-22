@@ -26,9 +26,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 warnings.filterwarnings("ignore", message=r".*isinstance.*LeafSpec.*is deprecated.*")
+warnings.filterwarnings("ignore", message=r".*AccumulateGrad.*stream.*mismatch.*")
 
 import hydra
 import pytorch_lightning as pl
+from pytorch_lightning.strategies import DDPStrategy
 import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import (
@@ -319,11 +321,17 @@ def main(cfg: DictConfig) -> None:
     print(f"Logger: {cfg.get('logger', 'tensorboard')}")
 
     training_cfg = cfg.training
+    strategy_name = training_cfg.get("strategy", "auto")
+    if strategy_name == "ddp":
+        strategy = DDPStrategy(static_graph=True)
+    else:
+        strategy = strategy_name
+
     trainer = pl.Trainer(
         max_epochs=training_cfg.get("max_epochs", 100),
         accelerator=training_cfg.get("accelerator", "auto"),
         devices=training_cfg.get("devices", 1),
-        strategy=training_cfg.get("strategy", "auto"),
+        strategy=strategy,
         precision=training_cfg.get("precision", "32-true"),
         callbacks=callbacks,
         logger=logger,

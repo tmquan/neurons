@@ -13,9 +13,9 @@ data:
   batch_size: 2
   num_workers: 8
   train_val_split: 0.2
-  cache_rate: 0.5
+  cache_rate: 1.0
   slice_mode: false
-  num_samples: 400  # random 3D crops per epoch (volume has 100 Z-slices)
+  num_samples: 800  # random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
     - 32
     - 128

@@ -152,6 +152,11 @@ class SNEMI3DDataset(CircuitDataset):
                 f"https://snemi3d.grand-challenge.org/"
             )
 
+        inputs = inputs.astype(np.float32)
+        vmin, vmax = float(inputs.min()), float(inputs.max())
+        if vmax > vmin:
+            inputs = (inputs - vmin) / (vmax - vmin)
+
         labels: Optional[np.ndarray] = None
         if self.split in ["train", "valid"]:
             labels = self._load_volume(files["seg"])
@@ -160,6 +165,9 @@ class SNEMI3DDataset(CircuitDataset):
                 labels = self._load_volume(files["seg"])
             except FileNotFoundError:
                 labels = None
+
+        if labels is not None:
+            labels = labels.astype(np.int64)
 
         n_slices = inputs.shape[0]
         volume_name = "AC4" if self.split in ["train", "valid"] else "AC3"

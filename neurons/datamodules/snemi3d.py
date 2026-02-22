@@ -4,9 +4,7 @@ SNEMI3D DataModule for PyTorch Lightning.
 
 from typing import List, Optional, Tuple, Union
 
-import numpy as np
 from monai.transforms import (
-    CastToTyped,
     Compose,
     EnsureChannelFirstd,
     RandAdjustContrastd,
@@ -15,7 +13,6 @@ from monai.transforms import (
     RandRotate90d,
     RandSpatialCropd,
     Resized,
-    ScaleIntensityd,
     SpatialPadd,
     ToTensord,
 )
@@ -103,10 +100,7 @@ class SNEMI3DDataModule(CircuitDataModule):
         """
         keys = ["image", "label"]
         transforms = [
-            CastToTyped(keys=["image"], dtype=np.float32),
-            CastToTyped(keys=["label"], dtype=np.int64),
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
         ]
 
         if self.patch_size is not None:
@@ -143,10 +137,7 @@ class SNEMI3DDataModule(CircuitDataModule):
         """Get validation transforms with consistent cropping."""
         keys = ["image", "label"]
         transforms = [
-            CastToTyped(keys=["image"], dtype=np.float32),
-            CastToTyped(keys=["label"], dtype=np.int64),
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
         ]
 
         if self.patch_size is not None:

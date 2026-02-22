@@ -162,8 +162,13 @@ class MitoEM2Dataset(CircuitDataset):
                 pairs = pairs[n_train:]
 
             for vol_idx, (img_path, lbl_path) in enumerate(pairs):
-                image = self._nfty.load(str(img_path))
+                image = self._nfty.load(str(img_path)).astype(np.float32)
+                vmin, vmax = float(image.min()), float(image.max())
+                if vmax > vmin:
+                    image = (image - vmin) / (vmax - vmin)
                 label = self._nfty.load(str(lbl_path)) if lbl_path is not None else None
+                if label is not None:
+                    label = label.astype(np.int64)
 
                 if self.slice_mode and image.ndim == 3:
                     z_dim = image.shape[2] if image.shape[2] < image.shape[0] else image.shape[0]
@@ -172,7 +177,7 @@ class MitoEM2Dataset(CircuitDataset):
                     for z in range(z_dim):
                         sl_img = image[:, :, z] if use_last_axis else image[z]
                         entry: Dict[str, Any] = {
-                            "image": sl_img.astype(np.float32),
+                            "image": sl_img,
                             "dataset": ds_dir.name,
                             "volume_idx": vol_idx,
                             "slice_idx": z,
@@ -180,17 +185,17 @@ class MitoEM2Dataset(CircuitDataset):
                         }
                         if label is not None:
                             sl_lbl = label[:, :, z] if use_last_axis else label[z]
-                            entry["label"] = sl_lbl.astype(np.int64)
+                            entry["label"] = sl_lbl
                         data_list.append(entry)
                 else:
                     entry = {
-                        "image": image.astype(np.float32),
+                        "image": image,
                         "dataset": ds_dir.name,
                         "volume_idx": vol_idx,
                         "idx": len(data_list),
                     }
                     if label is not None:
-                        entry["label"] = label.astype(np.int64)
+                        entry["label"] = label
                     data_list.append(entry)
 
         if self._num_samples is not None and len(data_list) > 0:
