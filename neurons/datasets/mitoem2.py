@@ -194,8 +194,6 @@ class MitoEM2Dataset(CircuitDataset):
                     data_list.append(entry)
 
         if self._num_samples is not None and len(data_list) > 0:
-            n = self._num_samples
-            original = data_list
-            data_list = [original[i % len(original)] for i in range(n)]
+            self._virtual_len = self._num_samples
 
         return data_list

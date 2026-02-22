@@ -15,7 +15,7 @@ data:
   train_val_split: 0.2
   cache_rate: 0.5
   slice_mode: false
-  num_samples: 200  # random 3D crops per epoch (volume has 100 Z-slices)
+  num_samples: 400  # random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
     - 32
     - 128
@@ -64,6 +64,6 @@ loss:
 training:
   max_epochs: 200
   accelerator: auto
-  devices: 4
+  devices: auto
   precision: 16-mixed
   gradient_clip_val: 1.0

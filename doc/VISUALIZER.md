@@ -4,7 +4,7 @@ A web-based neuroglancer-style volume viewer with 4-panel layout (axial, coronal
 
 ## Screenshot
 
-![Neurons Volume Visualizer](../../images/visualizer.png)
+![Neurons Volume Visualizer](../images/visualizer.png)
 
 Light-gray theme with studio lighting. Multiple segments selected simultaneously —
 each rendered as translucent anisotropic Gaussian splats in the 3D panel.

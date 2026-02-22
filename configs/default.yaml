@@ -15,7 +15,7 @@ data:
   dataset: snemi3d  # Options: snemi3d, cremi3d, microns, combine
   data_root: data
   batch_size: 4
-  num_workers: 4
+  num_workers: 16
   train_val_split: 0.2
   cache_rate: 0.5
   pin_memory: true
@@ -76,7 +76,7 @@ training:
   point_sample_mode: "instance"  # Options: class, instance
   max_epochs: 100
   accelerator: auto  # Options: cpu, gpu, tpu, auto
-  devices: 4
+  devices: auto
   strategy: auto
   precision: 32-true  # Options: 32-true, 16-mixed, bf16-mixed
   gradient_clip_val: 1.0

@@ -182,6 +182,52 @@ combine = CombineDataModule(
 | MICrONS | `data/MICRONS/` | `/scratch/MICRONS/` |
 | MitoEM2 | `data/mitoem2/` | `/scratch/MitoEM2/` |
 
+## Memory-Efficient Volume Loading
+
+All datasets inherit from `CircuitDataset` (which wraps MONAI's `CacheDataset`).
+When operating in 3D volume mode (`slice_mode=False`), samples are random crops
+from the same underlying volume.  A naive implementation would store N copies of
+the full volume dict in the data list — one per sample — causing `CacheDataset`
+to cache each entry independently and consume `N ×` the volume's memory.
+
+### Virtual length mechanism
+
+`CircuitDataset` uses a **virtual length** scheme to decouple epoch length from
+the number of unique cached entries:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  _prepare_data()  returns only UNIQUE entries:           │
+│    slice_mode=True  → one entry per Z slice              │
+│    slice_mode=False → one entry per volume               │
+│                                                          │
+│  _virtual_len  controls __len__() for the DataLoader     │
+│  __getitem__(i) maps  i % real_len  to a cached entry    │
+└──────────────────────────────────────────────────────────┘
+```
+
+| Mode | Unique entries cached | `__len__()` reports |
+|---|---|---|
+| `slice_mode=True`, default `num_samples` | N_slices | N_slices |
+| `slice_mode=True`, custom `num_samples` | N_slices | `num_samples` |
+| `slice_mode=False`, any `num_samples` | **1** | `num_samples` (or N_slices) |
+
+For a 100-slice volume with `num_samples=100` in 3D mode, only **1 copy** is
+cached instead of 100.  The DataLoader still iterates 100 steps per epoch, and
+random transforms (e.g. `RandCropByPosNegLabel`) produce different crops each
+time.
+
+This applies uniformly to all four datasets:
+
+| Dataset | 3D volume mode | Slice mode with `num_samples` |
+|---|---|---|
+| SNEMI3D | 1 entry, virtual len | N_slices entries, virtual len |
+| CREMI3D | 1 entry, virtual len | N/A (always 3D) |
+| MICrONS | 1 entry, virtual len | N_slices entries, virtual len |
+| MitoEM2 | per-volume entries, virtual len | per-slice entries, virtual len |
+
+---
+
 ## EDA Notebooks
 
 | Notebook | Dataset |

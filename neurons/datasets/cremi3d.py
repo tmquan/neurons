@@ -127,8 +127,8 @@ class CREMI3DDataset(CircuitDataset):
             "volume": volume_name,
             "idx": 0,
         }
-        n_samples = self._num_samples if self._num_samples is not None else image.shape[0]
-        return [data_dict] * n_samples
+        self._virtual_len = self._num_samples if self._num_samples is not None else image.shape[0]
+        return [data_dict]
 
     def _load_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """Load and merge CREMI volumes."""

@@ -237,9 +237,7 @@ class MICRONSDataset(CircuitDataset):
         n_slices = inputs_split.shape[0]
 
         if self.slice_mode:
-            n_out = self._num_samples if self._num_samples is not None else n_slices
-            for i in range(n_out):
-                si = i % n_slices
+            for si in range(n_slices):
                 data_dict: Dict[str, Any] = {
                     "image": inputs_split[si],
                     "slice_idx": z_range[si] if isinstance(z_range, range) else si,
@@ -252,6 +250,8 @@ class MICRONSDataset(CircuitDataset):
                 if mito_split is not None:
                     data_dict["mitochondria"] = mito_split[si]
                 data_list.append(data_dict)
+            if self._num_samples is not None:
+                self._virtual_len = self._num_samples
 
         elif self.patch_size is not None:
             patch_indices = self._generate_patch_indices(
@@ -280,7 +280,7 @@ class MICRONSDataset(CircuitDataset):
                 data_dict["synapses"] = synapses_split
             if mito_split is not None:
                 data_dict["mitochondria"] = mito_split
-            n_out = self._num_samples if self._num_samples is not None else n_slices
-            data_list.extend([data_dict] * n_out)
+            data_list.append(data_dict)
+            self._virtual_len = self._num_samples if self._num_samples is not None else n_slices
 
         return data_list

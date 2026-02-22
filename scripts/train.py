@@ -21,8 +21,11 @@ Usage:
 """
 
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+warnings.filterwarnings("ignore", message=r".*isinstance.*LeafSpec.*is deprecated.*")
 
 import hydra
 import pytorch_lightning as pl

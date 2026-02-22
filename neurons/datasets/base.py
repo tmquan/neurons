@@ -66,6 +66,7 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
         self.root_dir = Path(root_dir)
         self.split = split.lower()
         self.train_val_split = train_val_split
+        self._virtual_len: Optional[int] = None
 
         if self.split not in ["train", "valid", "test"]:
             raise ValueError(
@@ -92,6 +93,15 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
             cache_rate=cache_rate,
             num_workers=num_workers,
         )
+
+    def __len__(self) -> int:
+        if self._virtual_len is not None:
+            return self._virtual_len
+        return super().__len__()
+
+    def __getitem__(self, index: int) -> Any:
+        real_index = index % super().__len__() if self._virtual_len is not None else index
+        return super().__getitem__(real_index)
 
     @property
     @abstractmethod

@@ -165,27 +165,27 @@ class SNEMI3DDataset(CircuitDataset):
         volume_name = "AC4" if self.split in ["train", "valid"] else "AC3"
 
         if self.slice_mode:
-            n_samples = self._num_samples if self._num_samples is not None else n_slices
-            for i in range(n_samples):
-                si = i % n_slices
+            for si in range(n_slices):
                 data_dict: Dict[str, Any] = {
                     "image": inputs[si],
                     "slice_idx": si,
                     "volume": volume_name,
-                    "idx": i,
+                    "idx": si,
                 }
                 if labels is not None:
                     data_dict["label"] = labels[si]
                 data_list.append(data_dict)
+            if self._num_samples is not None:
+                self._virtual_len = self._num_samples
         else:
-            data_dict: Dict[str, Any] = {
+            data_dict_3d: Dict[str, Any] = {
                 "image": inputs,
                 "volume": volume_name,
                 "idx": 0,
             }
             if labels is not None:
-                data_dict["label"] = labels
-            n_samples = self._num_samples if self._num_samples is not None else n_slices
-            data_list.extend([data_dict] * n_samples)
+                data_dict_3d["label"] = labels
+            data_list.append(data_dict_3d)
+            self._virtual_len = self._num_samples if self._num_samples is not None else n_slices
 
         return data_list
