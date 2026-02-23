@@ -1,21 +1,17 @@
 # Combined Multi-Dataset Vista3D Configuration
-# Training Vista3D model on combined SNEMI3D and CREMI3D datasets
+# Training Vista3D model on SNEMI3D + CREMI3D + MitoEM2 + MICRONS
 #
 # Dataset label format:
 # - 'image': input EM volume [Z, Y, X]
 # - 'label': indexed instance segmentation (unique IDs per object)
-# - 'class_ids': semantic class for each pixel (background=0, neuron=1, ...)
+# - 'semantic_ids': semantic class per pixel (background=0, neuron=1, ...)
 
 defaults:
   - default
 
 experiment_name: combine_vista3d
 project_name: neurons-vista3d
-seed: 42
-logger: tensorboard
-log_dir: logs
 
-# Data Configuration
 data:
   dataset: combine
   datasets:
@@ -45,53 +41,30 @@ data:
     - 128
     - 128
   batch_size: 4
-  num_workers: 4
-  cache_rate: 0.0
+  num_workers: 8
+  cache_rate: 0.0  # must be 0 in 3D mode: virtual_len + cache freezes a single random crop
   train_val_split: 0.0
   num_samples: 4000
 
-# Model Configuration
 model:
   type: vista3d
-  encoder_name: vista3d
-  feature_size: 64
-  dropout: 0.2
   in_channels: 1
   num_classes: 16
   emb_dim: 16
+  feature_size: 48
+  dropout: 0.2
 
-# Training Configuration
-training:
-  max_epochs: 300
-  accelerator: gpu
-  devices: 1
-  strategy: auto
-  precision: 16-mixed
-  gradient_clip_val: 1.0
-  accumulate_grad_batches: 1
-  val_check_interval: 1.0
-  check_val_every_n_epoch: 1
-  num_sanity_val_steps: 2
-  log_every_n_steps: 10
-  benchmark: true
-  deterministic: false
-  fast_dev_run: false
-
-# Optimizer Configuration
 optimizer:
   type: adamw
   lr: 1.0e-4
   weight_decay: 1.0e-5
-  betas:
-    - 0.9
-    - 0.999
   scheduler:
     type: cosine
     T_max: 300
     eta_min: 1.0e-7
 
-# Loss Configuration
 loss:
+  semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
@@ -122,13 +95,40 @@ loss:
   weight_edge: 10.0
   weight_bone: 10.0
   weight_geometry: 1.0
-  dir_target: "skeleton"
+  dir_target: centroid
   weight_dir: 1.0
   weight_cov: 1.0
   weight_raw: 1.0
+  loss_dir: smooth_l1
+  loss_cov: mse
+  loss_raw: l1
   ignore_index: -100
 
-# Callbacks
+training:
+  max_epochs: 300
+  accelerator: auto
+  devices: auto
+  strategy: ddp
+  precision: 16-mixed
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  limit_val_batches: 20
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 10
+  enable_progress_bar: true
+  enable_model_summary: true
+  deterministic: false
+  benchmark: true
+  fast_dev_run: false
+  training_modes:
+    - automatic
+    - proofread
+  num_pos_points: 5
+  num_neg_points: 5
+  point_sample_mode: "instance"
+
 callbacks:
   checkpoint:
     enabled: true
@@ -138,12 +138,20 @@ callbacks:
     monitor: val/loss
     mode: min
     save_last: true
+    verbose: true
 
   early_stopping:
     enabled: true
     monitor: val/loss
     patience: 50
     mode: min
+    verbose: true
+    min_delta: 0.0
 
   lr_monitor:
     enabled: true
+
+  image_logger:
+    enabled: true
+    every_n_epochs: 1
+    max_images: 4
