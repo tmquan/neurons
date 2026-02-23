@@ -16,6 +16,52 @@ import torch
 from einops import rearrange
 
 
+def erode_neuron_boundaries(
+    labels: torch.Tensor,
+    spatial_dims: int = 3,
+) -> torch.Tensor:
+    """Set neuron instance boundary pixels to background (0).
+
+    A pixel is considered a boundary pixel if any of its immediate
+    neighbors (6-connected in 3D, 4-connected in 2D) has a different
+    non-zero label.  This creates a 1-pixel gap between adjacent
+    instances, which helps discriminative losses separate touching objects.
+
+    Args:
+        labels: Instance label tensor [*spatial] or [B, *spatial].
+        spatial_dims: 2 or 3.
+
+    Returns:
+        Labels with boundary pixels set to 0.
+    """
+    import torch.nn.functional as F
+
+    batched = labels.dim() == spatial_dims + 1
+    if not batched:
+        labels = rearrange(labels, "... -> 1 ...")
+
+    lbl = rearrange(labels, "b ... -> b 1 ...").float()
+
+    if spatial_dims == 3:
+        pad = (1, 1, 1, 1, 1, 1)
+        pool_fn = F.max_pool3d
+    else:
+        pad = (1, 1, 1, 1)
+        pool_fn = F.max_pool2d
+
+    padded_arr = F.pad(lbl, pad, mode="replicate")
+    volume_max = pool_fn(+padded_arr, kernel_size=3, stride=1, padding=0)
+    volume_min = pool_fn(-padded_arr, kernel_size=3, stride=1, padding=0).neg_()
+
+    boundary = rearrange(volume_max != volume_min, "b 1 ... -> b ...")
+    out = labels.clone()
+    out[boundary] = 0
+
+    if not batched:
+        out = rearrange(out, "1 ... -> ...")
+    return out
+
+
 def relabel_sequential(
     labels: torch.Tensor,
     start_label: int = 1,

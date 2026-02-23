@@ -20,7 +20,7 @@ from monai.transforms import (
 
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets.mitoem2 import MitoEM2Dataset
-from neurons.utils.labels import relabel_after_crop
+from neurons.utils.labels import erode_neuron_boundaries, relabel_after_crop
 
 
 class MitoEM2DataModule(CircuitDataModule):
@@ -63,11 +63,13 @@ class MitoEM2DataModule(CircuitDataModule):
         dataset_name: Optional[Union[str, List[str]]] = None,
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
+        erode_boundaries: bool = False,
         persistent_workers: bool = True,
     ) -> None:
         self.dataset_name = dataset_name
         self.slice_mode = slice_mode
         self.num_samples = num_samples
+        self.erode_boundaries = erode_boundaries
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
@@ -98,13 +100,18 @@ class MitoEM2DataModule(CircuitDataModule):
         ]
 
         if self.patch_size is not None:
-            transforms.extend([
+            crop_post = [
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
                 Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
                     lbl.squeeze(0), spatial_dims=spatial_dims,
                 ).unsqueeze(0)),
-            ])
+            ]
+            if self.erode_boundaries:
+                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
+                    lbl.squeeze(0), spatial_dims=spatial_dims,
+                ).unsqueeze(0)))
+            transforms.extend(crop_post)
         elif self.image_size is not None:
             transforms.append(
                 Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
@@ -130,13 +137,18 @@ class MitoEM2DataModule(CircuitDataModule):
         ]
 
         if self.patch_size is not None:
-            transforms.extend([
+            crop_post = [
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
                 Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
                     lbl.squeeze(0), spatial_dims=spatial_dims,
                 ).unsqueeze(0)),
-            ])
+            ]
+            if self.erode_boundaries:
+                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
+                    lbl.squeeze(0), spatial_dims=spatial_dims,
+                ).unsqueeze(0)))
+            transforms.extend(crop_post)
         elif self.image_size is not None:
             transforms.append(
                 Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),

@@ -20,7 +20,7 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import CREMI3DDataset
-from neurons.utils.labels import relabel_after_crop
+from neurons.utils.labels import erode_neuron_boundaries, relabel_after_crop
 
 
 class CREMI3DDataModule(CircuitDataModule):
@@ -56,12 +56,14 @@ class CREMI3DDataModule(CircuitDataModule):
         include_clefts: bool = True,
         include_mito: bool = False,
         num_samples: Optional[int] = None,
+        erode_boundaries: bool = False,
         persistent_workers: bool = True,
     ) -> None:
         self.volumes = volumes if volumes is not None else ["A", "B"]
         self.include_clefts = include_clefts
         self.include_mito = include_mito
         self.num_samples = num_samples
+        self.erode_boundaries = erode_boundaries
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
@@ -92,15 +94,18 @@ class CREMI3DDataModule(CircuitDataModule):
         ]
 
         if self.patch_size is not None:
-            transforms.extend(
-                [
-                    SpatialPadd(keys=keys, spatial_size=self.patch_size),
-                    RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                    Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
-                        lbl.squeeze(0), spatial_dims=3,
-                    ).unsqueeze(0)),
-                ]
-            )
+            crop_post = [
+                SpatialPadd(keys=keys, spatial_size=self.patch_size),
+                RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                    lbl.squeeze(0), spatial_dims=3,
+                ).unsqueeze(0)),
+            ]
+            if self.erode_boundaries:
+                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
+                    lbl.squeeze(0), spatial_dims=3,
+                ).unsqueeze(0)))
+            transforms.extend(crop_post)
         elif self.image_size is not None:
             transforms.append(
                 Resized(
@@ -131,15 +136,18 @@ class CREMI3DDataModule(CircuitDataModule):
         ]
 
         if self.patch_size is not None:
-            transforms.extend(
-                [
-                    SpatialPadd(keys=keys, spatial_size=self.patch_size),
-                    RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                    Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
-                        lbl.squeeze(0), spatial_dims=3,
-                    ).unsqueeze(0)),
-                ]
-            )
+            crop_post = [
+                SpatialPadd(keys=keys, spatial_size=self.patch_size),
+                RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                    lbl.squeeze(0), spatial_dims=3,
+                ).unsqueeze(0)),
+            ]
+            if self.erode_boundaries:
+                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
+                    lbl.squeeze(0), spatial_dims=3,
+                ).unsqueeze(0)))
+            transforms.extend(crop_post)
         elif self.image_size is not None:
             transforms.append(
                 Resized(

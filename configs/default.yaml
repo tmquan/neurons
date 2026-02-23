@@ -22,6 +22,7 @@ data:
   image_size: null  # Optional resize, e.g., [256, 256]
   slice_mode: true  # Return 2D slices
   num_samples: null  # Samples per epoch (null = auto from volume size)
+  erode_boundaries: false  # Set instance boundary pixels to background (0)
 
 # Model configuration
 model:

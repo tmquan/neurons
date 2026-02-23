@@ -15,11 +15,12 @@ data:
   train_val_split: 0.0
   cache_rate: 0.0  # must be 0 in 3D mode: virtual_len + cache freezes a single random crop
   slice_mode: false
-  num_samples: 4000  # random 3D crops per epoch (volume has 100 Z-slices)
+  num_samples: 16000  # random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
     - 32
     - 128
     - 128
+    
 
 model:
   type: vista3d
@@ -71,7 +72,7 @@ training:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
-  limit_val_batches: 20
+  limit_val_batches: 100
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 2
   log_every_n_steps: 50
