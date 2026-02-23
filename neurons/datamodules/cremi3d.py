@@ -7,7 +7,6 @@ from typing import List, Optional, Tuple, Union
 from monai.transforms import (
     Compose,
     EnsureChannelFirstd,
-    Lambdad,
     RandAdjustContrastd,
     RandFlipd,
     RandGaussianNoised,
@@ -20,15 +19,12 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import CREMI3DDataset
-from neurons.utils.labels import erode_neuron_boundaries, relabel_after_crop
+from neurons.transforms import RelabelAfterCropd, RandErodeNeuronBoundariesd
 
 
 class CREMI3DDataModule(CircuitDataModule):
     """
     PyTorch Lightning DataModule for CREMI3D dataset.
-
-    Wraps CREMI3DDataset with appropriate transforms for training
-    neuron/synapse segmentation models.
 
     Args:
         data_root: Path to CREMI3D data directory.
@@ -38,6 +34,7 @@ class CREMI3DDataModule(CircuitDataModule):
         include_clefts: Include cleft annotations (default: True).
         include_mito: Include mitochondria annotations (default: False).
         patch_size: Random crop size (D, H, W) for training.
+        erode_boundaries: Probability of eroding neuron boundaries (0.0=off).
     """
 
     dataset_class = CREMI3DDataset
@@ -56,7 +53,7 @@ class CREMI3DDataModule(CircuitDataModule):
         include_clefts: bool = True,
         include_mito: bool = False,
         num_samples: Optional[int] = None,
-        erode_boundaries: bool = False,
+        erode_boundaries: float = 0.0,
         persistent_workers: bool = True,
     ) -> None:
         self.volumes = volumes if volumes is not None else ["A", "B"]
@@ -86,77 +83,50 @@ class CREMI3DDataModule(CircuitDataModule):
             kwargs["num_samples"] = self.num_samples
         return kwargs
 
+    def _label_post_crop(self) -> list:
+        steps = [RelabelAfterCropd(keys=["label"], spatial_dims=3)]
+        if self.erode_boundaries > 0:
+            steps.append(RandErodeNeuronBoundariesd(
+                keys=["label"], prob=self.erode_boundaries, spatial_dims=3,
+            ))
+        return steps
+
     def get_train_transforms(self) -> Compose:
-        """Get training transforms optimized for CREMI3D."""
         keys = ["image", "label"]
-        transforms = [
-            EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-        ]
+        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
 
         if self.patch_size is not None:
-            crop_post = [
+            transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
-                    lbl.squeeze(0), spatial_dims=3,
-                ).unsqueeze(0)),
-            ]
-            if self.erode_boundaries:
-                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
-                    lbl.squeeze(0), spatial_dims=3,
-                ).unsqueeze(0)))
-            transforms.extend(crop_post)
+                *self._label_post_crop(),
+            ])
         elif self.image_size is not None:
-            transforms.append(
-                Resized(
-                    keys=keys,
-                    spatial_size=self.image_size,
-                    mode=["bilinear", "nearest"],
-                )
-            )
+            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
-        transforms.extend(
-            [
-                RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
-                RandFlipd(keys=keys, prob=0.5, spatial_axis=1),
-                RandRotate90d(keys=keys, prob=0.5, spatial_axes=(1, 2)),
-                RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
-                RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
-                ToTensord(keys=keys),
-            ]
-        )
+        transforms.extend([
+            RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
+            RandFlipd(keys=keys, prob=0.5, spatial_axis=1),
+            RandRotate90d(keys=keys, prob=0.5, spatial_axes=(1, 2)),
+            RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
+            RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
+            ToTensord(keys=keys),
+        ])
 
         return Compose(transforms)
 
     def get_val_transforms(self) -> Compose:
-        """Get validation transforms with consistent cropping."""
         keys = ["image", "label"]
-        transforms = [
-            EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-        ]
+        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
 
         if self.patch_size is not None:
-            crop_post = [
+            transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
-                    lbl.squeeze(0), spatial_dims=3,
-                ).unsqueeze(0)),
-            ]
-            if self.erode_boundaries:
-                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
-                    lbl.squeeze(0), spatial_dims=3,
-                ).unsqueeze(0)))
-            transforms.extend(crop_post)
+                *self._label_post_crop(),
+            ])
         elif self.image_size is not None:
-            transforms.append(
-                Resized(
-                    keys=keys,
-                    spatial_size=self.image_size,
-                    mode=["bilinear", "nearest"],
-                )
-            )
+            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
         transforms.append(ToTensord(keys=keys))
-
         return Compose(transforms)

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from einops import rearrange
+from einops import rearrange, repeat
 
 
 def _to_2d(t: torch.Tensor) -> torch.Tensor:
@@ -27,12 +27,11 @@ def _to_2d(t: torch.Tensor) -> torch.Tensor:
 
 def _normalise(t: torch.Tensor) -> torch.Tensor:
     """Min-max normalise to [0, 1] per image in the batch."""
-    B = t.shape[0]
-    flat = t.reshape(B, -1)
+    flat = rearrange(t, "b ... -> b (...)")
     lo = flat.min(dim=1, keepdim=True).values
     hi = flat.max(dim=1, keepdim=True).values
     denom = (hi - lo).clamp(min=1e-5)
-    return ((flat - lo) / denom).reshape_as(t)
+    return ((rearrange(t, "b ... -> b (...)") - lo) / denom).reshape_as(t)
 
 
 def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
@@ -45,12 +44,12 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
         [B, 3, H, W] float tensor in [0, 1].
     """
     B, H, W = labels.shape
-    flat = labels.reshape(-1).long()
+    flat = rearrange(labels, "b h w -> (b h w)").long()
     torch.manual_seed(0)
     palette = torch.rand(flat.max().item() + 1, 3, device=labels.device)
     palette[0] = 0.0
-    rgb = palette[flat].reshape(B, H, W, 3)
-    return rearrange(rgb, "b h w c -> b c h w")
+    rgb = palette[flat]
+    return rearrange(rgb, "(b h w) c -> b c h w", b=B, h=H, w=W)
 
 
 def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
@@ -161,7 +160,7 @@ def _log_predictions(
     ch_dir = S
     ch_cov = S * S
 
-    img_gray = _normalise(images).expand(-1, 3, -1, -1)
+    img_gray = repeat(_normalise(images), "b 1 h w -> b 3 h w")
     lbl_rgb = _label_to_rgb(labels.long())
     sem_ids = sem.argmax(dim=1)
     sem_rgb = _label_to_rgb(sem_ids)
@@ -175,7 +174,7 @@ def _log_predictions(
 
     trace = sum(geom[:, ch_dir + i * S + i: ch_dir + i * S + i + 1]
                 for i in range(S))
-    cov_heat = _normalise(trace).expand(-1, 3, -1, -1)
+    cov_heat = repeat(_normalise(trace), "b 1 h w -> b 3 h w")
 
     g_raw = torch.sigmoid(geom[:, ch_dir + ch_cov:])
     g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
@@ -188,11 +187,11 @@ def _log_predictions(
     if clusterer is not None:
         fg_mask = labels > 0
         if inst.dim() == 5:
-            fg_mask_full = _to_2d(fg_mask.unsqueeze(1)).squeeze(1)
+            fg_mask_full = rearrange(_to_2d(rearrange(fg_mask, "b ... -> b 1 ...")), "b 1 ... -> b ...")
         else:
             fg_mask_full = fg_mask
-        ins_pred, _, _ = clusterer(inst, fg_mask_full.unsqueeze(1) if fg_mask_full.dim() == 3 else fg_mask_full)
-        ins_pred_2d = _to_2d(ins_pred.unsqueeze(1)).squeeze(1) if ins_pred.dim() > 3 else ins_pred
+        ins_pred, _, _ = clusterer(inst, rearrange(fg_mask_full, "b ... -> b 1 ...") if fg_mask_full.dim() == 3 else fg_mask_full)
+        ins_pred_2d = rearrange(_to_2d(rearrange(ins_pred, "b ... -> b 1 ...")), "b 1 ... -> b ...") if ins_pred.dim() > 3 else ins_pred
         ins_pred_rgb = _label_to_rgb(ins_pred_2d.long())
         tb.add_images(f"{tag}/instance_pred", ins_pred_rgb, global_step=epoch)
 
@@ -268,11 +267,11 @@ class ImageLogger(pl.Callback):
         batch = self._train_batch
         images = batch["image"].to(pl_module.device)
         if images.dim() == self.spatial_dims + 1:
-            images = images.unsqueeze(1)
+            images = rearrange(images, "b ... -> b 1 ...")
 
         labels = batch["label"].to(pl_module.device)
         if labels.dim() == self.spatial_dims + 2:
-            labels = labels.squeeze(1)
+            labels = rearrange(labels, "b 1 ... -> b ...")
 
         n = min(images.shape[0], self.max_images)
 
@@ -281,7 +280,7 @@ class ImageLogger(pl.Callback):
         clusterer = getattr(pl_module, "_clusterer", None)
 
         images_2d = _to_2d(images[:n])
-        labels_2d = _to_2d(labels[:n].unsqueeze(1)).squeeze(1)
+        labels_2d = rearrange(_to_2d(rearrange(labels[:n], "b ... -> b 1 ...")), "b 1 ... -> b ...")
 
         _log_predictions(
             tb, "train_vis", images_2d, labels_2d,

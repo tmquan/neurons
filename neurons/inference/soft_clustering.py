@@ -16,7 +16,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 
 
 class SoftMeanShift(nn.Module):
@@ -250,7 +250,7 @@ class HoughVoting(nn.Module):
         device = offsets.device
 
         coords = self._make_coords(spatial_shape, device)
-        coords = rearrange(coords, "s ... -> 1 s ...").expand(B, -1, *spatial_shape)
+        coords = repeat(rearrange(coords, "s ... -> 1 s ..."), "1 s ... -> b s ...", b=B)
         votes = coords + offsets
 
         if foreground_mask is None:

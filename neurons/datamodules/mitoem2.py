@@ -7,7 +7,6 @@ from typing import List, Optional, Tuple, Union
 from monai.transforms import (
     Compose,
     EnsureChannelFirstd,
-    Lambdad,
     RandAdjustContrastd,
     RandFlipd,
     RandGaussianNoised,
@@ -20,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets.mitoem2 import MitoEM2Dataset
-from neurons.utils.labels import erode_neuron_boundaries, relabel_after_crop
+from neurons.transforms import RelabelAfterCropd, RandErodeNeuronBoundariesd
 
 
 class MitoEM2DataModule(CircuitDataModule):
@@ -32,20 +31,10 @@ class MitoEM2DataModule(CircuitDataModule):
         batch_size: Batch size (default: 4).
         num_workers: Data loading workers (default: 4).
         dataset_name: Specific dataset to load (e.g. 'Dataset001_ME2-Beta').
-            None loads all datasets found in data_root.
+            Accepts str, list of str, or None (loads all).
         slice_mode: Return 2D slices if True (default: True).
         patch_size: Random crop size (H, W) or (D, H, W) for training.
-
-    Example:
-        >>> dm = MitoEM2DataModule(
-        ...     data_root="data/mitoem2",
-        ...     dataset_name="Dataset001_ME2-Beta",
-        ...     batch_size=8,
-        ... )
-        >>> dm.setup("fit")
-        >>> for batch in dm.train_dataloader():
-        ...     images = batch["image"]  # [B, 1, H, W]
-        ...     labels = batch["label"]  # [B, 1, H, W]  (0=bg, 1=mito, 2=boundary)
+        erode_boundaries: Probability of eroding neuron boundaries (0.0=off).
     """
 
     dataset_class = MitoEM2Dataset
@@ -63,7 +52,7 @@ class MitoEM2DataModule(CircuitDataModule):
         dataset_name: Optional[Union[str, List[str]]] = None,
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
-        erode_boundaries: bool = False,
+        erode_boundaries: float = 0.0,
         persistent_workers: bool = True,
     ) -> None:
         self.dataset_name = dataset_name
@@ -91,31 +80,27 @@ class MitoEM2DataModule(CircuitDataModule):
             kwargs["num_samples"] = self.num_samples
         return kwargs
 
+    def _label_post_crop(self, spatial_dims: int) -> list:
+        steps = [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
+        if self.erode_boundaries > 0:
+            steps.append(RandErodeNeuronBoundariesd(
+                keys=["label"], prob=self.erode_boundaries, spatial_dims=spatial_dims,
+            ))
+        return steps
+
     def get_train_transforms(self) -> Compose:
-        """Training transforms for MitoEM2 (3-class semantic segmentation)."""
         keys = ["image", "label"]
         spatial_dims = 2 if self.slice_mode else 3
-        transforms = [
-            EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-        ]
+        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
 
         if self.patch_size is not None:
-            crop_post = [
+            transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
-                    lbl.squeeze(0), spatial_dims=spatial_dims,
-                ).unsqueeze(0)),
-            ]
-            if self.erode_boundaries:
-                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
-                    lbl.squeeze(0), spatial_dims=spatial_dims,
-                ).unsqueeze(0)))
-            transforms.extend(crop_post)
+                *self._label_post_crop(spatial_dims),
+            ])
         elif self.image_size is not None:
-            transforms.append(
-                Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
-            )
+            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
         transforms.extend([
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
@@ -129,31 +114,18 @@ class MitoEM2DataModule(CircuitDataModule):
         return Compose(transforms)
 
     def get_val_transforms(self) -> Compose:
-        """Validation transforms for MitoEM2."""
         keys = ["image", "label"]
         spatial_dims = 2 if self.slice_mode else 3
-        transforms = [
-            EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-        ]
+        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
 
         if self.patch_size is not None:
-            crop_post = [
+            transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
-                    lbl.squeeze(0), spatial_dims=spatial_dims,
-                ).unsqueeze(0)),
-            ]
-            if self.erode_boundaries:
-                crop_post.append(Lambdad(keys=["label"], func=lambda lbl: erode_neuron_boundaries(
-                    lbl.squeeze(0), spatial_dims=spatial_dims,
-                ).unsqueeze(0)))
-            transforms.extend(crop_post)
+                *self._label_post_crop(spatial_dims),
+            ])
         elif self.image_size is not None:
-            transforms.append(
-                Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
-            )
+            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
         transforms.append(ToTensord(keys=keys))
-
         return Compose(transforms)

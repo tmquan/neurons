@@ -22,7 +22,7 @@ data:
   image_size: null  # Optional resize, e.g., [256, 256]
   slice_mode: true  # Return 2D slices
   num_samples: null  # Samples per epoch (null = auto from volume size)
-  erode_boundaries: false  # Set instance boundary pixels to background (0)
+  erode_boundaries: 0.0  # Probability of eroding neuron boundaries to bg (0.0=off, 0.5=50%, 1.0=always)
 
 # Model configuration
 model:

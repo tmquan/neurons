@@ -177,7 +177,7 @@ class Vista2DModule(pl.LightningModule):
                             dtype=torch.long, device=labels.device)
         for new_id, old_id in enumerate(known_ids, start=1):
             remap[old_id] = new_id
-        flat = inst.view(-1)
+        flat = rearrange(inst, "... -> (...)")
         mask = flat > 0
         flat[mask] = remap[flat[mask]]
         targets["labels"] = inst

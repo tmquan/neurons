@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, reduce
+from einops import rearrange, reduce, repeat
 from scipy.ndimage import distance_transform_edt as _scipy_edt, gaussian_filter as _gauss
 
 from neurons.losses.skeletonize import Skeletonize
@@ -119,7 +119,7 @@ def _make_coord_grid(spatial_shape: Tuple, device: torch.device) -> torch.Tensor
     grids = torch.meshgrid(*ranges, indexing="ij")
     stacked = torch.stack(list(reversed(grids)), dim=0)  # [S, *spatial]
     S = len(spatial_shape)
-    return stacked.reshape(S, -1)
+    return rearrange(stacked, "s ... -> s (...)")
 
 
 def _spatial_gradient(x: torch.Tensor) -> List[torch.Tensor]:
@@ -166,7 +166,7 @@ def _flat_indices(
     strides_t = torch.tensor(
         list(reversed(strides)), device=coords_ij.device, dtype=torch.long,
     )
-    return (coords_ij.long() * strides_t.unsqueeze(0)).sum(dim=1)
+    return (coords_ij.long() * rearrange(strides_t, "s -> 1 s")).sum(dim=1)
 
 
 _SKEL_MODULE: Optional[Skeletonize] = None
@@ -225,7 +225,7 @@ def _compute_centroid_offsets(
     for uid in uids:
         mask = lbl_flat == uid
         centroid = coords[:, mask].mean(dim=1)               # [S]
-        offsets[:, mask] = centroid.unsqueeze(1) - coords[:, mask]
+        offsets[:, mask] = rearrange(centroid, "s -> s 1") - coords[:, mask]
 
     norms = offsets.norm(dim=0, keepdim=True).clamp(min=1e-6)
     offsets = offsets / norms
@@ -286,7 +286,7 @@ def _compute_skeleton_offsets(
 
     norms = offsets.norm(dim=0, keepdim=True).clamp(min=1e-6)
     offsets = offsets / norms
-    offsets[:, lbl_flat.reshape(-1) == 0] = 0.0
+    offsets[:, rearrange(lbl_flat, "... -> (...)") == 0] = 0.0
 
     return offsets
 
@@ -445,7 +445,7 @@ def _compute_skeleton_targets(
             nearest_ridge = skel_xy[dists.argmin(dim=1)]            # [P, S]
 
             fi = _flat_indices(pixel_ij, spatial_shape)
-            nr_skel_flat = nr_skel[b].reshape(S, -1)
+            nr_skel_flat = rearrange(nr_skel[b], "s ... -> s (...)")
             for s in range(S):
                 nr_skel_flat[s, fi] = nearest_ridge[:, s]
 
@@ -458,7 +458,7 @@ def _compute_skeleton_targets(
 
             grads_dim = _spatial_gradient(dt)
             grads_xy = list(reversed(grads_dim))
-            dt_grad_flat = dt_grad[b].reshape(S, -1)
+            dt_grad_flat = rearrange(dt_grad[b], "s ... -> s (...)")
             for s in range(S):
                 dt_grad_flat[s, fi] = grads_xy[s].reshape(-1)[fi]
 
@@ -658,7 +658,7 @@ class SkeletonEmbeddingLoss(nn.Module):
         ranges = [torch.arange(s, device=device, dtype=torch.float32)
                   for s in spatial_shape]
         grids = torch.meshgrid(*ranges, indexing="ij")
-        return torch.stack(list(reversed(grids)), dim=0).unsqueeze(0)
+        return rearrange(torch.stack(list(reversed(grids)), dim=0), "s ... -> 1 s ...")
 
     def forward(
         self,
@@ -705,7 +705,7 @@ class SkeletonEmbeddingLoss(nn.Module):
         spatial = offsets.shape[2:]
         device = offsets.device
 
-        coords = self._make_coords(spatial, device).expand(B, -1, *spatial)
+        coords = repeat(self._make_coords(spatial, device), "1 s ... -> b s ...", b=B)
         embeddings = coords + offsets
 
         fg = gt_labels > 0
@@ -1010,8 +1010,8 @@ class GeometryLoss(nn.Module):
             if self.weight_raw > 0 and raw_image is not None:
                 img_flat = rearrange(raw_image[b], "c ... -> c (...)").clamp(0.0, 1.0)
                 rgba_tgt = torch.cat([
-                    img_flat.expand(3, -1),
-                    fg.unsqueeze(0).float(),
+                    repeat(img_flat, "1 n -> 3 n"),
+                    rearrange(fg.float(), "n -> 1 n"),
                 ], dim=0)
                 raw_pred_b = torch.sigmoid(pred_raw[b])
                 L_raw = L_raw + self._fg_loss(raw_pred_b, rgba_tgt, fg, self.loss_raw)

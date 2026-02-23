@@ -22,13 +22,14 @@ def erode_neuron_boundaries(
 ) -> torch.Tensor:
     """Set neuron instance boundary pixels to background (0).
 
-    A pixel is considered a boundary pixel if any of its immediate
-    neighbors (6-connected in 3D, 4-connected in 2D) has a different
-    non-zero label.  This creates a 1-pixel gap between adjacent
-    instances, which helps discriminative losses separate touching objects.
+    A pixel is on a boundary if any neighbor (3x3 kernel) has a different
+    non-zero label.  Creates a 1-pixel gap between adjacent instances.
+
+    Pure function — no randomness.  Use ``RandErodeNeuronBoundariesd``
+    from ``neurons.transforms`` for the stochastic MONAI transform.
 
     Args:
-        labels: Instance label tensor [*spatial] or [B, *spatial].
+        labels: Instance label tensor [*spatial] or [C, *spatial].
         spatial_dims: 2 or 3.
 
     Returns:
@@ -36,30 +37,25 @@ def erode_neuron_boundaries(
     """
     import torch.nn.functional as F
 
-    batched = labels.dim() == spatial_dims + 1
-    if not batched:
-        labels = rearrange(labels, "... -> 1 ...")
-
-    lbl = rearrange(labels, "b ... -> b 1 ...").float()
+    has_channel = labels.dim() == spatial_dims + 1
+    inp = rearrange(labels, "... -> 1 1 ...") if not has_channel else rearrange(labels, "c ... -> 1 c ...")
 
     if spatial_dims == 3:
-        pad = (1, 1, 1, 1, 1, 1)
-        pool_fn = F.max_pool3d
+        pad, pool_fn = (1, 1, 1, 1, 1, 1), F.max_pool3d
     else:
-        pad = (1, 1, 1, 1)
-        pool_fn = F.max_pool2d
+        pad, pool_fn = (1, 1, 1, 1), F.max_pool2d
 
-    padded_arr = F.pad(lbl, pad, mode="replicate")
-    volume_max = pool_fn(+padded_arr, kernel_size=3, stride=1, padding=0)
-    volume_min = pool_fn(-padded_arr, kernel_size=3, stride=1, padding=0).neg_()
+    padded = F.pad(inp.float(), pad, mode="replicate")
+    local_max = pool_fn(padded, kernel_size=3, stride=1, padding=0)
+    local_min = pool_fn(-padded, kernel_size=3, stride=1, padding=0).neg_()
 
-    boundary = rearrange(volume_max != volume_min, "b 1 ... -> b ...")
-    out = labels.clone()
+    boundary = local_max != local_min
+    out = inp.clone()
     out[boundary] = 0
 
-    if not batched:
-        out = rearrange(out, "1 ... -> ...")
-    return out
+    if not has_channel:
+        return rearrange(out, "1 1 ... -> ...")
+    return rearrange(out, "1 c ... -> c ...")
 
 
 def relabel_sequential(
@@ -282,7 +278,7 @@ def cluster_embeddings_meanshift(
         spatial_shape = (H, W)
 
     if foreground_mask is not None:
-        fg_flat = foreground_mask.reshape(-1) > 0
+        fg_flat = rearrange(foreground_mask, "... -> (...)") > 0
     else:
         fg_flat = torch.ones(emb_flat.shape[0], dtype=torch.bool, device=device)
 
@@ -378,9 +374,9 @@ def cluster_embeddings_soft(
 
     batched = embedding.dim() >= 4
     if not batched:
-        embedding = embedding.unsqueeze(0)
+        embedding = rearrange(embedding, "... -> 1 ...")
         if foreground_mask is not None:
-            foreground_mask = foreground_mask.unsqueeze(0)
+            foreground_mask = rearrange(foreground_mask, "... -> 1 ...")
 
     clusterer = SoftMeanShift(
         bandwidth=bandwidth,
@@ -391,7 +387,7 @@ def cluster_embeddings_soft(
     labels, _, _ = clusterer(embedding, foreground_mask)
 
     if not batched:
-        labels = labels.squeeze(0)
+        labels = rearrange(labels, "1 ... -> ...")
     return labels
 
 
@@ -420,9 +416,9 @@ def cluster_offsets_hough(
 
     batched = offsets.dim() >= 4
     if not batched:
-        offsets = offsets.unsqueeze(0)
+        offsets = rearrange(offsets, "... -> 1 ...")
         if foreground_mask is not None:
-            foreground_mask = foreground_mask.unsqueeze(0)
+            foreground_mask = rearrange(foreground_mask, "... -> 1 ...")
 
     voter = HoughVoting(
         bin_size=bin_size,
@@ -433,5 +429,5 @@ def cluster_offsets_hough(
     labels = voter(offsets, foreground_mask)
 
     if not batched:
-        labels = labels.squeeze(0)
+        labels = rearrange(labels, "1 ... -> ...")
     return labels

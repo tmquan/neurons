@@ -13,6 +13,7 @@ Supports 2-D [B, 1, H, W] and 3-D [B, 1, D, H, W] binary inputs.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 
 
 class Skeletonize(nn.Module):
@@ -84,7 +85,7 @@ class Skeletonize(nn.Module):
             self._expanded_dims = False
         elif img.dim() == 4:
             self._expanded_dims = True
-            img = img.unsqueeze(2)
+            img = rearrange(img, "b c h w -> b c 1 h w")
         else:
             raise ValueError(
                 "Expected 4-D [B,1,H,W] or 5-D [B,1,D,H,W] input, "
@@ -97,7 +98,7 @@ class Skeletonize(nn.Module):
     def _prepare_output(self, img):
         img = img[:, :, 1:-1, 1:-1, 1:-1]
         if self._expanded_dims:
-            img = img.squeeze(2)
+            img = rearrange(img, "b c 1 h w -> b c h w")
         return img
 
     def _stochastic_discretization(self, img):

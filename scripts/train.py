@@ -73,7 +73,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     if image_size is not None:
         common_args["image_size"] = tuple(image_size) if isinstance(image_size, list) else image_size
 
-    erode_boundaries = data_cfg.get("erode_boundaries", False)
+    erode_boundaries = float(data_cfg.get("erode_boundaries", 0.0))
 
     if dataset_type == "snemi3d":
         patch_size = data_cfg.get("patch_size")
