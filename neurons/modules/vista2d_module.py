@@ -79,6 +79,7 @@ class Vista2DModule(pl.LightningModule):
             emb_dim=model_config.get("emb_dim", 16),
             feature_size=model_config.get("feature_size", 64),
             encoder_name=model_config.get("encoder_name", "vista3d"),
+            dropout=model_config.get("dropout", 0.0),
         )
 
         self.criterion = _Loss(

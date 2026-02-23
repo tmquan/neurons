@@ -46,7 +46,7 @@ class PointPromptEncoder(nn.Module):
         self.feature_size = feature_size
         self.spatial_dims = spatial_dims
         in_ch = num_classes + 3  # pos + neg + one-hot class + instance
-        num_groups = min(32, feature_size)
+        num_groups = max(g for g in (1, 2, 4, 8, 16, 32) if feature_size % g == 0)
 
         if spatial_dims == 3:
             self.conv = nn.Sequential(

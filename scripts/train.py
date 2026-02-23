@@ -110,7 +110,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     elif dataset_type == "mitoem2":
         patch_size = data_cfg.get("patch_size")
         return MitoEM2DataModule(
-            split=data_cfg.get("split", "human"),
+            dataset_name=data_cfg.get("dataset_name"),
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
@@ -173,7 +173,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         num_workers=data_cfg.get("num_workers", 4),
                         train_val_split=data_cfg.get("train_val_split", 0.2),
                         cache_rate=data_cfg.get("cache_rate", 0.5),
-                        split=mitoem2_cfg.get("split", "human"),
+                        dataset_name=mitoem2_cfg.get("dataset_name"),
                         slice_mode=False,
                     ),
                     mitoem2_cfg.get("weight", 1.5),
@@ -377,6 +377,7 @@ def main(cfg: DictConfig) -> None:
         log_every_n_steps=training_cfg.get("log_every_n_steps", 50),
         gradient_clip_val=training_cfg.get("gradient_clip_val", 1.0),
         accumulate_grad_batches=training_cfg.get("accumulate_grad_batches", 1),
+        limit_val_batches=training_cfg.get("limit_val_batches", 1.0),
         val_check_interval=training_cfg.get("val_check_interval", 1.0),
         check_val_every_n_epoch=training_cfg.get("check_val_every_n_epoch", 1),
         num_sanity_val_steps=training_cfg.get("num_sanity_val_steps", 2),

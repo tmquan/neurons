@@ -4,24 +4,23 @@ MitoEM2 DataModule for PyTorch Lightning.
 
 from typing import List, Optional, Tuple, Union
 
-import numpy as np
 from monai.transforms import (
-    CastToTyped,
     Compose,
     EnsureChannelFirstd,
+    Lambdad,
     RandAdjustContrastd,
     RandFlipd,
     RandGaussianNoised,
     RandRotate90d,
     RandSpatialCropd,
     Resized,
-    ScaleIntensityd,
     SpatialPadd,
     ToTensord,
 )
 
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets.mitoem2 import MitoEM2Dataset
+from neurons.utils.labels import relabel_after_crop
 
 
 class MitoEM2DataModule(CircuitDataModule):
@@ -61,7 +60,7 @@ class MitoEM2DataModule(CircuitDataModule):
         pin_memory: bool = True,
         image_size: Optional[Tuple[int, ...]] = None,
         patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
-        dataset_name: Optional[str] = None,
+        dataset_name: Optional[Union[str, List[str]]] = None,
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
         persistent_workers: bool = True,
@@ -93,17 +92,18 @@ class MitoEM2DataModule(CircuitDataModule):
     def get_train_transforms(self) -> Compose:
         """Training transforms for MitoEM2 (3-class semantic segmentation)."""
         keys = ["image", "label"]
+        spatial_dims = 2 if self.slice_mode else 3
         transforms = [
-            CastToTyped(keys=["image"], dtype=np.float32),
-            CastToTyped(keys=["label"], dtype=np.int64),
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
         ]
 
         if self.patch_size is not None:
             transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                    lbl.squeeze(0), spatial_dims=spatial_dims,
+                ).unsqueeze(0)),
             ])
         elif self.image_size is not None:
             transforms.append(
@@ -124,17 +124,18 @@ class MitoEM2DataModule(CircuitDataModule):
     def get_val_transforms(self) -> Compose:
         """Validation transforms for MitoEM2."""
         keys = ["image", "label"]
+        spatial_dims = 2 if self.slice_mode else 3
         transforms = [
-            CastToTyped(keys=["image"], dtype=np.float32),
-            CastToTyped(keys=["label"], dtype=np.int64),
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
         ]
 
         if self.patch_size is not None:
             transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                    lbl.squeeze(0), spatial_dims=spatial_dims,
+                ).unsqueeze(0)),
             ])
         elif self.image_size is not None:
             transforms.append(

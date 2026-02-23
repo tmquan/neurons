@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple, Union
 from monai.transforms import (
     Compose,
     EnsureChannelFirstd,
+    Lambdad,
     RandAdjustContrastd,
     RandFlipd,
     RandGaussianNoised,
@@ -17,8 +18,10 @@ from monai.transforms import (
     ToTensord,
 )
 
+
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import SNEMI3DDataset
+from neurons.utils.labels import relabel_after_crop
 
 
 class SNEMI3DDataModule(CircuitDataModule):
@@ -103,11 +106,15 @@ class SNEMI3DDataModule(CircuitDataModule):
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
         ]
 
+        spatial_dims = 2 if self.slice_mode else 3
         if self.patch_size is not None:
             transforms.extend(
                 [
                     SpatialPadd(keys=keys, spatial_size=self.patch_size),
                     RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                    Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                        lbl.squeeze(0), spatial_dims=spatial_dims,
+                    ).unsqueeze(0)),
                 ]
             )
         elif self.image_size is not None:
@@ -140,11 +147,15 @@ class SNEMI3DDataModule(CircuitDataModule):
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
         ]
 
+        spatial_dims = 2 if self.slice_mode else 3
         if self.patch_size is not None:
             transforms.extend(
                 [
                     SpatialPadd(keys=keys, spatial_size=self.patch_size),
                     RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                    Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                        lbl.squeeze(0), spatial_dims=spatial_dims,
+                    ).unsqueeze(0)),
                 ]
             )
         elif self.image_size is not None:

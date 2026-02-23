@@ -30,6 +30,7 @@ model:
   num_classes: 16
   emb_dim: 16
   feature_size: 64
+  dropout: 0.2
 
 # Optimizer configuration
 optimizer:

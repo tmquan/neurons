@@ -31,6 +31,14 @@ data:
         - A
         - B
         - C
+    mitoem2:
+      enabled: true
+      data_root: data/mitoem2
+      weight: 1.0
+    microns:
+      enabled: true
+      data_root: data/microns
+      weight: 1.0
 
   patch_size:
     - 32
@@ -38,14 +46,16 @@ data:
     - 128
   batch_size: 4
   num_workers: 4
-  cache_rate: 1.0
-  train_val_split: 0.2
+  cache_rate: 0.0
+  train_val_split: 0.0
+  num_samples: 4000
 
 # Model Configuration
 model:
   type: vista3d
   encoder_name: vista3d
   feature_size: 64
+  dropout: 0.2
   in_channels: 1
   num_classes: 16
   emb_dim: 16

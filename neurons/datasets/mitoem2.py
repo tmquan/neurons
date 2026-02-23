@@ -71,7 +71,7 @@ class MitoEM2Dataset(CircuitDataset):
         cache_rate: float = 1.0,
         train_val_split: float = 0.2,
         num_workers: int = 0,
-        dataset_name: Optional[str] = None,
+        dataset_name: Optional[Union[str, List[str]]] = None,
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
     ) -> None:
@@ -117,8 +117,8 @@ class MitoEM2Dataset(CircuitDataset):
     def _get_dataset_dirs(self) -> List[Path]:
         """Return list of dataset directories to load."""
         if self.dataset_name is not None:
-            ds_dir = self.root_dir / self.dataset_name
-            return [ds_dir] if ds_dir.exists() else []
+            names = [self.dataset_name] if isinstance(self.dataset_name, str) else self.dataset_name
+            return [self.root_dir / n for n in names if (self.root_dir / n).exists()]
         return sorted(
             d for d in self.root_dir.iterdir()
             if d.is_dir() and d.name.startswith("Dataset")

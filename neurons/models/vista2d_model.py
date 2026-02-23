@@ -48,6 +48,7 @@ class Vista2DWrapper(nn.Module):
         emb_dim: int = 16,
         feature_size: int = 64,
         encoder_name: str = "vista3d",
+        dropout: float = 0.0,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -56,6 +57,7 @@ class Vista2DWrapper(nn.Module):
         self.emb_dim = emb_dim
         self.feature_size = feature_size
         self.spatial_dims = _SPATIAL_DIMS
+        self.dropout = dropout
 
         S = _SPATIAL_DIMS
         self.geom_channels = S + S * S + 4  # dir + cov + rgba
@@ -82,25 +84,33 @@ class Vista2DWrapper(nn.Module):
         )
 
     def _build_backbone(self, encoder_name: str, **kwargs: Any) -> None:
-        """Build Vista3D backbone, falling back to SegResNet if unavailable."""
-        try:
-            from monai.networks.nets import vista3d
-            self.backbone = vista3d.Vista3D(
-                in_channels=self.in_channels,
-                encoder_name=encoder_name,
-                feature_size=self.feature_size,
-                **kwargs,
-            )
-            self._use_vista3d = True
-        except (ImportError, AttributeError):
-            from monai.networks.nets import SegResNet
-            self.backbone = SegResNet(
-                spatial_dims=_SPATIAL_DIMS,
-                in_channels=self.in_channels,
-                out_channels=self.feature_size,
-                init_filters=self.feature_size,
-            )
-            self._use_vista3d = False
+        """Build backbone encoder: SegResNetDS2 or SegResNet fallback."""
+        if encoder_name in ("vista3d", "segresnet_ds2"):
+            try:
+                from monai.networks.nets.segresnet_ds import SegResNetDS2
+                self.backbone = SegResNetDS2(
+                    spatial_dims=_SPATIAL_DIMS,
+                    in_channels=self.in_channels,
+                    out_channels=self.feature_size,
+                    init_filters=self.feature_size,
+                    blocks_down=(1, 2, 2, 4, 4),
+                    norm="instance",
+                    dsdepth=1,
+                )
+                self._use_vista3d = True
+                return
+            except ImportError:
+                pass
+
+        from monai.networks.nets import SegResNet
+        self.backbone = SegResNet(
+            spatial_dims=_SPATIAL_DIMS,
+            in_channels=self.in_channels,
+            out_channels=self.feature_size,
+            init_filters=self.feature_size,
+            dropout_prob=self.dropout,
+        )
+        self._use_vista3d = False
 
     def forward(
         self,
@@ -119,6 +129,8 @@ class Vista2DWrapper(nn.Module):
                 as produced by :func:`sample_point_prompts`.
         """
         feat = self.backbone(x)
+        if isinstance(feat, (tuple, list)):
+            feat = feat[0]
 
         if point_prompts is not None:
             feat = feat + self.point_encoder(

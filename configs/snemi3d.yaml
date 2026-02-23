@@ -15,7 +15,7 @@ data:
   train_val_split: 0.0
   cache_rate: 0.0  # must be 0 in 3D mode: virtual_len + cache freezes a single random crop
   slice_mode: false
-  num_samples: 800  # random 3D crops per epoch (volume has 100 Z-slices)
+  num_samples: 4000  # random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
     - 32
     - 128
@@ -26,7 +26,8 @@ model:
   in_channels: 1
   num_classes: 16
   emb_dim: 16
-  feature_size: 64
+  feature_size: 48
+  dropout: 0.2
 
 optimizer:
   type: adamw
@@ -50,9 +51,9 @@ loss:
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 10.0
-  weight_bone: 1.0
+  weight_bone: 10.0
   weight_geometry: 1.0
-  dir_target: centroid         # skeleton (geometry-aware) or centroid
+  dir_target: skeleton         # skeleton (geometry-aware) or centroid
   weight_dir: 1.0
   weight_cov: 1.0
   weight_raw: 1.0
@@ -81,3 +82,8 @@ training:
   fast_dev_run: false
   training_modes:
     - automatic
+    - proofread
+  num_pos_points: 5
+  num_neg_points: 5
+  point_sample_mode: "instance"  # Options: class, instance
+  

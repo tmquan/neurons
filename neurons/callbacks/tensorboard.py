@@ -133,6 +133,7 @@ def _log_predictions(
     spatial_dims: int,
     n: int,
     epoch: int,
+    clusterer: Any = None,
 ) -> None:
     """Log a standard set of prediction visualizations.
 
@@ -145,6 +146,8 @@ def _log_predictions(
         spatial_dims: 2 or 3 (controls geometry channel layout).
         n: number of images.
         epoch: global step for TensorBoard.
+        clusterer: optional clustering module (e.g. SoftMeanShift) for
+            producing ``instance_pred`` from embeddings.
     """
     sem = preds["semantic"][:n]
     inst = preds["instance"][:n]
@@ -181,6 +184,18 @@ def _log_predictions(
     tb.add_images(f"{tag}/label", lbl_rgb, global_step=epoch)
     tb.add_images(f"{tag}/semantic", sem_rgb, global_step=epoch)
     tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
+
+    if clusterer is not None:
+        fg_mask = labels > 0
+        if inst.dim() == 5:
+            fg_mask_full = _to_2d(fg_mask.unsqueeze(1)).squeeze(1)
+        else:
+            fg_mask_full = fg_mask
+        ins_pred, _, _ = clusterer(inst, fg_mask_full.unsqueeze(1) if fg_mask_full.dim() == 3 else fg_mask_full)
+        ins_pred_2d = _to_2d(ins_pred.unsqueeze(1)).squeeze(1) if ins_pred.dim() > 3 else ins_pred
+        ins_pred_rgb = _label_to_rgb(ins_pred_2d.long())
+        tb.add_images(f"{tag}/instance_pred", ins_pred_rgb, global_step=epoch)
+
     tb.add_images(f"{tag}/geometry_dir", g_dir, global_step=epoch)
     tb.add_images(f"{tag}/geometry_cov_trace", cov_heat, global_step=epoch)
     tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
@@ -263,6 +278,7 @@ class ImageLogger(pl.Callback):
 
         # --- Automatic mode ---
         preds_auto = pl_module.model(images)
+        clusterer = getattr(pl_module, "_clusterer", None)
 
         images_2d = _to_2d(images[:n])
         labels_2d = _to_2d(labels[:n].unsqueeze(1)).squeeze(1)
@@ -270,6 +286,7 @@ class ImageLogger(pl.Callback):
         _log_predictions(
             tb, "train_vis", images_2d, labels_2d,
             preds_auto, self.spatial_dims, n, epoch,
+            clusterer=clusterer,
         )
 
         # --- Proofread mode ---
@@ -296,6 +313,7 @@ class ImageLogger(pl.Callback):
         img_gray = _log_predictions(
             tb, "train_vis_proofread", images_2d, labels_2d,
             preds_proof, self.spatial_dims, n, epoch,
+            clusterer=clusterer,
         )
 
         center_d = images.shape[2] // 2 if self.spatial_dims == 3 else None

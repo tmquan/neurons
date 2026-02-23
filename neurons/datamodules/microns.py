@@ -4,8 +4,23 @@ MICRONS DataModule for PyTorch Lightning.
 
 from typing import Optional, Tuple
 
+from monai.transforms import (
+    Compose,
+    EnsureChannelFirstd,
+    Lambdad,
+    RandAdjustContrastd,
+    RandFlipd,
+    RandGaussianNoised,
+    RandRotate90d,
+    RandSpatialCropd,
+    Resized,
+    SpatialPadd,
+    ToTensord,
+)
+
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import MICRONSDataset
+from neurons.utils.labels import relabel_after_crop
 
 
 class MICRONSDataModule(CircuitDataModule):
@@ -73,3 +88,61 @@ class MICRONSDataModule(CircuitDataModule):
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
         return kwargs
+
+    def get_train_transforms(self) -> Compose:
+        """Training transforms for MICRONS."""
+        keys = ["image", "label"]
+        spatial_dims = 2 if self.slice_mode else 3
+        transforms = [
+            EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
+        ]
+
+        if self.patch_size is not None:
+            transforms.extend([
+                SpatialPadd(keys=keys, spatial_size=self.patch_size),
+                RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                    lbl.squeeze(0), spatial_dims=spatial_dims,
+                ).unsqueeze(0)),
+            ])
+        elif self.image_size is not None:
+            transforms.append(
+                Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
+            )
+
+        rot_axes = (0, 1) if self.slice_mode else (1, 2)
+        transforms.extend([
+            RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
+            RandFlipd(keys=keys, prob=0.5, spatial_axis=1),
+            RandRotate90d(keys=keys, prob=0.5, spatial_axes=rot_axes),
+            RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
+            RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
+            ToTensord(keys=keys),
+        ])
+
+        return Compose(transforms)
+
+    def get_val_transforms(self) -> Compose:
+        """Validation transforms for MICRONS."""
+        keys = ["image", "label"]
+        spatial_dims = 2 if self.slice_mode else 3
+        transforms = [
+            EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
+        ]
+
+        if self.patch_size is not None:
+            transforms.extend([
+                SpatialPadd(keys=keys, spatial_size=self.patch_size),
+                RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                    lbl.squeeze(0), spatial_dims=spatial_dims,
+                ).unsqueeze(0)),
+            ])
+        elif self.image_size is not None:
+            transforms.append(
+                Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
+            )
+
+        transforms.append(ToTensord(keys=keys))
+
+        return Compose(transforms)

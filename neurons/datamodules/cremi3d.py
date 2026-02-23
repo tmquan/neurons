@@ -4,24 +4,23 @@ CREMI3D DataModule for PyTorch Lightning.
 
 from typing import List, Optional, Tuple, Union
 
-import numpy as np
 from monai.transforms import (
-    CastToTyped,
     Compose,
     EnsureChannelFirstd,
+    Lambdad,
     RandAdjustContrastd,
     RandFlipd,
     RandGaussianNoised,
     RandRotate90d,
     RandSpatialCropd,
     Resized,
-    ScaleIntensityd,
     SpatialPadd,
     ToTensord,
 )
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import CREMI3DDataset
+from neurons.utils.labels import relabel_after_crop
 
 
 class CREMI3DDataModule(CircuitDataModule):
@@ -89,10 +88,7 @@ class CREMI3DDataModule(CircuitDataModule):
         """Get training transforms optimized for CREMI3D."""
         keys = ["image", "label"]
         transforms = [
-            CastToTyped(keys=["image"], dtype=np.float32),
-            CastToTyped(keys=["label"], dtype=np.int64),
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
         ]
 
         if self.patch_size is not None:
@@ -100,6 +96,9 @@ class CREMI3DDataModule(CircuitDataModule):
                 [
                     SpatialPadd(keys=keys, spatial_size=self.patch_size),
                     RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                    Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                        lbl.squeeze(0), spatial_dims=3,
+                    ).unsqueeze(0)),
                 ]
             )
         elif self.image_size is not None:
@@ -128,10 +127,7 @@ class CREMI3DDataModule(CircuitDataModule):
         """Get validation transforms with consistent cropping."""
         keys = ["image", "label"]
         transforms = [
-            CastToTyped(keys=["image"], dtype=np.float32),
-            CastToTyped(keys=["label"], dtype=np.int64),
             EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
         ]
 
         if self.patch_size is not None:
@@ -139,6 +135,9 @@ class CREMI3DDataModule(CircuitDataModule):
                 [
                     SpatialPadd(keys=keys, spatial_size=self.patch_size),
                     RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                    Lambdad(keys=["label"], func=lambda lbl: relabel_after_crop(
+                        lbl.squeeze(0), spatial_dims=3,
+                    ).unsqueeze(0)),
                 ]
             )
         elif self.image_size is not None:
