@@ -10,8 +10,8 @@ project_name: neurons-snemi3d
 data:
   dataset: snemi3d
   data_root: data/snemi3d
-  batch_size: 4
-  num_workers: 8
+  batch_size: 8
+  num_workers: 16
   train_val_split: 0.0
   cache_rate: 0.0  # must be 0 in 3D mode: virtual_len + cache freezes a single random crop
   slice_mode: false
