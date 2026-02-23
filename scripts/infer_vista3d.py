@@ -143,13 +143,13 @@ def main():
         sem_probs = result["semantic_probs"]
         emb = result["instance_embeddings"]
 
-        class_ids = sem_probs.argmax(dim=0)
-        print(f"Semantic classes detected: {torch.unique(class_ids).tolist()}")
+        semantic_ids = sem_probs.argmax(dim=0)
+        print(f"Semantic classes detected: {torch.unique(semantic_ids).tolist()}")
 
         if args.class_id is not None:
             classes_to_process = [args.class_id]
         else:
-            all_classes = torch.unique(class_ids).tolist()
+            all_classes = torch.unique(semantic_ids).tolist()
             classes_to_process = [c for c in all_classes if c > 0]
 
         clusterer = SoftMeanShift(
@@ -157,13 +157,13 @@ def main():
             min_cluster_size=args.min_instance_size,
         )
 
-        vol_shape = class_ids.shape
+        vol_shape = semantic_ids.shape
         final_labels = torch.zeros(vol_shape, device=device, dtype=torch.long)
         next_id = 1
 
         for cid in classes_to_process:
             print(f"  Clustering class {cid}...")
-            mask = class_ids == cid
+            mask = semantic_ids == cid
             if mask.sum() == 0:
                 continue
 

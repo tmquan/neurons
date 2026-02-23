@@ -10,10 +10,10 @@ project_name: neurons-snemi3d
 data:
   dataset: snemi3d
   data_root: data/snemi3d
-  batch_size: 2
+  batch_size: 4
   num_workers: 8
-  train_val_split: 0.2
-  cache_rate: 1.0
+  train_val_split: 0.0
+  cache_rate: 0.0  # must be 0 in 3D mode: virtual_len + cache freezes a single random crop
   slice_mode: false
   num_samples: 800  # random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
@@ -50,9 +50,9 @@ loss:
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 10.0
-  weight_bone: 10.0
+  weight_bone: 1.0
   weight_geometry: 1.0
-  dir_target: skeleton         # skeleton (geometry-aware) or centroid
+  dir_target: centroid         # skeleton (geometry-aware) or centroid
   weight_dir: 1.0
   weight_cov: 1.0
   weight_raw: 1.0
@@ -62,8 +62,22 @@ loss:
   ignore_index: -100
 
 training:
-  max_epochs: 200
-  accelerator: auto
+  max_epochs: 100
+  accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: auto
-  precision: 16-mixed
+  strategy: ddp  # Explicit DDP for even GPU memory distribution
+  precision: 32-true  # Options: 32-true, 16-mixed, bf16-mixed
   gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  limit_val_batches: 20
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+  enable_progress_bar: true
+  enable_model_summary: true
+  deterministic: false
+  benchmark: true
+  fast_dev_run: false
+  training_modes:
+    - automatic

@@ -274,8 +274,8 @@ class TestCreateClassIds:
         wrapped = CreateClassIds(ds, dataset_type="snemi3d")
         sample = wrapped[0]
 
-        assert "class_ids" in sample
-        cids = sample["class_ids"]
+        assert "semantic_ids" in sample
+        cids = sample["semantic_ids"]
         assert cids[0, 0] == 0  # background stays 0
         assert cids[0, 2] == 1  # foreground -> 1
         assert cids[1, 0] == 1
@@ -284,7 +284,7 @@ class TestCreateClassIds:
         lbl = np.array([0, 500, 1_000_001, 2_000_001], dtype=np.int64)
         ds = _LabelDataset([lbl])
         wrapped = CreateClassIds(ds, dataset_type="cremi3d")
-        cids = wrapped[0]["class_ids"]
+        cids = wrapped[0]["semantic_ids"]
 
         assert cids[0] == 0  # background
         assert cids[1] == 1  # neuron (< 1M)
@@ -295,7 +295,7 @@ class TestCreateClassIds:
         lbl = np.array([0, 1, 2], dtype=np.int64)
         ds = _LabelDataset([lbl])
         wrapped = CreateClassIds(ds, dataset_type="custom", default_class=7)
-        cids = wrapped[0]["class_ids"]
+        cids = wrapped[0]["semantic_ids"]
 
         assert cids[0] == 0
         assert cids[1] == 7
@@ -305,7 +305,7 @@ class TestCreateClassIds:
         lbl = torch.tensor([0, 5, 10], dtype=torch.long)
         ds = _LabelDataset([lbl])
         wrapped = CreateClassIds(ds, dataset_type="snemi3d")
-        cids = wrapped[0]["class_ids"]
+        cids = wrapped[0]["semantic_ids"]
 
         assert isinstance(cids, torch.Tensor)
 
@@ -313,7 +313,7 @@ class TestCreateClassIds:
         lbl = np.array([0, 1, 2, 1, 0], dtype=np.int64)
         ds = _LabelDataset([lbl])
         wrapped = CreateClassIds(ds, dataset_type="mitoem2")
-        cids = wrapped[0]["class_ids"]
+        cids = wrapped[0]["semantic_ids"]
 
         assert cids[0] == 0  # background
         assert cids[1] == 3  # mitochondria (union label 3)
@@ -327,7 +327,7 @@ class TestCreateClassIds:
         wrapped = CreateClassIds(
             ds, dataset_type="mitoem2", ignore_classes={"mito_boundary"},
         )
-        cids = wrapped[0]["class_ids"]
+        cids = wrapped[0]["semantic_ids"]
 
         assert cids[0] == 0  # background
         assert cids[1] == 3  # mitochondria kept
@@ -341,7 +341,7 @@ class TestCreateClassIds:
         wrapped = CreateClassIds(
             ds, dataset_type="cremi3d", ignore_classes={"cleft", "mitochondria"},
         )
-        cids = wrapped[0]["class_ids"]
+        cids = wrapped[0]["semantic_ids"]
 
         assert cids[0] == 0  # background
         assert cids[1] == 1  # neuron kept
@@ -352,7 +352,7 @@ class TestCreateClassIds:
         lbl = np.array([0, 42, 0, 99], dtype=np.int64)
         ds = _LabelDataset([lbl])
         wrapped = CreateClassIds(ds, dataset_type="microns")
-        cids = wrapped[0]["class_ids"]
+        cids = wrapped[0]["semantic_ids"]
 
         assert cids[0] == 0  # background
         assert cids[1] == 1  # neuron

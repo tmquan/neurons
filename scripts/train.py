@@ -30,7 +30,8 @@ warnings.filterwarnings("ignore", message=r".*AccumulateGrad.*stream.*mismatch.*
 
 import hydra
 import pytorch_lightning as pl
-from pytorch_lightning.strategies import DDPStrategy
+from pytorch_lightning.profilers import AdvancedProfiler, PyTorchProfiler, SimpleProfiler
+from pytorch_lightning.strategies import DDPStrategy, FSDPStrategy
 import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import (
@@ -292,6 +293,34 @@ def setup_logger(cfg: DictConfig) -> Any:
         return True
 
 
+def setup_profiler(cfg: DictConfig) -> Any:
+    """Setup profiler from configuration."""
+    output_dir = cfg.get("output_dir", "outputs")
+    profiler_type = cfg.get("training", {}).get("profiler")
+
+    if profiler_type == "simple":
+        return SimpleProfiler(dirpath=output_dir, filename="profile-simple")
+    elif profiler_type == "advanced":
+        return AdvancedProfiler(dirpath=output_dir, filename="profile-advanced")
+    elif profiler_type == "pytorch":
+        return PyTorchProfiler(
+            dirpath=output_dir,
+            filename="profile-pytorch",
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(wait=1, warmup=2, active=6, repeat=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                str(Path(output_dir) / "profiler_traces")
+            ),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        )
+    return None
+
+
 @hydra.main(version_base=None, config_path="../configs", config_name="default")
 def main(cfg: DictConfig) -> None:
     """Main training entry point."""
@@ -320,10 +349,19 @@ def main(cfg: DictConfig) -> None:
     logger = setup_logger(cfg)
     print(f"Logger: {cfg.get('logger', 'tensorboard')}")
 
+    profiler = setup_profiler(cfg)
+    if profiler is not None:
+        print(f"Profiler: {profiler.__class__.__name__}")
+
     training_cfg = cfg.training
     strategy_name = training_cfg.get("strategy", "auto")
     if strategy_name == "ddp":
         strategy = DDPStrategy(static_graph=True)
+    elif strategy_name == "fsdp":
+        strategy = FSDPStrategy(
+            sharding_strategy="FULL_SHARD",
+            activation_checkpointing_policy={torch.nn.modules.conv.Conv3d},
+        )
     else:
         strategy = strategy_name
 
@@ -335,6 +373,7 @@ def main(cfg: DictConfig) -> None:
         precision=training_cfg.get("precision", "32-true"),
         callbacks=callbacks,
         logger=logger,
+        profiler=profiler,
         log_every_n_steps=training_cfg.get("log_every_n_steps", 50),
         gradient_clip_val=training_cfg.get("gradient_clip_val", 1.0),
         accumulate_grad_batches=training_cfg.get("accumulate_grad_batches", 1),

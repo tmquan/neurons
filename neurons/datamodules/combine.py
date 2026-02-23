@@ -80,7 +80,7 @@ class CreateClassIds(Dataset):
     Wrapper that maps each dataset's native labels to the union label space.
 
     For every sample it adds two keys:
-    - ``class_ids``: per-pixel union semantic class (int64, same spatial shape)
+    - ``semantic_ids``: per-pixel union semantic class (int64, same spatial shape)
     - ``dataset_type``: string identifying the source dataset
 
     Per-dataset mapping rules
@@ -145,37 +145,37 @@ class CreateClassIds(Dataset):
         is_tensor = isinstance(label, torch.Tensor)
         label_np = label.numpy() if is_tensor else np.asarray(label)
 
-        class_ids = np.zeros_like(label_np, dtype=np.int64)
+        semantic_ids = np.zeros_like(label_np, dtype=np.int64)
 
         dt = self.dataset_type
 
         if dt == "snemi3d" or dt == "microns":
-            class_ids[label_np > 0] = UNION_LABEL_MAP["neuron"]
+            semantic_ids[label_np > 0] = UNION_LABEL_MAP["neuron"]
 
         elif dt == "cremi3d":
             neuron_mask = (label_np > 0) & (label_np < self.CLEFT_ID_OFFSET)
-            class_ids[neuron_mask] = UNION_LABEL_MAP["neuron"]
+            semantic_ids[neuron_mask] = UNION_LABEL_MAP["neuron"]
 
             cleft_mask = (label_np >= self.CLEFT_ID_OFFSET) & (label_np < self.MITO_ID_OFFSET)
-            class_ids[cleft_mask] = UNION_LABEL_MAP["cleft"]
+            semantic_ids[cleft_mask] = UNION_LABEL_MAP["cleft"]
 
             mito_mask = label_np >= self.MITO_ID_OFFSET
-            class_ids[mito_mask] = UNION_LABEL_MAP["mitochondria"]
+            semantic_ids[mito_mask] = UNION_LABEL_MAP["mitochondria"]
 
         elif dt == "mitoem2":
-            class_ids[label_np == 1] = UNION_LABEL_MAP["mitochondria"]
-            class_ids[label_np == 2] = UNION_LABEL_MAP["mito_boundary"]
+            semantic_ids[label_np == 1] = UNION_LABEL_MAP["mitochondria"]
+            semantic_ids[label_np == 2] = UNION_LABEL_MAP["mito_boundary"]
 
         else:
-            class_ids[label_np > 0] = self.default_class
+            semantic_ids[label_np > 0] = self.default_class
 
         # Zero-out ignored classes -> background
         if self._ignore_ids:
             for cid in self._ignore_ids:
-                class_ids[class_ids == cid] = 0
+                semantic_ids[semantic_ids == cid] = 0
 
         sample = dict(sample)
-        sample["semantic_ids"] = torch.from_numpy(class_ids) if is_tensor else class_ids
+        sample["semantic_ids"] = torch.from_numpy(semantic_ids) if is_tensor else semantic_ids
         sample["dataset_type"] = self.dataset_type
         return sample
 
@@ -220,7 +220,7 @@ class CombineDataModule(pl.LightningDataModule):
         ... )
         >>> combine.setup("fit")
         >>> batch = next(iter(combine.train_dataloader()))
-        >>> batch["class_ids"]  # union semantic labels
+        >>> batch["semantic_ids"]  # union semantic labels
     """
 
     # Expose the shared mapping so callers can inspect it

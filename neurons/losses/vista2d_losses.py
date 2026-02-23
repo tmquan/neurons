@@ -8,7 +8,7 @@ Public classes:
 - Vista2DLoss:    composes SemanticLoss + InstanceLoss + GeometryLoss
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -311,32 +311,48 @@ class InstanceLoss(nn.Module):
         total = self.weight_pull * l_pull + self.weight_push * l_push + self.weight_norm * l_norm
         return {"loss": total, "pull": l_pull, "push": l_push, "norm": l_norm}
 
+    def compute_weights(
+        self, label: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Pre-compute boundary and skeleton weights (expensive, cache-friendly).
+
+        Returns:
+            (weight_edge, weight_bone) tensors same shape as label.
+        """
+        weight_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else torch.ones_like(label, dtype=torch.float32)
+        weight_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else torch.ones_like(label, dtype=torch.float32)
+        return weight_edge, weight_bone
+
     def forward(
         self,
         embed: torch.Tensor,
         label: torch.Tensor,
-        class_ids: Optional[torch.Tensor] = None,
+        semantic_ids: Optional[torch.Tensor] = None,
+        weight_edge: Optional[torch.Tensor] = None,
+        weight_bone: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
             embed: [B, E, *spatial] instance embedding.
             label: [B, *spatial] instance labels (0 = background).
-            class_ids: [B, *spatial] optional semantic class ids.
+            semantic_ids: [B, *spatial] optional semantic class ids.
+            weight_edge: pre-computed boundary weights (skips recomputation).
+            weight_bone: pre-computed skeleton weights (skips recomputation).
 
         Returns:
             Dict with ``loss``, ``pull``, ``push``, ``norm``.
         """
-        weight_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else torch.ones_like(label, dtype=torch.float32)
-        weight_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else torch.ones_like(label, dtype=torch.float32)
+        if weight_edge is None or weight_bone is None:
+            weight_edge, weight_bone = self.compute_weights(label)
 
-        if class_ids is not None:
-            unique_classes = torch.unique(class_ids)
+        if semantic_ids is not None:
+            unique_classes = torch.unique(semantic_ids)
             unique_classes = unique_classes[unique_classes > 0]
             if len(unique_classes) > 0:
                 zero = torch.tensor(0.0, device=embed.device)
                 accum = {"loss": zero.clone(), "pull": zero.clone(), "push": zero.clone(), "norm": zero.clone()}
                 for cid in unique_classes:
-                    class_mask = (class_ids == cid).long()
+                    class_mask = (semantic_ids == cid).long()
                     out = self._loss_single(embed, label * class_mask, weight_edge, weight_bone)
                     for k in accum:
                         accum[k] = accum[k] + out[k]
@@ -415,6 +431,24 @@ class Vista2DLoss(nn.Module):
             spatial_dims=_SPATIAL_DIMS, **geom_kwargs,
         ) if weight_geometry > 0 else None
 
+        self._cache_labels_ptr: Optional[int] = None
+        self._cached_ins_weights: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        self._cached_geom_targets: Optional[Dict] = None
+
+    def _get_cached_targets(
+        self, labels: torch.Tensor,
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Optional[Dict]]:
+        """Compute or retrieve cached expensive targets for the given labels."""
+        ptr = labels.data_ptr()
+        if ptr != self._cache_labels_ptr:
+            self._cache_labels_ptr = ptr
+            self._cached_ins_weights = self.instance_loss.compute_weights(labels)
+            if self.geometry_loss is not None:
+                self._cached_geom_targets = self.geometry_loss.compute_targets(labels)
+            else:
+                self._cached_geom_targets = None
+        return self._cached_ins_weights, self._cached_geom_targets
+
     def forward(
         self,
         predictions: Dict[str, torch.Tensor],
@@ -433,13 +467,18 @@ class Vista2DLoss(nn.Module):
             ``loss_ins/norm``, and optionally ``loss_geom``,
             ``loss_geom/dir``, ``loss_geom/cov``, ``loss_geom/raw``.
         """
+        labels = targets["labels"]
+        ins_weights, geom_targets = self._get_cached_targets(labels)
+        weight_edge, weight_bone = ins_weights
+
         sem_out = self.semantic_loss(
             predictions["semantic"], targets["semantic_labels"],
         )
 
-        class_ids = targets.get("semantic_ids") or predictions.get("semantic_ids")
+        semantic_ids = targets.get("semantic_ids") or predictions.get("semantic_ids")
         ins_out = self.instance_loss(
-            predictions["instance"], targets["labels"], class_ids,
+            predictions["instance"], labels, semantic_ids,
+            weight_edge=weight_edge, weight_bone=weight_bone,
         )
 
         loss_sem = sem_out["loss"]
@@ -459,8 +498,9 @@ class Vista2DLoss(nn.Module):
 
         if self.geometry_loss is not None and "geometry" in predictions:
             geom_out = self.geometry_loss(
-                predictions["geometry"], targets["labels"],
+                predictions["geometry"], labels,
                 raw_image=targets.get("raw_image"),
+                cached_targets=geom_targets,
             )
             loss_geom = geom_out["loss"]
             total = total + self.weight_geometry * loss_geom

@@ -912,17 +912,62 @@ class GeometryLoss(nn.Module):
                 beta=self.smooth_l1_beta, reduction="sum",
             ) / numel
 
+    def compute_targets(
+        self,
+        ins_label: torch.Tensor,
+    ) -> Dict[str, List[Optional[torch.Tensor]]]:
+        """Pre-compute geometry targets (expensive, cache-friendly).
+
+        Returns dict with ``dir_targets`` and ``cov_targets`` lists (one per batch element).
+        """
+        B = ins_label.shape[0]
+        spatial_shape = ins_label.shape[1:]
+        dev = ins_label.device
+        lbl_flat = rearrange(ins_label, "b ... -> b (...)").long()
+        coords = _make_coord_grid(spatial_shape, dev)
+
+        dir_targets: List[Optional[torch.Tensor]] = []
+        cov_targets: List[Optional[torch.Tensor]] = []
+
+        for b in range(B):
+            uids = torch.unique(lbl_flat[b])
+            uids = uids[uids > 0]
+            if len(uids) == 0:
+                dir_targets.append(None)
+                cov_targets.append(None)
+                continue
+
+            if self.weight_dir > 0:
+                if self.dir_target == "centroid":
+                    dir_targets.append(_compute_centroid_offsets(lbl_flat[b], coords))
+                else:
+                    dir_targets.append(_compute_skeleton_offsets(
+                        lbl_flat[b], coords, spatial_shape,
+                    ))
+            else:
+                dir_targets.append(None)
+
+            if self.weight_cov > 0:
+                cov_targets.append(_compute_covariance(lbl_flat[b], coords, spatial_shape))
+            else:
+                cov_targets.append(None)
+
+        return {"dir_targets": dir_targets, "cov_targets": cov_targets}
+
     def forward(
         self,
         geometry: torch.Tensor,
         ins_label: torch.Tensor,
         raw_image: Optional[torch.Tensor] = None,
+        cached_targets: Optional[Dict[str, List[Optional[torch.Tensor]]]] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
             geometry: [B, S+S*S+4, *spatial] geometry head prediction.
             ins_label: [B, *spatial] instance labels (0 = background).
             raw_image: [B, 1, *spatial] (optional, for L_raw target).
+            cached_targets: pre-computed targets from ``compute_targets``
+                (skips expensive recomputation).
 
         Returns:
             Dict with keys ``loss``, ``dir``, ``cov``, ``raw``.
@@ -944,27 +989,22 @@ class GeometryLoss(nn.Module):
         pred_raw = geom_flat[:, c2:c3]
 
         lbl_flat = rearrange(ins_label, "b ... -> b (...)").long()
-        coords = _make_coord_grid(spatial_shape, dev)
+
+        if cached_targets is None:
+            cached_targets = self.compute_targets(ins_label)
 
         for b in range(B):
-            uids = torch.unique(lbl_flat[b])
-            uids = uids[uids > 0]
-            if len(uids) == 0:
+            dir_tgt = cached_targets["dir_targets"][b]
+            cov_tgt = cached_targets["cov_targets"][b]
+            if dir_tgt is None and cov_tgt is None:
                 continue
             valid_b += 1
             fg = lbl_flat[b] > 0
 
-            if self.weight_dir > 0:
-                if self.dir_target == "centroid":
-                    dir_tgt = _compute_centroid_offsets(lbl_flat[b], coords)
-                else:
-                    dir_tgt = _compute_skeleton_offsets(
-                        lbl_flat[b], coords, spatial_shape,
-                    )
+            if self.weight_dir > 0 and dir_tgt is not None:
                 L_dir = L_dir + self._fg_loss(pred_dir[b], dir_tgt, fg, self.loss_dir)
 
-            if self.weight_cov > 0:
-                cov_tgt = _compute_covariance(lbl_flat[b], coords, spatial_shape)
+            if self.weight_cov > 0 and cov_tgt is not None:
                 L_cov = L_cov + self._fg_loss(pred_cov[b], cov_tgt, fg, self.loss_cov)
 
             if self.weight_raw > 0 and raw_image is not None:
