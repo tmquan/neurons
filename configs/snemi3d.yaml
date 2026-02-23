@@ -82,8 +82,8 @@ training:
   fast_dev_run: false
   training_modes:
     - automatic
-    - proofread
-  num_pos_points: 5
-  num_neg_points: 5
-  point_sample_mode: "instance"  # Options: class, instance
+  #   - proofread
+  # num_pos_points: 5
+  # num_neg_points: 5
+  # point_sample_mode: "instance"  # Options: class, instance
   
