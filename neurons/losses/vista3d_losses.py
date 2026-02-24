@@ -17,10 +17,23 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from neurons.losses.discriminative import GeometryLoss
+from neurons.utils.parallel import pmap
 
 _SPATIAL_DIMS = 3
 _POOL_FN = F.max_pool3d
 _PAD_TUPLE = (1, 1, 1, 1, 1, 1)
+
+
+def _edt_worker(args):
+    """Per-instance EDT worker for multiprocessing (numpy only)."""
+    from scipy.ndimage import distance_transform_edt
+    label_np_b, uid = args
+    mask = label_np_b == uid
+    dt = distance_transform_edt(mask).astype(np.float32)
+    max_d = dt.max()
+    if max_d > 0:
+        dt /= max_d
+    return (uid, dt)
 
 
 # ======================================================================
@@ -230,23 +243,21 @@ class InstanceLoss(nn.Module):
 
     @torch.no_grad()
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
-        from scipy.ndimage import distance_transform_edt as _scipy_edt
-
         weight_bone = torch.ones_like(label, dtype=torch.float32)
         label_np = label.cpu().numpy()
 
         for b in range(label.shape[0]):
             unique_ids = np.unique(label_np[b])
-            for uid in unique_ids:
-                if uid == 0:
-                    continue
-                mask = label_np[b] == uid
-                dt = _scipy_edt(mask).astype(np.float32)
-                max_d = dt.max()
-                if max_d > 0:
-                    dt /= max_d
-                dt_t = torch.from_numpy(dt).to(label.device)
+            fg_ids = unique_ids[unique_ids > 0]
+            if len(fg_ids) == 0:
+                continue
+
+            args = [(label_np[b], int(uid)) for uid in fg_ids]
+            results = pmap(_edt_worker, args)
+
+            for uid, dt in results:
                 inst_mask = label[b] == uid
+                dt_t = torch.from_numpy(dt).to(label.device)
                 weight_bone[b][inst_mask] = 1.0 + dt_t[inst_mask] * (self.weight_bone - 1.0)
 
         return weight_bone

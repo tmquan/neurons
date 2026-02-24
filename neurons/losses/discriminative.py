@@ -29,6 +29,7 @@ from einops import rearrange, reduce, repeat
 from scipy.ndimage import distance_transform_edt as _scipy_edt, gaussian_filter as _gauss
 
 from neurons.losses.skeletonize import Skeletonize
+from neurons.utils.parallel import pmap
 
 
 # ======================================================================
@@ -291,6 +292,56 @@ def _compute_skeleton_offsets(
     return offsets
 
 
+def _covariance_worker(args):
+    """Per-instance structure tensor worker (numpy only, no torch)."""
+    from scipy.ndimage import distance_transform_edt, gaussian_filter
+    labels_np, uid, S, sigma = args
+    sigma_d = max(1.0, sigma / 3.0)
+    spatial_shape = labels_np.shape
+
+    mask = labels_np == uid
+    if mask.sum() < 2:
+        return None
+
+    dt = distance_transform_edt(mask).astype(np.float64)
+    mask_f = mask.astype(np.float64)
+    edt_max = dt.max()
+    norm = np.maximum(gaussian_filter(mask_f, sigma=sigma), 1e-10)
+
+    grads = []
+    for i in range(S):
+        order = [0] * S
+        order[S - 1 - i] = 1
+        g = gaussian_filter(dt, sigma=sigma_d, order=order)
+        g *= mask_f
+        grads.append(g)
+
+    st_inst = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
+    idx = 0
+    for i in range(S):
+        for j in range(S):
+            st_inst[idx][mask] = (gaussian_filter(grads[i] * grads[j], sigma=sigma) / norm)[mask]
+            idx += 1
+
+    w = np.zeros_like(dt)
+    if edt_max > 1e-6:
+        w[mask] = (dt[mask] / edt_max) ** 2
+
+    trace = sum(st_inst[i * S + i] for i in range(S))
+    iso_val = trace / S
+
+    idx = 0
+    for i in range(S):
+        for j in range(S):
+            if i == j:
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask] + w[mask] * iso_val[mask]).astype(np.float32)
+            else:
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(np.float32)
+            idx += 1
+
+    return (uid, mask, st_inst)
+
+
 @torch.no_grad()
 def _compute_covariance(
     lbl_flat: torch.Tensor,
@@ -300,19 +351,7 @@ def _compute_covariance(
 ) -> torch.Tensor:
     """EDT structure tensor per foreground pixel (morphology-aware).
 
-    For each instance the Euclidean distance transform is computed, its
-    gradient is obtained via Gaussian derivatives, and the smoothed outer
-    product of the gradient (the *structure tensor*) is stored per pixel.
-
-    Gradients are masked to the instance interior and the Gaussian
-    integration is normalised by the mask coverage to avoid boundary
-    leakage from the zero-padded exterior.
-
-    After smoothing, the tensor is blended toward isotropy in proportion
-    to the normalised EDT depth: ``w = (EDT / max_EDT)^2``.  Near the
-    boundary (``w ~ 0``) the raw anisotropic tensor is preserved; at the
-    medial axis (``w ~ 1``) eigenvalues converge to their mean, yielding
-    a round glyph.
+    Parallelized across instances using ``torch.multiprocessing``.
 
     Args:
         lbl_flat: [N] instance labels (0 = background).
@@ -321,16 +360,13 @@ def _compute_covariance(
         sigma: Integration scale for structure tensor smoothing.
 
     Returns:
-        [S*S, N] structure tensor flattened row-major per pixel
-        (0 for background), in (x, y[, z]) coordinate order
-        where x = col, y = row.
+        [S*S, N] structure tensor flattened row-major per pixel.
     """
     if spatial_shape is None:
         raise ValueError("spatial_shape is required")
 
     S, N = coords.shape
     device = coords.device
-    sigma_d = max(1.0, sigma / 3.0)
 
     labels_np = lbl_flat.cpu().numpy().reshape(spatial_shape)
     st_np = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
@@ -338,54 +374,16 @@ def _compute_covariance(
     uids = np.unique(labels_np)
     uids = uids[uids > 0]
 
-    for uid in uids:
-        mask = labels_np == uid
-        if mask.sum() < 2:
-            continue
-        dt = _scipy_edt(mask).astype(np.float64)
-        mask_f = mask.astype(np.float64)
-        edt_max = dt.max()
+    if len(uids) > 0:
+        args = [(labels_np, int(uid), S, sigma) for uid in uids]
+        results = pmap(_covariance_worker, args)
 
-        norm = np.maximum(_gauss(mask_f, sigma=sigma), 1e-10)
-
-        grads = []
-        for i in range(S):
-            order = [0] * S
-            order[S - 1 - i] = 1
-            g = _gauss(dt, sigma=sigma_d, order=order)
-            g *= mask_f
-            grads.append(g)
-
-        idx = 0
-        for i in range(S):
-            for j in range(S):
-                st_np[idx][mask] = (
-                    _gauss(grads[i] * grads[j], sigma=sigma) / norm
-                )[mask]
-                idx += 1
-
-        # Blend toward isotropy based on normalised EDT depth.
-        w = np.zeros_like(dt)
-        if edt_max > 1e-6:
-            w[mask] = (dt[mask] / edt_max) ** 2
-
-        trace = np.zeros(mask.shape, dtype=np.float64)
-        for i in range(S):
-            trace += st_np[i * S + i]
-        iso_val = trace / S
-
-        idx = 0
-        for i in range(S):
-            for j in range(S):
-                if i == j:
-                    st_np[idx][mask] = (
-                        (1.0 - w[mask]) * st_np[idx][mask] + w[mask] * iso_val[mask]
-                    ).astype(np.float32)
-                else:
-                    st_np[idx][mask] = (
-                        (1.0 - w[mask]) * st_np[idx][mask]
-                    ).astype(np.float32)
-                idx += 1
+        for res in results:
+            if res is None:
+                continue
+            uid, mask, st_inst = res
+            for c in range(S * S):
+                st_np[c][mask] = st_inst[c][mask]
 
     st_flat = torch.from_numpy(
         st_np.reshape(S * S, N)
