@@ -268,13 +268,46 @@ Splat shading in the fragment shader adds a subtle specular highlight at the Gau
 ### Step 6 — CLI Entry Point (`__main__.py`)
 
 ```bash
-python -m neurons.visualizer --raw data/raw.h5 --seg data/seg.h5 --spacing 30,6,6
+python -m neurons.visualizer --raw <volume> --seg <segmentation> --spacing <z,y,x>
 ```
 
 - Loads volumes via `volume_loader.load_volume`
 - Registers in `_store["default"]` with palette
 - Starts uvicorn on port 8899
 - Auto-opens browser (disable with `--no-browser`)
+
+**Dataset examples:**
+
+```bash
+# SNEMI3D — AC4 training volume (resolution 6x6x30 nm)
+python -m neurons.visualizer \
+    --raw data/snemi3d/AC4_inputs.h5 \
+    --seg data/snemi3d/AC4_labels.h5 \
+    --spacing 30,6,6
+
+# SNEMI3D — AC3 test volume
+python -m neurons.visualizer \
+    --raw data/snemi3d/AC3_inputs.h5 \
+    --seg data/snemi3d/AC3_labels.h5 \
+    --spacing 30,6,6
+
+# CREMI3D — sample A (resolution 4x4x40 nm)
+python -m neurons.visualizer \
+    --raw data/cremi3d/sample_A.h5:volumes/raw \
+    --seg data/cremi3d/sample_A.h5:volumes/labels/neuron_ids \
+    --spacing 40,4,4
+
+# MICrONS — minnie65 crop (resolution 4x4x40 nm)
+python -m neurons.visualizer \
+    --raw data/microns/volume.h5 \
+    --seg data/microns/segmentation.h5 \
+    --spacing 40,4,4
+
+# Raw volume only (no segmentation overlay)
+python -m neurons.visualizer \
+    --raw data/snemi3d/AC4_inputs.h5 \
+    --spacing 30,6,6
+```
 
 ## Dependencies
 

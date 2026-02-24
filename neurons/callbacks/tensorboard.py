@@ -138,7 +138,7 @@ def _log_predictions(
 
     Args:
         tb: TensorBoard SummaryWriter.
-        tag: tag prefix (e.g. ``"train_vis"`` or ``"train_vis_proofread"``).
+        tag: tag prefix (e.g. ``"train_vis_automatic"`` or ``"train_vis_proofread"``).
         images: [n, 1, H, W] input images (already 2-D sliced).
         labels: [n, H, W] instance labels (already 2-D sliced).
         preds: model output dict with ``semantic``, ``instance``, ``geometry``.
@@ -283,7 +283,7 @@ class ImageLogger(pl.Callback):
         labels_2d = rearrange(_to_2d(rearrange(labels[:n], "b ... -> b 1 ...")), "b 1 ... -> b ...")
 
         _log_predictions(
-            tb, "train_vis", images_2d, labels_2d,
+            tb, "train_vis_automatic", images_2d, labels_2d,
             preds_auto, self.spatial_dims, n, epoch,
             clusterer=clusterer,
         )

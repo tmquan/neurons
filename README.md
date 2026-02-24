@@ -120,6 +120,36 @@ python scripts/train.py --config-name combine
 python scripts/train.py training.fast_dev_run=true
 ```
 
+### 6. Visualize volumes
+
+```bash
+# SNEMI3D (AC4 training volume, resolution 6x6x30 nm)
+python -m neurons.visualizer \
+    --raw data/snemi3d/AC4_inputs.h5 \
+    --seg data/snemi3d/AC4_labels.h5 \
+    --spacing 30,6,6
+
+# CREMI3D (sample A)
+python -m neurons.visualizer \
+    --raw data/cremi3d/sample_A.h5:volumes/raw \
+    --seg data/cremi3d/sample_A.h5:volumes/labels/neuron_ids \
+    --spacing 40,4,4
+
+# MICrONS
+python -m neurons.visualizer \
+    --raw data/microns/volume.h5 \
+    --seg data/microns/segmentation.h5 \
+    --spacing 40,4,4
+```
+
+Opens a web viewer at `http://localhost:8899` with 4-panel layout (axial, coronal, sagittal, 3D Gaussian splats). Add `--no-browser` to skip auto-opening.
+
+### 7. Profile training
+
+```bash
+python scripts/train.py --config-name profiler
+```
+
 ## Configuration
 
 All behavior is driven by YAML configs in `configs/`:

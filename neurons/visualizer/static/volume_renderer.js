@@ -18,11 +18,24 @@ uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform vec3 uSigma;
 uniform float uScreenHeight;
+uniform bool uCulling;
+uniform vec3 uCullMin;
+uniform vec3 uCullMax;
 out vec3 vColor;
 flat out vec3 vInvCov;
 flat out float vPtSize;
+flat out float vCulled;
 
 void main() {
+    vCulled = 0.0;
+    if (uCulling) {
+        if (position.x < uCullMin.x || position.x > uCullMax.x ||
+            position.y < uCullMin.y || position.y > uCullMax.y ||
+            position.z < uCullMin.z || position.z > uCullMax.z) {
+            vCulled = 1.0;
+        }
+    }
+
     vColor = color;
     vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
     float z = max(-mvPos.z, 0.01);
@@ -46,7 +59,7 @@ void main() {
     float lambda_max = mid + sqrt(disc);
     float radius = ceil(3.0 * sqrt(max(lambda_max, 0.1)));
     float ptSz = clamp(2.0 * radius, 1.0, 512.0);
-    gl_PointSize = ptSz;
+    gl_PointSize = vCulled > 0.5 ? 0.0 : ptSz;
     vPtSize = ptSz;
 
     float invDet = 1.0 / max(det, 1e-6);
@@ -62,8 +75,10 @@ uniform float uOpacity;
 in vec3 vColor;
 flat in vec3 vInvCov;
 flat in float vPtSize;
+flat in float vCulled;
 out vec4 fragColor;
 void main() {
+    if (vCulled > 0.5) discard;
     vec2 d = vec2(gl_PointCoord.x - 0.5, 0.5 - gl_PointCoord.y) * vPtSize;
     float maha = d.x * d.x * vInvCov.x + 2.0 * d.x * d.y * vInvCov.y + d.y * d.y * vInvCov.z;
     float gauss = exp(-0.5 * maha);
@@ -136,7 +151,92 @@ void main() {
         }
     }
 
-    fragColor = vec4(c, 0.92);
+    fragColor = vec4(c, 1.0);
+}
+`;
+
+/* ── GLSL 300 ES — ray-marched volume rendering ──────────── */
+
+const VOL_VERT = `
+in vec3 position;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform vec3 uBoxMin;
+uniform vec3 uBoxMax;
+out vec3 vWorldPos;
+void main() {
+    vWorldPos = position + 0.5 * (uBoxMin + uBoxMax);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const VOL_FRAG = `
+precision highp float;
+precision highp sampler3D;
+in vec3 vWorldPos;
+out vec4 fragColor;
+
+uniform sampler3D uVolume;
+uniform sampler3D uSeg;
+uniform vec3 uBoxMin;
+uniform vec3 uBoxMax;
+uniform vec3 uCutMin;
+uniform vec3 uCutMax;
+uniform bool uCutting;
+uniform vec3 uCamPos;
+uniform float uWinLo;
+uniform float uWinHi;
+uniform float uSegOpacity;
+uniform bool uShowSeg;
+uniform float uDensity;
+
+void main() {
+    vec3 ro = uCamPos;
+    vec3 rd = normalize(vWorldPos - ro);
+    vec3 boxSize = uBoxMax - uBoxMin;
+
+    vec3 bmin = uCutting ? max(uCutMin, uBoxMin) : uBoxMin;
+    vec3 bmax = uCutting ? min(uCutMax, uBoxMax) : uBoxMax;
+
+    vec3 invRd = 1.0 / rd;
+    vec3 t0 = (bmin - ro) * invRd;
+    vec3 t1 = (bmax - ro) * invRd;
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+    float tNear = max(max(tmin.x, tmin.y), max(tmin.z, 0.0));
+    float tFar  = min(min(tmax.x, tmax.y), tmax.z);
+
+    if (tNear >= tFar) discard;
+
+    int NUM_STEPS = 192;
+    float stepSize = (tFar - tNear) / float(NUM_STEPS);
+    vec3 accum = vec3(0.0);
+    float alphaAcc = 0.0;
+
+    for (int i = 0; i < 192; i++) {
+        float t = tNear + (float(i) + 0.5) * stepSize;
+        vec3 p = ro + rd * t;
+        vec3 tc = (p - uBoxMin) / boxSize;
+
+        float raw = texture(uVolume, tc).r;
+        float v = clamp((raw - uWinLo) / max(uWinHi - uWinLo, 0.001), 0.0, 1.0);
+        vec3 color = vec3(v);
+
+        if (uShowSeg) {
+            vec4 seg = texture(uSeg, tc);
+            if (seg.a > 0.01) {
+                color = mix(color, seg.rgb, uSegOpacity);
+            }
+        }
+
+        float alpha = v * uDensity;
+        accum += color * alpha * (1.0 - alphaAcc);
+        alphaAcc += alpha * (1.0 - alphaAcc);
+        if (alphaAcc > 0.95) break;
+    }
+
+    if (alphaAcc < 0.01) discard;
+    fragColor = vec4(accum, alphaAcc);
 }
 `;
 
@@ -294,6 +394,12 @@ async function initVolumeRenderer() {
     const sigmaY = (ny / dy) * 0.75;
     const sigmaZ = (nz / dz) * 0.75;
 
+    let slicingMode = false;
+    let cuttingMode = true;
+    const cutDir = [1, 1, 1];  // +1 = keep [0..slice], -1 = keep [slice..max]
+    const cutMin = new THREE.Vector3(0, 0, 0);
+    const cutMax = new THREE.Vector3(nx, ny, nz);
+
     const splatMat = new THREE.RawShaderMaterial({
         glslVersion: THREE.GLSL3,
         vertexShader: SPLAT_VERT,
@@ -302,6 +408,9 @@ async function initVolumeRenderer() {
             uSigma:        { value: new THREE.Vector3(sigmaX, sigmaY, sigmaZ) },
             uScreenHeight: { value: rect.height },
             uOpacity:      { value: 0.15 },
+            uCulling:      { value: true },
+            uCullMin:      { value: cutMin },
+            uCullMax:      { value: cutMax },
         },
         transparent: true,
         depthWrite: false,
@@ -382,6 +491,7 @@ async function initVolumeRenderer() {
 
         splatMat.uniforms.uOpacity.value = filled ? 0.15 : 0.35;
         splatPoints = new THREE.Points(geom, splatMat);
+        splatPoints.renderOrder = 20;
         scene.add(splatPoints);
         console.log(`Gaussian splats: ${cnt} points (${filled ? "filled" : "surface"}, stride ${stride})`);
     }
@@ -440,6 +550,37 @@ async function initVolumeRenderer() {
 
     const planes = [makePlane(0), makePlane(1), makePlane(2)];
 
+    /* ── ray-marched volume cube ────────────────────────────── */
+    const volBoxGeom = new THREE.BoxGeometry(nx, ny, nz);
+    const volUniforms = {
+        uVolume:     { value: tRaw },
+        uSeg:        { value: tSeg },
+        uBoxMin:     { value: new THREE.Vector3(0, 0, 0) },
+        uBoxMax:     { value: new THREE.Vector3(nx, ny, nz) },
+        uCutMin:     { value: cutMin },
+        uCutMax:     { value: cutMax },
+        uCutting:    { value: cuttingMode },
+        uCamPos:     { value: new THREE.Vector3() },
+        uWinLo:      { value: wLo },
+        uWinHi:      { value: wHi },
+        uSegOpacity: { value: 0.0 },
+        uShowSeg:    { value: false },
+        uDensity:    { value: 3.0 },
+    };
+    const volMat = new THREE.RawShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        vertexShader: VOL_VERT,
+        fragmentShader: VOL_FRAG,
+        uniforms: volUniforms,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.BackSide,
+    });
+    const volMesh = new THREE.Mesh(volBoxGeom, volMat);
+    volMesh.position.set(nx / 2, ny / 2, nz / 2);
+    volMesh.renderOrder = 5;
+    scene.add(volMesh);
+
     function updatePlanes() {
         const s = st.sliceIdx;
         const fZ = (s[0] + 0.5) / st.shape[0];
@@ -452,6 +593,24 @@ async function initVolumeRenderer() {
         planes[1].mesh.position.set(nx / 2, fY * ny, nz / 2);
         planes[2].mat.uniforms.uSliceFrac.value = fX;
         planes[2].mesh.position.set(fX * nx, ny / 2, nz / 2);
+
+        const posX = fX * nx, posY = fY * ny, posZ = fZ * nz;
+        if (cuttingMode) {
+            cutMin.set(
+                cutDir[0] > 0 ? 0 : posX,
+                cutDir[1] > 0 ? 0 : posY,
+                cutDir[2] > 0 ? 0 : posZ,
+            );
+            cutMax.set(
+                cutDir[0] > 0 ? posX : nx,
+                cutDir[1] > 0 ? posY : ny,
+                cutDir[2] > 0 ? posZ : nz,
+            );
+            volUniforms.uCutting.value = true;
+        } else {
+            volUniforms.uCutting.value = false;
+        }
+        splatMat.uniforms.uCulling.value = false;
     }
     updatePlanes();
 
@@ -462,7 +621,15 @@ async function initVolumeRenderer() {
             p.mat.uniforms.uShowSeg.value = show;
             p.mat.uniforms.uSegOpacity.value = opacity;
         });
+        volUniforms.uShowSeg.value = show;
+        volUniforms.uSegOpacity.value = opacity;
     };
+
+    function updateVisibility() {
+        planes.forEach(p => { p.mesh.visible = slicingMode; });
+        volMesh.visible = cuttingMode;
+    }
+    updateVisibility();
 
     window._set3dSelection = function(selectedIds) {
         selMaskData.fill(0);
@@ -475,7 +642,6 @@ async function initVolumeRenderer() {
         const hasSel = selectedIds.length > 0;
         planes.forEach(p => {
             p.mat.uniforms.uHasSelection.value = hasSel;
-            p.mesh.visible = !hasSel;
         });
 
         buildSplats(new Set(selectedIds));
@@ -489,6 +655,34 @@ async function initVolumeRenderer() {
             buildSplats(new Set(st.selected));
         }
     };
+
+    window._set3dSlicing = function(enabled) {
+        slicingMode = enabled;
+        console.log("Slicing planes:", enabled);
+        updateVisibility();
+    };
+
+    window._set3dCutting = function(enabled) {
+        cuttingMode = enabled;
+        volUniforms.uCutting.value = enabled;
+        console.log("Cutting mode:", enabled);
+        updateVisibility();
+        updatePlanes();
+    };
+
+    window._flipCutDir = function(axis) {
+        cutDir[axis] *= -1;
+        const labels = ["X", "Y", "Z"];
+        console.log(`Cut direction ${labels[axis]}: ${cutDir[axis] > 0 ? "keep min→slice" : "keep slice→max"}`);
+        updatePlanes();
+    };
+
+    /* ── keyboard: flip cut direction per axis (X / Y / Z) ───── */
+    window.addEventListener("keydown", e => {
+        if (e.key === "x" || e.key === "X") window._flipCutDir(2);
+        else if (e.key === "y" || e.key === "Y") window._flipCutDir(1);
+        else if (e.key === "z" || e.key === "Z") window._flipCutDir(0);
+    });
 
     /* ── bounding box wireframe ───────────────────────────────── */
     const bbGeom = new THREE.BoxGeometry(nx, ny, nz);
@@ -569,6 +763,7 @@ async function initVolumeRenderer() {
     /* ── render loop ──────────────────────────────────────────── */
     function animate() {
         requestAnimationFrame(animate);
+        volUniforms.uCamPos.value.copy(camera.position);
         renderer.render(scene, camera);
     }
     animate();

@@ -17,9 +17,9 @@ data:
   slice_mode: false
   num_samples: 16000  # random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
-    - 64
-    - 256
-    - 256
+    - 32
+    - 160
+    - 160
     
 
 model:

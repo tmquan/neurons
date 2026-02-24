@@ -508,6 +508,18 @@ document.getElementById("cb-filled").addEventListener("change", (e) => {
     }
 });
 
+document.getElementById("cb-slicing").addEventListener("change", (e) => {
+    if (typeof window._set3dSlicing === "function") {
+        window._set3dSlicing(e.target.checked);
+    }
+});
+
+document.getElementById("cb-cutting").addEventListener("change", (e) => {
+    if (typeof window._set3dCutting === "function") {
+        window._set3dCutting(e.target.checked);
+    }
+});
+
 /* ── cache management ──────────────────────────────────────────── */
 
 document.getElementById("btn-clear-cache").addEventListener("click", async () => {
@@ -573,9 +585,9 @@ async function boot() {
         st.shape = meta.shape;
         st.spacing = meta.spacing;
         st.sliceIdx = [
-            Math.floor(meta.shape[0] / 2),
-            Math.floor(meta.shape[1] / 2),
-            Math.floor(meta.shape[2] / 2),
+            meta.shape[0] - 1,
+            meta.shape[1] - 1,
+            meta.shape[2] - 1,
         ];
 
         // 2. Determine downsample
