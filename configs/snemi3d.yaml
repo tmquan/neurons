@@ -11,11 +11,12 @@ data:
   dataset: snemi3d
   data_root: data/snemi3d
   batch_size: 8
-  num_workers: 32
+  num_workers: 64
   train_val_split: 0.0
   cache_rate: 0.0  # must be 0 in 3D mode: virtual_len + cache freezes a single random crop
   slice_mode: false
-  num_samples: 16000  # random 3D crops per epoch (volume has 100 Z-slices)
+  erode_boundaries: 1.0  # Probability of eroding neuron boundaries to bg (0.0=off, 0.5=50%, 1.0=always)
+  num_samples: 16000     # Number of random 3D crops per epoch (volume has 100 Z-slices)
   patch_size:
     - 32
     - 160

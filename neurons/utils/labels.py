@@ -22,8 +22,10 @@ def erode_neuron_boundaries(
 ) -> torch.Tensor:
     """Set neuron instance boundary pixels to background (0).
 
-    A pixel is on a boundary if any neighbor (3x3 kernel) has a different
-    non-zero label.  Creates a 1-pixel gap between adjacent instances.
+    A pixel is on a boundary if any face-adjacent neighbor (6-connected
+    in 3D, 4-connected in 2D) has a different non-zero label.  This
+    produces a thin 1-pixel gap — thinner than the 3x3 max_pool approach
+    which also detects diagonal neighbors.
 
     Pure function — no randomness.  Use ``RandErodeNeuronBoundariesd``
     from ``neurons.transforms`` for the stochastic MONAI transform.
@@ -35,27 +37,38 @@ def erode_neuron_boundaries(
     Returns:
         Labels with boundary pixels set to 0.
     """
-    import torch.nn.functional as F
-
     has_channel = labels.dim() == spatial_dims + 1
-    inp = rearrange(labels, "... -> 1 1 ...") if not has_channel else rearrange(labels, "c ... -> 1 c ...")
+    lbl = labels if not has_channel else rearrange(labels, "c ... -> c ...")
+
+    boundary = torch.zeros_like(lbl, dtype=torch.bool)
 
     if spatial_dims == 3:
-        pad, pool_fn = (1, 1, 1, 1, 1, 1), F.max_pool3d
+        if has_channel:
+            d0, d1, d2 = 1, 2, 3
+        else:
+            d0, d1, d2 = 0, 1, 2
+        shifts = [
+            (d0, 1), (d0, -1),
+            (d1, 1), (d1, -1),
+            (d2, 1), (d2, -1),
+        ]
     else:
-        pad, pool_fn = (1, 1, 1, 1), F.max_pool2d
+        if has_channel:
+            d0, d1 = 1, 2
+        else:
+            d0, d1 = 0, 1
+        shifts = [
+            (d0, 1), (d0, -1),
+            (d1, 1), (d1, -1),
+        ]
 
-    padded = F.pad(inp.float(), pad, mode="replicate")
-    local_max = pool_fn(padded, kernel_size=3, stride=1, padding=0)
-    local_min = pool_fn(-padded, kernel_size=3, stride=1, padding=0).neg_()
+    for dim, delta in shifts:
+        shifted = torch.roll(lbl, shifts=-delta, dims=dim)
+        boundary |= (lbl != shifted) & (lbl > 0)
 
-    boundary = local_max != local_min
-    out = inp.clone()
+    out = labels.clone()
     out[boundary] = 0
-
-    if not has_channel:
-        return rearrange(out, "1 1 ... -> ...")
-    return rearrange(out, "1 c ... -> c ...")
+    return out
 
 
 def relabel_sequential(
