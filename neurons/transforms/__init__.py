@@ -7,20 +7,24 @@ Image augmentations:
 - ``Defectsd``             — line artifacts and intensity shifts
 
 Label transforms:
-- ``RelabelAfterCropd``          — connected-component relabeling after crop
-- ``RandErodeNeuronBoundariesd`` — randomly erode instance boundaries to bg
+- ``RelabelAfterCropd``      — connected-component relabeling after crop
+- ``RandFindBoundariesd``    — randomly erase instance boundaries to bg
 """
 
 from neurons.transforms.elastic_deformation import ElasticDeformationd
 from neurons.transforms.missing_section import MissingSectiond
 from neurons.transforms.defects import Defectsd
 from neurons.transforms.relabel_after_crop import RelabelAfterCropd
-from neurons.transforms.erode_neuron_boundaries import RandErodeNeuronBoundariesd
+from neurons.transforms.find_boundaries import (
+    RandFindBoundariesd,
+    RandErodeNeuronBoundariesd,
+)
 
 __all__ = [
     "ElasticDeformationd",
     "MissingSectiond",
     "Defectsd",
     "RelabelAfterCropd",
+    "RandFindBoundariesd",
     "RandErodeNeuronBoundariesd",
 ]

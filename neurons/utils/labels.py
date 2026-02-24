@@ -16,59 +16,106 @@ import torch
 from einops import rearrange
 
 
-def erode_neuron_boundaries(
+def find_boundaries(
     labels: torch.Tensor,
-    spatial_dims: int = 3,
+    connectivity: int = 1,
+    mode: str = "inner",
+    background: int = 0,
 ) -> torch.Tensor:
-    """Set neuron instance boundary pixels to background (0).
+    """Return bool tensor where boundaries between labeled regions are True.
 
-    A pixel is on a boundary if any face-adjacent neighbor (6-connected
-    in 3D, 4-connected in 2D) has a different non-zero label.  This
-    produces a thin 1-pixel gap — thinner than the 3x3 max_pool approach
-    which also detects diagonal neighbors.
-
-    Pure function — no randomness.  Use ``RandErodeNeuronBoundariesd``
-    from ``neurons.transforms`` for the stochastic MONAI transform.
+    Pure-torch reimplementation of ``skimage.segmentation.find_boundaries``.
+    Supports 2-D and 3-D label tensors.
 
     Args:
-        labels: Instance label tensor [*spatial] or [C, *spatial].
-        spatial_dims: 2 or 3.
+        labels: Integer label tensor [*spatial] or [C, *spatial].
+        connectivity: 1 = face-adjacent (thin), ``labels.ndim`` = include
+            corners (thick).  Maps to the structuring element radius.
+        mode: ``"thick"`` — any pixel not fully surrounded by same label.
+            ``"inner"`` — boundary pixels inside foreground only.
+            ``"outer"`` — boundary pixels in background around objects;
+            also marks where two objects touch.
+        background: Label value treated as background (default 0).
 
     Returns:
-        Labels with boundary pixels set to 0.
+        Bool tensor same shape as labels.
     """
-    has_channel = labels.dim() == spatial_dims + 1
-    lbl = labels if not has_channel else rearrange(labels, "c ... -> c ...")
+    import torch.nn.functional as F
 
-    boundary = torch.zeros_like(lbl, dtype=torch.bool)
+    has_channel = labels.dim() > 2 and labels.shape[0] == 1 and labels.dim() == 4
+    spatial_dims = labels.dim() - (1 if has_channel else 0)
+
+    if has_channel:
+        lbl = rearrange(labels.float(), "c ... -> 1 c ...")
+    else:
+        lbl = rearrange(labels.float(), "... -> 1 1 ...")
 
     if spatial_dims == 3:
-        if has_channel:
-            d0, d1, d2 = 1, 2, 3
-        else:
-            d0, d1, d2 = 0, 1, 2
-        shifts = [
-            (d0, 1), (d0, -1),
-            (d1, 1), (d1, -1),
-            (d2, 1), (d2, -1),
-        ]
+        pool_fn = F.max_pool3d
+        ks = 3 if connectivity >= spatial_dims else 3
+        pad = (1, 1, 1, 1, 1, 1)
     else:
+        pool_fn = F.max_pool2d
+        ks = 3
+        pad = (1, 1, 1, 1)
+
+    if connectivity < spatial_dims:
+        # Face-adjacent only: use per-axis shift-and-compare
         if has_channel:
-            d0, d1 = 1, 2
+            core = labels
+            dims = list(range(1, spatial_dims + 1))
         else:
-            d0, d1 = 0, 1
-        shifts = [
-            (d0, 1), (d0, -1),
-            (d1, 1), (d1, -1),
-        ]
+            core = labels
+            dims = list(range(spatial_dims))
 
-    for dim, delta in shifts:
-        shifted = torch.roll(lbl, shifts=-delta, dims=dim)
-        boundary |= (lbl != shifted) & (lbl > 0)
+        dilated = core.clone()
+        eroded = core.clone()
+        for d in dims:
+            fwd = torch.roll(core, shifts=-1, dims=d)
+            bwd = torch.roll(core, shifts=1, dims=d)
+            dilated = torch.max(dilated, torch.max(fwd, bwd))
+            eroded = torch.min(eroded, torch.min(fwd, bwd))
+    else:
+        # Full connectivity: use max_pool / min_pool (3x3x3 kernel)
+        padded = F.pad(lbl, pad, mode="replicate")
+        dilated_t = pool_fn(padded, kernel_size=ks, stride=1, padding=0)
+        eroded_t = pool_fn(-padded, kernel_size=ks, stride=1, padding=0).neg_()
 
-    out = labels.clone()
-    out[boundary] = 0
-    return out
+        if has_channel:
+            dilated = rearrange(dilated_t, "1 c ... -> c ...")
+            eroded = rearrange(eroded_t, "1 c ... -> c ...")
+        else:
+            dilated = rearrange(dilated_t, "1 1 ... -> ...")
+            eroded = rearrange(eroded_t, "1 1 ... -> ...")
+
+    boundaries = dilated != eroded
+
+    if mode == "inner":
+        boundaries = boundaries & (labels != background)
+    elif mode == "outer":
+        is_bg = labels == background
+        # Where two different objects touch (via full connectivity)
+        padded_full = F.pad(lbl, pad, mode="replicate")
+        if spatial_dims == 3:
+            dil_full = F.max_pool3d(padded_full, kernel_size=3, stride=1, padding=0)
+            inv_bg = lbl.clone()
+            inv_bg[lbl == background] = float(labels.max().item()) + 1
+            padded_inv = F.pad(inv_bg, pad, mode="replicate")
+            ero_inv = F.max_pool3d(-padded_inv, kernel_size=3, stride=1, padding=0).neg_()
+        else:
+            dil_full = F.max_pool2d(padded_full, kernel_size=3, stride=1, padding=0)
+            inv_bg = lbl.clone()
+            inv_bg[lbl == background] = float(labels.max().item()) + 1
+            padded_inv = F.pad(inv_bg, pad, mode="replicate")
+            ero_inv = F.max_pool2d(-padded_inv, kernel_size=3, stride=1, padding=0).neg_()
+
+        if has_channel:
+            adj = rearrange(dil_full != ero_inv, "1 c ... -> c ...") & ~is_bg
+        else:
+            adj = rearrange(dil_full != ero_inv, "1 1 ... -> ...") & ~is_bg
+        boundaries = boundaries & (is_bg | adj)
+
+    return boundaries
 
 
 def relabel_sequential(

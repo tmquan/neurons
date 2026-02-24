@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import SNEMI3DDataset
-from neurons.transforms import RelabelAfterCropd, RandErodeNeuronBoundariesd
+from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
 
 
 class SNEMI3DDataModule(CircuitDataModule):
@@ -82,8 +82,8 @@ class SNEMI3DDataModule(CircuitDataModule):
         """Build label post-processing steps after spatial crop."""
         steps = [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
         if self.erode_boundaries > 0:
-            steps.append(RandErodeNeuronBoundariesd(
-                keys=["label"], prob=self.erode_boundaries, spatial_dims=spatial_dims,
+            steps.append(RandFindBoundariesd(
+                keys=["label"], prob=self.erode_boundaries,
             ))
         return steps
 

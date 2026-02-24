@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets.mitoem2 import MitoEM2Dataset
-from neurons.transforms import RelabelAfterCropd, RandErodeNeuronBoundariesd
+from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
 
 
 class MitoEM2DataModule(CircuitDataModule):
@@ -83,8 +83,8 @@ class MitoEM2DataModule(CircuitDataModule):
     def _label_post_crop(self, spatial_dims: int) -> list:
         steps = [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
         if self.erode_boundaries > 0:
-            steps.append(RandErodeNeuronBoundariesd(
-                keys=["label"], prob=self.erode_boundaries, spatial_dims=spatial_dims,
+                steps.append(RandFindBoundariesd(
+                keys=["label"], prob=self.erode_boundaries,
             ))
         return steps
 

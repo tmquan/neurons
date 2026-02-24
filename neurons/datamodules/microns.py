@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import MICRONSDataset
-from neurons.transforms import RelabelAfterCropd, RandErodeNeuronBoundariesd
+from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
 
 
 class MICRONSDataModule(CircuitDataModule):

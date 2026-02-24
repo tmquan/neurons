@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import CREMI3DDataset
-from neurons.transforms import RelabelAfterCropd, RandErodeNeuronBoundariesd
+from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
 
 
 class CREMI3DDataModule(CircuitDataModule):
@@ -86,8 +86,8 @@ class CREMI3DDataModule(CircuitDataModule):
     def _label_post_crop(self) -> list:
         steps = [RelabelAfterCropd(keys=["label"], spatial_dims=3)]
         if self.erode_boundaries > 0:
-            steps.append(RandErodeNeuronBoundariesd(
-                keys=["label"], prob=self.erode_boundaries, spatial_dims=3,
+            steps.append(RandFindBoundariesd(
+                keys=["label"], prob=self.erode_boundaries,
             ))
         return steps
 
