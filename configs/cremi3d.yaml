@@ -1,5 +1,8 @@
 # CREMI3D Configuration
-# Neuron and synapse segmentation
+# Neuron + synapse segmentation (4x4x40 nm)
+#
+# Train/val: samples A, B, C (with ground truth)
+# Test:      samples A+, B+, C+ (padded, disjoint)
 
 defaults:
   - default
@@ -7,33 +10,33 @@ defaults:
 experiment_name: cremi3d_instance_seg
 project_name: neurons-cremi3d
 
-# Data configuration for CREMI3D
 data:
   dataset: cremi3d
   data_root: data/cremi3d
   batch_size: 4
-  num_workers: 4
-  train_val_split: 0.2
-  cache_rate: 0.5
-  volumes:
-    - A
-    - B
-  include_clefts: true
-  include_mito: false
-  patch_size:
-    - 32
-    - 128
-    - 128
+  num_workers: 8
+  cache_rate: 0.0
+  slice_mode: false
+  num_samples: 4000
+  find_boundaries: 0.5
+  patch_size: [32, 160, 160]
+  train_volumes:
+    - {vol: A}
+    - {vol: B}
+    - {vol: C}
+  test_volumes:
+    - {vol: A+}
+    - {vol: B+}
+    - {vol: C+}
 
-# Model configuration
 model:
   type: vista3d
   in_channels: 1
   num_classes: 16
   emb_dim: 16
-  feature_size: 64
+  feature_size: 48
+  dropout: 0.2
 
-# Optimizer
 optimizer:
   type: adamw
   lr: 1.0e-4
@@ -43,16 +46,12 @@ optimizer:
     T_max: 200
     eta_min: 1.0e-7
 
-# Loss configuration
 loss:
+  semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
   weight_dice: 1.0
-  class_weights:
-    - 0.1
-    - 0.5
-    - 0.4
   weight_instance: 1.0
   weight_pull: 1.0
   weight_push: 1.0
@@ -60,18 +59,26 @@ loss:
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 10.0
-  weight_bone: 10.0
+  weight_bone: 1.0
   weight_geometry: 1.0
-  dir_target: "skeleton"
+  dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0
   weight_raw: 1.0
+  loss_dir: smooth_l1
+  loss_cov: mse
+  loss_raw: l1
   ignore_index: -100
 
-# Training
 training:
   max_epochs: 200
   accelerator: auto
-  devices: 1
+  devices: auto
+  strategy: ddp
   precision: 16-mixed
   gradient_clip_val: 1.0
+  limit_val_batches: 20
+  log_every_n_steps: 50
+  benchmark: true
+  training_modes:
+    - automatic

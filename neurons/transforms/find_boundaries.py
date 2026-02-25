@@ -55,7 +55,3 @@ class RandFindBoundariesd(MapTransform, Randomizable):
             out[boundary] = 0
             d[key] = out
         return d
-
-
-# Backward-compatible alias
-RandErodeNeuronBoundariesd = RandFindBoundariesd

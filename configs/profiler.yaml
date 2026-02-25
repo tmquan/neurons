@@ -12,21 +12,23 @@ data:
   data_root: data/snemi3d
   batch_size: 2
   num_workers: 8
-  train_val_split: 0.2
   cache_rate: 0.0
   slice_mode: false
   num_samples: 800
-  patch_size:
-    - 32
-    - 128
-    - 128
+  find_boundaries: 0.5
+  patch_size: [32, 160, 160]
+  train_volumes:
+    - {vol: AC4_inputs, seg: AC4_labels}
+  test_volumes:
+    - {vol: AC3_inputs, seg: AC3_labels}
 
 model:
   type: vista3d
   in_channels: 1
   num_classes: 16
   emb_dim: 16
-  feature_size: 64
+  feature_size: 48
+  dropout: 0.2
 
 optimizer:
   type: adamw
@@ -50,11 +52,11 @@ loss:
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 10.0
-  weight_bone: 10.0
+  weight_bone: 1.0
   weight_geometry: 1.0
-  dir_target: skeleton
+  dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0
   weight_raw: 1.0
   loss_dir: smooth_l1
   loss_cov: mse
@@ -69,4 +71,6 @@ training:
   precision: 16-mixed
   gradient_clip_val: 1.0
   num_sanity_val_steps: 0
-  profiler: pytorch
+  profiler: advanced
+  training_modes:
+    - automatic

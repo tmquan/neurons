@@ -18,35 +18,16 @@ class SNEMI3DDataset(CircuitDataset):
     """
     SNEMI3D Dataset for neuron segmentation in electron microscopy images.
 
-    Dataset from the SNEMI3D challenge (ISBI 2013) based on Kasthuri et al.
-    Contains serial section electron microscopy images of mouse cortex with
-    neuron instance segmentation labels.
-
-    Dataset Structure:
-        - Training: AC4 volume (100 slices, 1024x1024)
-        - Testing: AC3 volume (100 slices, 1024x1024)
-        - Resolution: 6x6x30 nm (anisotropic)
-
-    Expected file structure:
-        root_dir/
-            AC3_inputs.h5 or AC3_inputs.tiff    # Test volume
-            AC3_labels.h5 or AC3_labels.tiff    # Test labels (if available)
-            AC4_inputs.h5 or AC4_inputs.tiff    # Train volume
-            AC4_labels.h5 or AC4_labels.tiff    # Train labels
+    Volume format: ``[{"vol": "AC4_inputs", "seg": "AC4_labels"}]``
 
     Args:
         root_dir: Path to directory containing SNEMI3D data files.
-        split: Data split ('train', 'valid', 'test').
+        volumes: List of {vol, seg} dicts. Defaults to AC4 train volume.
         transform: Optional MONAI transforms to apply.
         cache_rate: Fraction of data to cache in memory (default: 1.0).
-        train_val_split: Fraction for validation split (default: 0.2).
         slice_mode: If True, return individual 2D slices; if False, return
             3D volume patches (default: True).
-        num_samples: Number of samples (random crops/augmentations) per epoch.
-            In slice_mode, defaults to the number of Z slices.
-            In 3D mode, defaults to the number of Z slices (each sample
-            is a random crop from the full volume).  Set explicitly to
-            control epoch length independently of volume size.
+        num_samples: Number of samples per epoch.
     """
 
     _paper = (
@@ -59,10 +40,9 @@ class SNEMI3DDataset(CircuitDataset):
     def __init__(
         self,
         root_dir: str,
-        split: str = "train",
+        volumes: Optional[List[Dict[str, str]]] = None,
         transform: Optional[Callable] = None,
         cache_rate: float = 1.0,
-        train_val_split: float = 0.2,
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
         num_workers: int = 0,
@@ -74,10 +54,9 @@ class SNEMI3DDataset(CircuitDataset):
 
         super().__init__(
             root_dir=root_dir,
-            split=split,
+            volumes=volumes,
             transform=transform,
             cache_rate=cache_rate,
-            train_val_split=train_val_split,
             num_workers=num_workers,
         )
 
@@ -93,107 +72,68 @@ class SNEMI3DDataset(CircuitDataset):
     def labels(self) -> List[str]:
         return self._labels.copy()
 
+    def _default_volumes(self) -> List[Dict[str, str]]:
+        return [{"vol": "AC4_inputs", "seg": "AC4_labels"}]
+
     @property
     def data_files(self) -> Dict[str, Union[str, np.ndarray]]:
-        """Return expected data files based on current split."""
-        if self.split in ["train", "valid"]:
-            return {"vol": "AC4_inputs", "seg": "AC4_labels"}
-        else:
-            return {"vol": "AC3_inputs", "seg": "AC3_labels"}
+        vols = self._get_volume_list()
+        return {"vol": vols[0]["vol"], "seg": vols[0]["seg"]} if vols else {}
 
-    def _load_volume(self, base_name: str) -> np.ndarray:
-        """
-        Load volume data from file using smart path finding.
-
-        Args:
-            base_name: Base filename without extension.
-
-        Returns:
-            Numpy array containing volume data.
-
-        Raises:
-            FileNotFoundError: If no matching file is found.
-        """
-        path = find_folder(self.root_dir, base_name)
-
+    def _load_volume(self, base_name: str, root_dir: Optional[Path] = None) -> np.ndarray:
+        search_dir = root_dir if root_dir is not None else self.root_dir
+        path = find_folder(search_dir, base_name)
         if path is None:
             raise FileNotFoundError(
-                f"Could not find data file '{base_name}' in {self.root_dir}.\n"
+                f"Could not find data file '{base_name}' in {search_dir}.\n"
                 f"Expected one of: {base_name}.h5, {base_name}.hdf5, "
                 f"{base_name}.tiff, {base_name}.tif"
             )
-
         suffix = path.suffix.lower()
         if suffix in [".h5", ".hdf5"]:
             return self._hdf5_preprocessor.load(str(path))
-        else:
-            return self._tiff_preprocessor.load(str(path))
+        return self._tiff_preprocessor.load(str(path))
 
     def _prepare_data(self) -> List[Dict[str, Any]]:
-        """
-        Prepare data dictionaries based on split.
-
-        For train/valid: Uses the full AC4 volume (no split — both
-        train and val see all slices; random crops differ).
-        For test: Uses the AC3 volume.
-
-        Returns:
-            List of dictionaries with 'image', 'label', and metadata.
-        """
         data_list: List[Dict[str, Any]] = []
-        files = self.data_files
+        total_slices = 0
 
-        try:
-            inputs = self._load_volume(files["vol"])
-        except FileNotFoundError as e:
-            raise FileNotFoundError(
-                f"SNEMI3D volume data not found.\n{e}\n"
-                f"Please download the SNEMI3D dataset from: "
-                f"https://snemi3d.grand-challenge.org/"
-            )
+        for vol_spec in self._get_volume_list():
+            vol_root = Path(vol_spec["root"]) if "root" in vol_spec else None
+            inputs = self._load_volume(vol_spec["vol"], root_dir=vol_root).astype(np.float32)
+            vmin, vmax = float(inputs.min()), float(inputs.max())
+            if vmax > vmin:
+                inputs = (inputs - vmin) / (vmax - vmin)
 
-        inputs = inputs.astype(np.float32)
-        vmin, vmax = float(inputs.min()), float(inputs.max())
-        if vmax > vmin:
-            inputs = (inputs - vmin) / (vmax - vmin)
-
-        labels: Optional[np.ndarray] = None
-        if self.split in ["train", "valid"]:
-            labels = self._load_volume(files["seg"])
-        else:
+            labels: Optional[np.ndarray] = None
             try:
-                labels = self._load_volume(files["seg"])
+                labels = self._load_volume(vol_spec["seg"], root_dir=vol_root).astype(np.int64)
             except FileNotFoundError:
                 labels = None
 
-        if labels is not None:
-            labels = labels.astype(np.int64)
+            n_slices = inputs.shape[0]
+            vol_name = vol_spec["vol"]
 
-        n_slices = inputs.shape[0]
-        volume_name = "AC4" if self.split in ["train", "valid"] else "AC3"
-
-        if self.slice_mode:
-            for si in range(n_slices):
-                data_dict: Dict[str, Any] = {
-                    "image": inputs[si],
-                    "slice_idx": si,
-                    "volume": volume_name,
-                    "idx": si,
-                }
+            if self.slice_mode:
+                for si in range(n_slices):
+                    entry: Dict[str, Any] = {
+                        "image": inputs[si], "slice_idx": si,
+                        "volume": vol_name, "idx": len(data_list),
+                    }
+                    if labels is not None:
+                        entry["label"] = labels[si]
+                    data_list.append(entry)
+            else:
+                entry = {"image": inputs, "volume": vol_name, "idx": len(data_list)}
                 if labels is not None:
-                    data_dict["label"] = labels[si]
-                data_list.append(data_dict)
-            if self._num_samples is not None:
-                self._virtual_len = self._num_samples
-        else:
-            data_dict_3d: Dict[str, Any] = {
-                "image": inputs,
-                "volume": volume_name,
-                "idx": 0,
-            }
-            if labels is not None:
-                data_dict_3d["label"] = labels
-            data_list.append(data_dict_3d)
-            self._virtual_len = self._num_samples if self._num_samples is not None else n_slices
+                    entry["label"] = labels
+                data_list.append(entry)
+
+            total_slices += n_slices
+
+        if self._num_samples is not None:
+            self._virtual_len = self._num_samples
+        elif not self.slice_mode:
+            self._virtual_len = total_slices
 
         return data_list

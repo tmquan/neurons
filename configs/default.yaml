@@ -16,13 +16,15 @@ data:
   data_root: data
   batch_size: 4
   num_workers: 16
-  train_val_split: 0.2
   cache_rate: 0.5
   pin_memory: true
-  image_size: null  # Optional resize, e.g., [256, 256]
-  slice_mode: true  # Return 2D slices
-  num_samples: null  # Samples per epoch (null = auto from volume size)
-  erode_boundaries: 0.0  # Probability of eroding neuron boundaries to bg (0.0=off, 0.5=50%, 1.0=always)
+  image_size: null
+  slice_mode: true
+  num_samples: null
+  find_boundaries: 0.0
+  train_volumes: null  # List of {vol, seg} dicts; null = dataset defaults
+  val_volumes: null    # Defaults to train_volumes
+  test_volumes: null   # Defaults to train_volumes
 
 # Model configuration
 model:

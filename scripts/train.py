@@ -60,20 +60,32 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     data_cfg = cfg.data
     dataset_type = data_cfg.get("dataset", "snemi3d").lower()
 
+    def _to_vol_list(val):
+        """Convert config value to list of dicts or None."""
+        if val is None:
+            return None
+        return [dict(v) if hasattr(v, "keys") else v for v in val]
+
+    train_volumes = _to_vol_list(data_cfg.get("train_volumes"))
+    val_volumes = _to_vol_list(data_cfg.get("val_volumes"))
+    test_volumes = _to_vol_list(data_cfg.get("test_volumes"))
+
     common_args: Dict[str, Any] = {
         "data_root": data_cfg.get("data_root", "data"),
         "batch_size": data_cfg.get("batch_size", 4),
         "num_workers": data_cfg.get("num_workers", 4),
-        "train_val_split": data_cfg.get("train_val_split", 0.2),
         "cache_rate": data_cfg.get("cache_rate", 0.5),
         "pin_memory": data_cfg.get("pin_memory", True),
+        "train_volumes": train_volumes,
+        "val_volumes": val_volumes,
+        "test_volumes": test_volumes,
     }
 
     image_size = data_cfg.get("image_size")
     if image_size is not None:
         common_args["image_size"] = tuple(image_size) if isinstance(image_size, list) else image_size
 
-    erode_boundaries = float(data_cfg.get("erode_boundaries", 0.0))
+    find_boundaries = float(data_cfg.get("find_boundaries", 0.0))
 
     if dataset_type == "snemi3d":
         patch_size = data_cfg.get("patch_size")
@@ -81,45 +93,38 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            erode_boundaries=erode_boundaries,
+            find_boundaries=find_boundaries,
             **common_args,
         )
 
     elif dataset_type == "cremi3d":
         patch_size = data_cfg.get("patch_size")
-        volumes = data_cfg.get("volumes")
         return CREMI3DDataModule(
-            volumes=list(volumes) if volumes else None,
             include_clefts=data_cfg.get("include_clefts", True),
             include_mito=data_cfg.get("include_mito", False),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            erode_boundaries=erode_boundaries,
+            find_boundaries=find_boundaries,
             **common_args,
         )
 
     elif dataset_type == "microns":
         patch_size = data_cfg.get("patch_size")
         return MICRONSDataModule(
-            volume_file=data_cfg.get("volume_file", "volume"),
-            segmentation_file=data_cfg.get("segmentation_file", "segmentation"),
-            include_synapses=data_cfg.get("include_synapses", False),
-            include_mitochondria=data_cfg.get("include_mitochondria", False),
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            erode_boundaries=erode_boundaries,
+            find_boundaries=find_boundaries,
             **common_args,
         )
 
     elif dataset_type == "mitoem2":
         patch_size = data_cfg.get("patch_size")
         return MitoEM2DataModule(
-            dataset_name=data_cfg.get("dataset_name"),
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            erode_boundaries=erode_boundaries,
+            find_boundaries=find_boundaries,
             **common_args,
         )
 
@@ -129,7 +134,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         cremi3d_cfg = datasets_cfg.get("cremi3d", {})
         mitoem2_cfg = datasets_cfg.get("mitoem2", {})
 
-        patch_size = data_cfg.get("patch_size", [32, 128, 128])
+        patch_size = data_cfg.get("patch_size", [32, 160, 160])
         if isinstance(patch_size, list):
             patch_size = tuple(patch_size)
 
@@ -143,10 +148,11 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         data_root=snemi3d_root,
                         batch_size=data_cfg.get("batch_size", 4),
                         num_workers=data_cfg.get("num_workers", 4),
-                        train_val_split=data_cfg.get("train_val_split", 0.2),
                         cache_rate=data_cfg.get("cache_rate", 0.5),
                         patch_size=patch_size,
                         slice_mode=False,
+                        train_volumes=_to_vol_list(snemi3d_cfg.get("train_volumes")),
+                        test_volumes=_to_vol_list(snemi3d_cfg.get("test_volumes")),
                     ),
                     snemi3d_cfg.get("weight", 1.0),
                 )
@@ -159,10 +165,10 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         data_root=cremi3d_root,
                         batch_size=data_cfg.get("batch_size", 4),
                         num_workers=data_cfg.get("num_workers", 4),
-                        train_val_split=data_cfg.get("train_val_split", 0.2),
                         cache_rate=data_cfg.get("cache_rate", 0.5),
                         patch_size=patch_size,
-                        volumes=list(cremi3d_cfg.get("volumes", ["A", "B"])),
+                        train_volumes=_to_vol_list(cremi3d_cfg.get("train_volumes")),
+                        test_volumes=_to_vol_list(cremi3d_cfg.get("test_volumes")),
                         include_clefts=cremi3d_cfg.get("include_clefts", True),
                         include_mito=cremi3d_cfg.get("include_mito", False),
                     ),
@@ -177,9 +183,9 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         data_root=mito_root,
                         batch_size=data_cfg.get("batch_size", 4),
                         num_workers=data_cfg.get("num_workers", 4),
-                        train_val_split=data_cfg.get("train_val_split", 0.2),
                         cache_rate=data_cfg.get("cache_rate", 0.5),
-                        dataset_name=mitoem2_cfg.get("dataset_name"),
+                        train_volumes=_to_vol_list(mitoem2_cfg.get("train_volumes")),
+                        test_volumes=_to_vol_list(mitoem2_cfg.get("test_volumes")),
                         slice_mode=False,
                     ),
                     mitoem2_cfg.get("weight", 1.5),

@@ -65,7 +65,7 @@ class TestVista2DModule:
             "label": torch.randint(0, 5, (1, 32, 32)),
         }
         targets = module._prepare_targets(batch)
-        assert "class_labels" in targets
+        assert "semantic_labels" in targets
         assert "labels" in targets
 
     def test_prepare_targets_squeezes_4d(self) -> None:
@@ -115,7 +115,7 @@ class TestVista3DModule:
 
     def test_forward(self) -> None:
         module = self._make_module()
-        x = torch.randn(1, 1, 16, 16, 16)
+        x = torch.randn(1, 1, 32, 32, 32)
         out = module(x)
         assert "semantic" in out
         assert "instance" in out
@@ -123,8 +123,8 @@ class TestVista3DModule:
     def test_training_step(self) -> None:
         module = self._make_module()
         batch = {
-            "image": torch.randn(1, 1, 16, 16, 16),
-            "label": torch.randint(0, 5, (1, 16, 16, 16)),
+            "image": torch.randn(1, 1, 32, 32, 32),
+            "label": torch.randint(0, 5, (1, 32, 32, 32)),
         }
         loss = module.training_step(batch, batch_idx=0)
         assert loss.isfinite()
@@ -132,8 +132,8 @@ class TestVista3DModule:
     def test_validation_step(self) -> None:
         module = self._make_module()
         batch = {
-            "image": torch.randn(1, 1, 16, 16, 16),
-            "label": torch.randint(0, 5, (1, 16, 16, 16)),
+            "image": torch.randn(1, 1, 32, 32, 32),
+            "label": torch.randint(0, 5, (1, 32, 32, 32)),
         }
         loss = module.validation_step(batch, batch_idx=0)
         assert loss.isfinite()
@@ -141,8 +141,8 @@ class TestVista3DModule:
     def test_prepare_targets_squeezes_5d(self) -> None:
         module = self._make_module()
         batch = {
-            "image": torch.randn(1, 1, 16, 16, 16),
-            "label": torch.randint(0, 5, (1, 1, 16, 16, 16)),
+            "image": torch.randn(1, 1, 32, 32, 32),
+            "label": torch.randint(0, 5, (1, 1, 32, 32, 32)),
         }
         targets = module._prepare_targets(batch)
         assert targets["labels"].dim() == 4  # B, D, H, W
@@ -150,8 +150,8 @@ class TestVista3DModule:
     def test_training_step_auto_expand_image(self) -> None:
         module = self._make_module()
         batch = {
-            "image": torch.randn(1, 16, 16, 16),
-            "label": torch.randint(0, 5, (1, 16, 16, 16)),
+            "image": torch.randn(1, 32, 32, 32),
+            "label": torch.randint(0, 5, (1, 32, 32, 32)),
         }
         loss = module.training_step(batch, batch_idx=0)
         assert loss.isfinite()

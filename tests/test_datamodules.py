@@ -41,15 +41,13 @@ class _DummyDataset(CircuitDataset):
     def __init__(
         self,
         root_dir: str = ".",
-        split: str = "train",
+        volumes: Any = None,
         transform: Any = None,
         cache_rate: float = 0.0,
-        train_val_split: float = 0.2,
         num_workers: int = 0,
         **kwargs: Any,
     ) -> None:
-        # bypass parent __init__ which checks for root_dir existence
-        self._split = split
+        self.volumes = volumes
         self._transform = transform
         self._data = [
             {"image": np.random.rand(32, 32).astype(np.float32),
@@ -177,10 +175,10 @@ class TestCREMI3DDataModule:
 
     def test_kwargs_forwarded(self) -> None:
         dm = CREMI3DDataModule(
-            data_root=".", volumes=["A"], include_clefts=False, include_mito=True,
+            data_root=".", include_clefts=False, include_mito=True,
+            train_volumes=[{"vol": "A"}],
         )
         kw = dm._get_dataset_kwargs()
-        assert kw["volumes"] == ["A"]
         assert kw["include_clefts"] is False
         assert kw["include_mito"] is True
 
@@ -195,16 +193,11 @@ class TestMICRONSDataModule:
     def test_kwargs_forwarded(self) -> None:
         dm = MICRONSDataModule(
             data_root=".",
-            volume_file="vol",
-            segmentation_file="seg",
-            include_synapses=True,
             slice_mode=False,
             patch_size=(16, 64, 64),
+            train_volumes=[{"vol": "train_volume", "seg": "train_seg"}],
         )
         kw = dm._get_dataset_kwargs()
-        assert kw["volume_file"] == "vol"
-        assert kw["segmentation_file"] == "seg"
-        assert kw["include_synapses"] is True
         assert kw["slice_mode"] is False
         assert kw["patch_size"] == (16, 64, 64)
 
@@ -428,11 +421,10 @@ class TestMitoEM2DataModule:
 
         dm = MitoEM2DataModule(
             data_root=".",
-            dataset_name="Dataset001_ME2-Beta",
             slice_mode=False,
+            train_volumes=[{"subdataset": "Dataset001_ME2-Beta"}],
         )
         kw = dm._get_dataset_kwargs()
-        assert kw["dataset_name"] == "Dataset001_ME2-Beta"
         assert kw["slice_mode"] is False
 
 

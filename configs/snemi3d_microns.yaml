@@ -1,34 +1,32 @@
-# Combined Multi-Dataset Configuration
-# Trains on SNEMI3D + CREMI3D + MICRONS simultaneously
-# Each volume specifies its own root directory via the 'root' key
+# Combined SNEMI3D + MICRONS Configuration
+# Trains on neuron volumes from both datasets simultaneously.
+# Each volume entry includes a 'root' key pointing to its data directory.
 
 defaults:
   - default
 
-experiment_name: combine_vista3d
+experiment_name: snemi3d_microns_combined
 project_name: neurons-combined
 
 data:
-  dataset: snemi3d  # uses SNEMI3D dataset class (universal loader)
-  data_root: data/snemi3d
+  dataset: snemi3d
+  data_root: data/snemi3d  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 8
+  num_workers: 64
   cache_rate: 0.0
   slice_mode: false
-  num_samples: 8000
   find_boundaries: 0.5
+  num_samples: 16000
   patch_size: [32, 160, 160]
 
+  # Merged train: SNEMI3D AC4 + MICRONS 2048 train crop
   train_volumes:
-    # SNEMI3D train
     - {vol: AC4_inputs, seg: AC4_labels, root: data/snemi3d}
-    # MICRONS train
     - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS}
 
+  # Merged test: SNEMI3D AC3 + MICRONS 1024 test crop
   test_volumes:
-    # SNEMI3D test
     - {vol: AC3_inputs, seg: AC3_labels, root: data/snemi3d}
-    # MICRONS test
     - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS}
 
 model:
@@ -45,7 +43,7 @@ optimizer:
   weight_decay: 1.0e-5
   scheduler:
     type: cosine
-    T_max: 300
+    T_max: 200
     eta_min: 1.0e-7
 
 loss:
@@ -73,14 +71,15 @@ loss:
   ignore_index: -100
 
 training:
-  max_epochs: 300
+  max_epochs: 200
   accelerator: auto
   devices: auto
   strategy: ddp
   precision: 16-mixed
   gradient_clip_val: 1.0
   limit_val_batches: 20
-  log_every_n_steps: 10
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
   benchmark: true
   training_modes:
     - automatic

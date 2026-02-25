@@ -172,9 +172,16 @@ def _log_predictions(
                           device=g_dir.device)
         g_dir = torch.cat([g_dir, pad], dim=1)
 
-    trace = sum(geom[:, ch_dir + i * S + i: ch_dir + i * S + i + 1]
-                for i in range(S))
-    cov_heat = repeat(_normalise(trace), "b 1 h w -> b 3 h w")
+    cov_val = geom[:, ch_dir:ch_dir + ch_cov]  # [n, S*S, H, W]
+    cov_mat = rearrange(cov_val, "b (s1 s2) h w -> b h w s1 s2", s1=S, s2=S)
+    eigvals = torch.linalg.eigvalsh(cov_mat)  # [n, H, W, S] sorted ascending
+    eigvals = eigvals.abs()
+    eigvals_rgb = rearrange(eigvals, "b h w s -> b s h w")
+    if S < 3:
+        pad = torch.zeros(n, 3 - S, eigvals_rgb.shape[2], eigvals_rgb.shape[3],
+                          device=eigvals_rgb.device)
+        eigvals_rgb = torch.cat([eigvals_rgb, pad], dim=1)
+    cov_rgb = _normalise(eigvals_rgb)
 
     g_raw = torch.sigmoid(geom[:, ch_dir + ch_cov:])
     g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
@@ -196,7 +203,7 @@ def _log_predictions(
         tb.add_images(f"{tag}/instance_pred", ins_pred_rgb, global_step=epoch)
 
     tb.add_images(f"{tag}/geometry_dir", g_dir, global_step=epoch)
-    tb.add_images(f"{tag}/geometry_cov_trace", cov_heat, global_step=epoch)
+    tb.add_images(f"{tag}/geometry_cov", cov_rgb, global_step=epoch)
     tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
 
     return img_gray

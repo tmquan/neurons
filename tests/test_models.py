@@ -225,21 +225,21 @@ class TestVista3DWrapper:
 
     def test_forward_output_keys(self) -> None:
         model = Vista3DWrapper(in_channels=1, num_classes=16, feature_size=16)
-        x = torch.randn(1, 1, 8, 16, 16)
+        x = torch.randn(1, 1, 32, 32, 32)
         out = model(x)
         assert "semantic" in out
         assert "instance" in out
 
     def test_output_shapes(self) -> None:
         model = Vista3DWrapper(in_channels=1, num_classes=16, feature_size=16)
-        x = torch.randn(1, 1, 8, 16, 16)
+        x = torch.randn(1, 1, 32, 32, 32)
         out = model(x)
         for key in ("semantic", "instance"):
-            assert out[key].shape == (1, 16, 8, 16, 16)
+            assert out[key].shape == (1, 16, 32, 32, 32)
 
     def test_backward_pass(self) -> None:
         model = Vista3DWrapper(in_channels=1, num_classes=16, feature_size=16)
-        x = torch.randn(1, 1, 8, 16, 16, requires_grad=True)
+        x = torch.randn(1, 1, 32, 32, 32, requires_grad=True)
         out = model(x)
         loss = sum(v.sum() for v in out.values())
         loss.backward()

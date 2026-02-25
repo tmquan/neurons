@@ -1,108 +1,60 @@
 # Foundation Model Configuration
-# Large-scale Vista3D training with per-class instance loss,
-# multi-dataset combine, and geometric projection heads.
+# Trains on ALL available datasets for a general-purpose connectomics model
+# Uses the root key per volume to load from multiple data directories
 
 defaults:
   - default
 
 experiment_name: foundation_vista3d
 project_name: neurons-foundation
-seed: 42
-logger: wandb
-log_dir: logs
 
-# Data Configuration -- combine all available datasets
 data:
-  dataset: combine
-  datasets:
-    snemi3d:
-      enabled: true
-      data_root: data/snemi3d
-      weight: 1.0
-    cremi3d:
-      enabled: true
-      data_root: data/cremi3d
-      weight: 1.0
-      volumes:
-        - A
-        - B
-        - C
-    mitoem2:
-      enabled: true
-      data_root: data/mitoem2
-      weight: 1.5
-
-  patch_size:
-    - 64
-    - 128
-    - 128
-  batch_size: 2
+  dataset: snemi3d  # universal loader
+  data_root: data/snemi3d
+  batch_size: 4
   num_workers: 8
-  cache_rate: 1.0
-  train_val_split: 0.15
+  cache_rate: 0.0
+  slice_mode: false
+  num_samples: 16000
+  find_boundaries: 0.5
+  patch_size: [32, 160, 160]
 
-# Model Configuration
+  train_volumes:
+    # SNEMI3D (mouse somatosensory cortex, 6x6x30 nm)
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/snemi3d}
+    # MICRONS (mouse visual cortex, 8x8x40 nm)
+    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS}
+
+  val_volumes:
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/snemi3d}
+
+  test_volumes:
+    - {vol: AC3_inputs, seg: AC3_labels, root: data/snemi3d}
+    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS}
+
 model:
   type: vista3d
-  encoder_name: vista3d
-  feature_size: 64
   in_channels: 1
   num_classes: 16
-  emb_dim: 32
+  emb_dim: 16
+  feature_size: 48
+  dropout: 0.2
 
-# Training Configuration
-training:
-  max_epochs: 500
-  accelerator: gpu
-  devices: 1
-  strategy: auto
-  precision: bf16-mixed
-  gradient_clip_val: 1.0
-  accumulate_grad_batches: 4
-  val_check_interval: 1.0
-  check_val_every_n_epoch: 2
-  num_sanity_val_steps: 2
-  log_every_n_steps: 10
-  benchmark: true
-  deterministic: false
-  fast_dev_run: false
-
-# Optimizer Configuration
 optimizer:
   type: adamw
-  lr: 2.0e-4
-  weight_decay: 1.0e-4
-  betas:
-    - 0.9
-    - 0.999
+  lr: 5.0e-5
+  weight_decay: 1.0e-5
   scheduler:
     type: cosine
     T_max: 500
     eta_min: 1.0e-7
 
-# Loss Configuration
 loss:
+  semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
   weight_dice: 1.0
-  class_weights:
-    - 0.05  # 0: background
-    - 0.35  # 1: neuron
-    - 0.25  # 2: cleft
-    - 0.20  # 3: mitochondria
-    - 0.15  # 4: mito_boundary
-    - 0.00  # 5-15: unused headroom
-    - 0.00
-    - 0.00
-    - 0.00
-    - 0.00
-    - 0.00
-    - 0.00
-    - 0.00
-    - 0.00
-    - 0.00
-    - 0.00
   weight_instance: 1.0
   weight_pull: 1.0
   weight_push: 1.0
@@ -110,30 +62,30 @@ loss:
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 10.0
-  weight_bone: 10.0
+  weight_bone: 1.0
   weight_geometry: 1.0
-  dir_target: "skeleton"
+  dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0
   weight_raw: 1.0
+  loss_dir: smooth_l1
+  loss_cov: mse
+  loss_raw: l1
   ignore_index: -100
 
-# Callbacks
-callbacks:
-  checkpoint:
-    enabled: true
-    dirpath: null
-    filename: "foundation-{epoch:02d}-{val/loss:.4f}"
-    save_top_k: 5
-    monitor: val/loss
-    mode: min
-    save_last: true
-
-  early_stopping:
-    enabled: true
-    monitor: val/loss
-    patience: 80
-    mode: min
-
-  lr_monitor:
-    enabled: true
+training:
+  max_epochs: 500
+  accelerator: auto
+  devices: auto
+  strategy: ddp
+  precision: 16-mixed
+  gradient_clip_val: 1.0
+  limit_val_batches: 20
+  log_every_n_steps: 50
+  benchmark: true
+  training_modes:
+    - automatic
+    - proofread
+  num_pos_points: 5
+  num_neg_points: 5
+  point_sample_mode: instance

@@ -1,5 +1,5 @@
-# SNEMI2D Configuration
-# Slice-based neuron segmentation (2D images)
+# SNEMI3D 2D Slice Configuration
+# Slice-based neuron segmentation (Vista2D)
 
 defaults:
   - default
@@ -12,16 +12,20 @@ data:
   data_root: data/snemi3d
   batch_size: 8
   num_workers: 4
-  train_val_split: 0.2
   cache_rate: 0.5
   slice_mode: true
+  train_volumes:
+    - {vol: AC4_inputs, seg: AC4_labels}
+  test_volumes:
+    - {vol: AC3_inputs, seg: AC3_labels}
 
 model:
   type: vista2d
   in_channels: 1
   num_classes: 16
   emb_dim: 16
-  feature_size: 64
+  feature_size: 48
+  dropout: 0.2
 
 optimizer:
   type: adamw
@@ -33,9 +37,10 @@ optimizer:
     eta_min: 1.0e-6
 
 loss:
+  semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
-  weight_iou: 1.0 
+  weight_iou: 1.0
   weight_dice: 1.0
   weight_instance: 1.0
   weight_pull: 1.0
@@ -44,17 +49,26 @@ loss:
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 10.0
-  weight_bone: 10.0
+  weight_bone: 1.0
   weight_geometry: 1.0
-  dir_target: "skeleton"
+  dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0
   weight_raw: 1.0
+  loss_dir: smooth_l1
+  loss_cov: mse
+  loss_raw: l1
   ignore_index: -100
 
 training:
   max_epochs: 100
   accelerator: auto
-  devices: 1
-  precision: 32-true
+  devices: auto
+  strategy: ddp
+  precision: 16-mixed
   gradient_clip_val: 1.0
+  limit_val_batches: 20
+  log_every_n_steps: 50
+  benchmark: true
+  training_modes:
+    - automatic

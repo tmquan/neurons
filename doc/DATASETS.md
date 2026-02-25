@@ -38,7 +38,8 @@ python scripts/download_snemi3d.py --output data/snemi3d
 | **Tissue** | Drosophila melanogaster brain |
 | **Modality** | Serial-section TEM (ssTEM) |
 | **Resolution** | 4 x 4 x 40 nm (anisotropic) |
-| **Volumes** | Sample A, B (train+val), C (test) |
+| **Train/Val** | Samples A, B, C (with ground truth) |
+| **Test** | Samples A+, B+, C+ (padded, disjoint) |
 | **Slices** | 125 per volume, 1250 x 1250 px |
 | **Labels** | Neurons, synaptic clefts, (mitochondria) |
 | **Source** | [CREMI Challenge](https://cremi.org/) |
@@ -68,9 +69,10 @@ python scripts/download_cremi3d.py --output data/cremi3d
 | **Tissue** | Mouse visual cortex (layer 2/3 -- 5) |
 | **Modality** | Serial-section EM (ssEM) |
 | **Resolution** | 8 x 8 x 40 nm (mip 0, anisotropic) |
-| **Full volume** | 212,992 x 180,224 x 13,088 voxels (~500 TB) |
-| **Our crop** | 1,024 x 1,024 x 1,024 voxels at origin (140000, 100000, 20000) |
-| **Labels** | Dense neuron segmentation (proofread) |
+| **Full volume** | ~175,104 x 108,544 x 21,056 voxels (~117 TB EM) |
+| **Train crop** | 1,024³ voxels at (140000, 100000, 20000) — ~1 GB EM |
+| **Test crop** | 1,024³ voxels at (142000, 102000, 20000) — ~1 GB EM |
+| **Labels** | Dense neuron segmentation (proofread, ~200K cells, ~120K neurons) |
 | **Source** | [MICrONS Explorer](https://www.microns-explorer.org/) |
 | **Reference** | MICrONS Consortium (2021) bioRxiv |
 
@@ -92,14 +94,14 @@ python scripts/download_cremi3d.py --output data/cremi3d
 
 **Download:**
 ```bash
-# Default: v1300 segmentation, 128^3 crop
-python scripts/download_microns.py
+# Train (1024^3) + test (1024^3) from disjoint regions
+python scripts/download_microns.py --split --seg-version 1300
 
-# 1024^3 crop
-python scripts/download_microns.py --size 1024 1024 1024
+# Custom single crop
+python scripts/download_microns.py --size 1024 1024 1024 --seg-version 1300
 
 # Multiple versions
-python scripts/download_microns.py --seg-version 117 1300
+python scripts/download_microns.py --split --seg-version 117 1300
 ```
 
 ---

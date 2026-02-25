@@ -48,18 +48,15 @@ class CREMI3DDataset(CircuitDataset):
     def __init__(
         self,
         root_dir: Union[str, Path],
-        split: str = "train",
+        volumes: Optional[List[Dict[str, str]]] = None,
         transform: Optional[Callable] = None,
         cache_rate: float = 1.0,
-        train_val_split: float = 0.2,
         num_workers: int = 0,
-        volumes: Optional[List[str]] = None,
         include_clefts: bool = True,
         include_mito: bool = False,
         num_samples: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
-        self.volumes = volumes if volumes is not None else ["A", "B"]
         self.include_clefts = include_clefts
         self.include_mito = include_mito
         self._num_samples = num_samples
@@ -68,10 +65,9 @@ class CREMI3DDataset(CircuitDataset):
 
         super().__init__(
             root_dir=str(root_dir),
-            split=split,
+            volumes=volumes,
             transform=transform,
             cache_rate=cache_rate,
-            train_val_split=train_val_split,
             num_workers=num_workers,
         )
 
@@ -87,6 +83,9 @@ class CREMI3DDataset(CircuitDataset):
     def labels(self) -> List[str]:
         return ["background", "neuron", "cleft", "mito"]
 
+    def _default_volumes(self) -> List[Dict[str, str]]:
+        return [{"vol": "A"}, {"vol": "B"}]
+
     @property
     def data_files(self) -> Dict[str, Union[str, np.ndarray]]:
         if self._image_data is not None and self._label_data is not None:
@@ -97,63 +96,36 @@ class CREMI3DDataset(CircuitDataset):
         }
 
     def _prepare_data(self) -> List[Dict[str, Any]]:
-        """Prepare list of data dictionaries for each sample."""
-        image, label = self._load_data()
+        """Load each volume in the list as a separate data entry."""
+        data_list: List[Dict[str, Any]] = []
+        total_slices = 0
 
-        vmin, vmax = float(image.min()), float(image.max())
-        if vmax > vmin:
-            image = (image - vmin) / (vmax - vmin)
-        label = label.astype(np.int64)
+        for vol_spec in self._get_volume_list():
+            vol_letter = vol_spec["vol"]
+            image, label = self._load_volume(vol_letter)
+            if image is None:
+                continue
 
-        self._image_data = image
-        self._label_data = label
+            image = image.astype(np.float32)
+            vmin, vmax = float(image.min()), float(image.max())
+            if vmax > vmin:
+                image = (image - vmin) / (vmax - vmin)
+            label = label.astype(np.int64)
 
-        total_slices = image.shape[0]
-        volumes_str = "_".join(self.volumes)
+            self._image_data = image
+            self._label_data = label
 
-        if self.split == "test":
-            start_idx = int(total_slices * (1 - self.train_val_split))
-            image = image[start_idx:]
-            label = label[start_idx:]
-            volume_name = f"CREMI_{volumes_str}_test"
-        elif self.split == "valid":
-            val_start = int(total_slices * (1 - self.train_val_split))
-            image = image[val_start:]
-            label = label[val_start:]
-            volume_name = f"CREMI_{volumes_str}_valid"
-        else:
-            train_end = int(total_slices * (1 - self.train_val_split))
-            image = image[:train_end]
-            label = label[:train_end]
-            volume_name = f"CREMI_{volumes_str}_train"
+            data_dict = {
+                "image": image,
+                "label": label,
+                "volume": f"CREMI_{vol_letter}",
+                "idx": len(data_list),
+            }
+            data_list.append(data_dict)
+            total_slices += image.shape[0]
 
-        data_dict = {
-            "image": image,
-            "label": label,
-            "volume": volume_name,
-            "idx": 0,
-        }
-        self._virtual_len = self._num_samples if self._num_samples is not None else image.shape[0]
-        return [data_dict]
-
-    def _load_data(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load and merge CREMI volumes."""
-        all_images: List[np.ndarray] = []
-        all_labels: List[np.ndarray] = []
-
-        for vol_name in self.volumes:
-            image, label = self._load_volume(vol_name)
-            if image is not None:
-                all_images.append(image)
-                all_labels.append(label)
-
-        if not all_images:
-            raise ValueError(f"No data found in {self.root_dir}")
-
-        images = np.concatenate(all_images, axis=0)
-        labels = np.concatenate(all_labels, axis=0)
-
-        return images, labels
+        self._virtual_len = self._num_samples if self._num_samples is not None else total_slices
+        return data_list
 
     def _load_volume(
         self,

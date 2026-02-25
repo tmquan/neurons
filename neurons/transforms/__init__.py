@@ -15,10 +15,7 @@ from neurons.transforms.elastic_deformation import ElasticDeformationd
 from neurons.transforms.missing_section import MissingSectiond
 from neurons.transforms.defects import Defectsd
 from neurons.transforms.relabel_after_crop import RelabelAfterCropd
-from neurons.transforms.find_boundaries import (
-    RandFindBoundariesd,
-    RandErodeNeuronBoundariesd,
-)
+from neurons.transforms.find_boundaries import RandFindBoundariesd
 
 __all__ = [
     "ElasticDeformationd",
@@ -26,5 +23,4 @@ __all__ = [
     "Defectsd",
     "RelabelAfterCropd",
     "RandFindBoundariesd",
-    "RandErodeNeuronBoundariesd",
 ]

@@ -19,26 +19,15 @@ class MICRONSDataset(CircuitDataset):
     MICRONS Dataset for large-scale cortical connectomics.
 
     Dataset from the MICrONS consortium containing petascale electron
-    microscopy imaging of mouse visual cortex with dense neuron segmentation
-    and synapse annotations.
+    microscopy imaging of mouse visual cortex with dense neuron segmentation.
 
-    Expected file structure:
-        root_dir/
-            volume.h5 or volume.tiff    # EM volume data
-            segmentation.h5             # Neuron segmentation
-            synapses.h5                 # Synapse annotations (optional)
-            mitochondria.h5             # Mitochondria labels (optional)
+    Volume format: ``[{"vol": "volume_basename", "seg": "seg_basename"}]``
 
     Args:
         root_dir: Path to directory containing MICRONS data files.
-        split: Data split ('train', 'valid', 'test').
+        volumes: List of {vol, seg} dicts. Defaults to [{vol: "volume", seg: "segmentation"}].
         transform: Optional MONAI transforms to apply.
         cache_rate: Fraction of data to cache in memory (default: 1.0).
-        train_val_split: Fraction for validation split (default: 0.2).
-        volume_file: Name of volume file (default: 'volume').
-        segmentation_file: Name of segmentation file (default: 'segmentation').
-        include_synapses: Whether to load synapse annotations (default: False).
-        include_mitochondria: Whether to load mitochondria labels (default: False).
         slice_mode: If True, return individual 2D slices (default: True).
         patch_size: If not None, return 3D patches of this size (z, y, x).
         patch_overlap: Overlap between patches (default: 0.25).
@@ -50,29 +39,19 @@ class MICRONSDataset(CircuitDataset):
     )
     _resolution: Dict[str, float] = {"x": 4.0, "y": 4.0, "z": 40.0}
     _labels_base: List[str] = ["background", "neuron"]
-    _labels_extended: List[str] = ["background", "neuron", "synapse", "mitochondria"]
 
     def __init__(
         self,
         root_dir: str,
-        split: str = "train",
+        volumes: Optional[List[Dict[str, str]]] = None,
         transform: Optional[Callable] = None,
         cache_rate: float = 1.0,
-        train_val_split: float = 0.2,
-        volume_file: str = "volume",
-        segmentation_file: str = "segmentation",
-        include_synapses: bool = False,
-        include_mitochondria: bool = False,
         slice_mode: bool = True,
         patch_size: Optional[Tuple[int, int, int]] = None,
         patch_overlap: float = 0.25,
         num_samples: Optional[int] = None,
         num_workers: int = 0,
     ) -> None:
-        self.volume_file = volume_file
-        self.segmentation_file = segmentation_file
-        self.include_synapses = include_synapses
-        self.include_mitochondria = include_mitochondria
         self.slice_mode = slice_mode
         self.patch_size = patch_size
         self.patch_overlap = patch_overlap
@@ -84,10 +63,9 @@ class MICRONSDataset(CircuitDataset):
 
         super().__init__(
             root_dir=root_dir,
-            split=split,
+            volumes=volumes,
             transform=transform,
             cache_rate=cache_rate,
-            train_val_split=train_val_split,
             num_workers=num_workers,
         )
 
@@ -101,21 +79,17 @@ class MICRONSDataset(CircuitDataset):
 
     @property
     def labels(self) -> List[str]:
-        if self.include_synapses or self.include_mitochondria:
-            return self._labels_extended.copy()
         return self._labels_base.copy()
+
+    def _default_volumes(self) -> List[Dict[str, str]]:
+        return [{"vol": "volume", "seg": "segmentation"}]
 
     @property
     def data_files(self) -> Dict[str, Union[str, np.ndarray]]:
-        files: Dict[str, Union[str, np.ndarray]] = {
-            "vol": self.volume_file,
-            "seg": self.segmentation_file,
-        }
-        if self.include_synapses:
-            files["synapses"] = "synapses"
-        if self.include_mitochondria:
-            files["mitochondria"] = "mitochondria"
-        return files
+        vols = self._get_volume_list()
+        if vols:
+            return {"vol": vols[0]["vol"], "seg": vols[0]["seg"]}
+        return {"vol": "volume", "seg": "segmentation"}
 
     def _load_volume(self, base_name: str, required: bool = True) -> Optional[np.ndarray]:
         """
@@ -198,95 +172,61 @@ class MICRONSDataset(CircuitDataset):
         return patch_indices
 
     def _prepare_data(self) -> List[Dict[str, Any]]:
-        """Prepare data dictionaries based on split."""
+        """Prepare data dictionaries from volume list."""
         data_list: List[Dict[str, Any]] = []
-        files = self.data_files
+        total_slices = 0
 
-        inputs = self._load_volume(str(files["vol"]))
-        assert inputs is not None
-        inputs = inputs.astype(np.float32)
-        vmin, vmax = float(inputs.min()), float(inputs.max())
-        if vmax > vmin:
-            inputs = (inputs - vmin) / (vmax - vmin)
+        for vol_spec in self._get_volume_list():
+            inputs = self._load_volume(str(vol_spec["vol"]))
+            assert inputs is not None
+            inputs = inputs.astype(np.float32)
+            vmin, vmax = float(inputs.min()), float(inputs.max())
+            if vmax > vmin:
+                inputs = (inputs - vmin) / (vmax - vmin)
 
-        labels: Optional[np.ndarray] = None
-        if self.split in ["train", "valid"]:
-            labels = self._load_volume(str(files["seg"]), required=True)
-        else:
-            labels = self._load_volume(str(files["seg"]), required=False)
-        if labels is not None:
-            labels = labels.astype(np.int64)
+            labels: Optional[np.ndarray] = None
+            labels = self._load_volume(str(vol_spec["seg"]), required=False)
+            if labels is not None:
+                labels = labels.astype(np.int64)
 
-        synapses: Optional[np.ndarray] = None
-        mitochondria: Optional[np.ndarray] = None
-        if self.include_synapses:
-            synapses = self._load_volume("synapses", required=False)
-        if self.include_mitochondria:
-            mitochondria = self._load_volume("mitochondria", required=False)
+            n_slices = inputs.shape[0]
+            vol_name = vol_spec["vol"]
 
-        n_total = inputs.shape[0]
-        n_train = int(n_total * (1.0 - self.train_val_split))
+            if self.slice_mode:
+                for si in range(n_slices):
+                    entry: Dict[str, Any] = {
+                        "image": inputs[si], "slice_idx": si,
+                        "volume": vol_name, "idx": len(data_list),
+                    }
+                    if labels is not None:
+                        entry["label"] = labels[si]
+                    data_list.append(entry)
 
-        if self.split == "train":
-            z_range = range(n_train)
-        elif self.split == "valid":
-            z_range = range(n_train, n_total)
-        else:
-            z_range = range(n_total)
+            elif self.patch_size is not None:
+                patch_indices = self._generate_patch_indices(
+                    inputs.shape, self.patch_size, self.patch_overlap
+                )
+                for pidx, (z_sl, y_sl, x_sl) in enumerate(patch_indices):
+                    entry = {
+                        "image": inputs[z_sl, y_sl, x_sl],
+                        "patch_idx": pidx, "volume": vol_name,
+                        "idx": len(data_list),
+                    }
+                    if labels is not None:
+                        entry["label"] = labels[z_sl, y_sl, x_sl]
+                    data_list.append(entry)
 
-        z_list = list(z_range)
-        inputs_split = inputs[z_list]
-        labels_split = labels[z_list] if labels is not None else None
-        synapses_split = synapses[z_list] if synapses is not None else None
-        mito_split = mitochondria[z_list] if mitochondria is not None else None
+            else:
+                entry = {"image": inputs, "volume": vol_name, "idx": len(data_list)}
+                if labels is not None:
+                    entry["label"] = labels
+                data_list.append(entry)
 
-        n_slices = inputs_split.shape[0]
+            total_slices += n_slices
 
-        if self.slice_mode:
-            for si in range(n_slices):
-                data_dict: Dict[str, Any] = {
-                    "image": inputs_split[si],
-                    "slice_idx": z_range[si] if isinstance(z_range, range) else si,
-                    "idx": len(data_list),
-                }
-                if labels_split is not None:
-                    data_dict["label"] = labels_split[si]
-                if synapses_split is not None:
-                    data_dict["synapses"] = synapses_split[si]
-                if mito_split is not None:
-                    data_dict["mitochondria"] = mito_split[si]
-                data_list.append(data_dict)
-            if self._num_samples is not None:
-                self._virtual_len = self._num_samples
-
-        elif self.patch_size is not None:
-            patch_indices = self._generate_patch_indices(
-                inputs_split.shape, self.patch_size, self.patch_overlap
-            )
-            for idx, (z_sl, y_sl, x_sl) in enumerate(patch_indices):
-                data_dict = {
-                    "image": inputs_split[z_sl, y_sl, x_sl],
-                    "patch_idx": idx,
-                    "patch_location": (z_sl.start, y_sl.start, x_sl.start),
-                    "idx": len(data_list),
-                }
-                if labels_split is not None:
-                    data_dict["label"] = labels_split[z_sl, y_sl, x_sl]
-                if synapses_split is not None:
-                    data_dict["synapses"] = synapses_split[z_sl, y_sl, x_sl]
-                if mito_split is not None:
-                    data_dict["mitochondria"] = mito_split[z_sl, y_sl, x_sl]
-                data_list.append(data_dict)
-
-        else:
-            data_dict = {"image": inputs_split, "idx": 0}
-            if labels_split is not None:
-                data_dict["label"] = labels_split
-            if synapses_split is not None:
-                data_dict["synapses"] = synapses_split
-            if mito_split is not None:
-                data_dict["mitochondria"] = mito_split
-            data_list.append(data_dict)
-            self._virtual_len = self._num_samples if self._num_samples is not None else n_slices
+        if self._num_samples is not None:
+            self._virtual_len = self._num_samples
+        elif not self.slice_mode and self.patch_size is None:
+            self._virtual_len = total_slices
 
         return data_list

@@ -2,7 +2,7 @@
 CREMI3D DataModule for PyTorch Lightning.
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from monai.transforms import (
     Compose,
@@ -27,14 +27,11 @@ class CREMI3DDataModule(CircuitDataModule):
     PyTorch Lightning DataModule for CREMI3D dataset.
 
     Args:
-        data_root: Path to CREMI3D data directory.
-        batch_size: Batch size (default: 4).
-        num_workers: Data loading workers (default: 4).
-        volumes: CREMI volumes to use (default: ["A", "B"]).
+        train_volumes: e.g. ``[{"vol": "A"}, {"vol": "B"}, {"vol": "C"}]``
+        test_volumes: e.g. ``[{"vol": "A+"}, {"vol": "B+"}, {"vol": "C+"}]``
         include_clefts: Include cleft annotations (default: True).
         include_mito: Include mitochondria annotations (default: False).
-        patch_size: Random crop size (D, H, W) for training.
-        erode_boundaries: Probability of eroding neuron boundaries (0.0=off).
+        find_boundaries: Probability of zeroing boundary pixels (0.0=off).
     """
 
     dataset_class = CREMI3DDataset
@@ -44,38 +41,39 @@ class CREMI3DDataModule(CircuitDataModule):
         data_root: str,
         batch_size: int = 4,
         num_workers: int = 4,
-        train_val_split: float = 0.2,
         cache_rate: float = 0.5,
         pin_memory: bool = True,
         image_size: Optional[Tuple[int, ...]] = None,
         patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
-        volumes: Optional[List[str]] = None,
         include_clefts: bool = True,
         include_mito: bool = False,
         num_samples: Optional[int] = None,
-        erode_boundaries: float = 0.0,
+        find_boundaries: float = 0.0,
+        train_volumes: Optional[List[Dict[str, str]]] = None,
+        val_volumes: Optional[List[Dict[str, str]]] = None,
+        test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
     ) -> None:
-        self.volumes = volumes if volumes is not None else ["A", "B"]
         self.include_clefts = include_clefts
         self.include_mito = include_mito
         self.num_samples = num_samples
-        self.erode_boundaries = erode_boundaries
+        self.find_boundaries = find_boundaries
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
             num_workers=num_workers,
-            train_val_split=train_val_split,
             cache_rate=cache_rate,
             pin_memory=pin_memory,
             image_size=image_size,
+            train_volumes=train_volumes,
+            val_volumes=val_volumes,
+            test_volumes=test_volumes,
             persistent_workers=persistent_workers,
         )
 
     def _get_dataset_kwargs(self) -> dict:
-        kwargs = {
-            "volumes": self.volumes,
+        kwargs: dict = {
             "include_clefts": self.include_clefts,
             "include_mito": self.include_mito,
         }
@@ -85,9 +83,9 @@ class CREMI3DDataModule(CircuitDataModule):
 
     def _label_post_crop(self) -> list:
         steps = [RelabelAfterCropd(keys=["label"], spatial_dims=3)]
-        if self.erode_boundaries > 0:
+        if self.find_boundaries > 0:
             steps.append(RandFindBoundariesd(
-                keys=["label"], prob=self.erode_boundaries,
+                keys=["label"], prob=self.find_boundaries,
             ))
         return steps
 

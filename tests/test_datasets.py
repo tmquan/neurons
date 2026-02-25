@@ -17,34 +17,8 @@ class TestCircuitDataset:
         with pytest.raises(TypeError):
             CircuitDataset(root_dir=".")  # type: ignore[abstract]
 
-    def test_invalid_split_raises_error(self) -> None:
-        """Test that invalid split raises ValueError."""
-
-        class MinimalDataset(CircuitDataset):
-            @property
-            def paper(self) -> str:
-                return "Test Paper"
-
-            @property
-            def resolution(self) -> Dict[str, float]:
-                return {"x": 1.0, "y": 1.0, "z": 1.0}
-
-            @property
-            def labels(self) -> List[str]:
-                return ["background", "foreground"]
-
-            @property
-            def data_files(self) -> Dict[str, Union[str, np.ndarray]]:
-                return {"vol": "test.h5", "seg": "test.h5"}
-
-            def _prepare_data(self) -> List[Dict[str, Any]]:
-                return []
-
-        with pytest.raises(ValueError, match="split must be"):
-            MinimalDataset(root_dir=".", split="invalid")
-
-    def test_valid_splits_accepted(self) -> None:
-        """Test that valid splits are accepted."""
+    def test_volumes_param_accepted(self) -> None:
+        """Test that volumes parameter is stored correctly."""
 
         class MinimalDataset(CircuitDataset):
             @property
@@ -66,9 +40,9 @@ class TestCircuitDataset:
             def _prepare_data(self) -> List[Dict[str, Any]]:
                 return [{"image": np.zeros((10, 10)), "label": np.zeros((10, 10))}]
 
-        for split in ["train", "valid", "test"]:
-            dataset = MinimalDataset(root_dir=".", split=split, cache_rate=0.0)
-            assert dataset.split == split
+        vols = [{"vol": "test", "seg": "test"}]
+        dataset = MinimalDataset(root_dir=".", volumes=vols, cache_rate=0.0)
+        assert dataset.volumes == vols
 
     def test_required_properties(self) -> None:
         """Test that subclasses must implement required properties."""

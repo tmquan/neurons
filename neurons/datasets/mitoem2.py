@@ -21,40 +21,19 @@ class MitoEM2Dataset(CircuitDataset):
     """
     MitoEM2 Dataset for mitochondria instance/semantic segmentation.
 
-    Expected directory structure (nnU-Net convention):
-        root_dir/
-        +-- Dataset001_ME2-Beta/
-        |   +-- dataset.json
-        |   +-- imagesTr/  (training EM volumes, .nii.gz)
-        |   +-- labelsTr/  (training labels, .nii.gz)
-        |   +-- imagesTs/  (test EM volumes)
-        |   +-- labelsTs/  (test labels)
-        +-- Dataset006_ME2-Pyra/
-        +-- ...
+    Volume format:
+        ``[{"subdataset": "Dataset001_ME2-Beta", "img_dir": "imagesTr", "lbl_dir": "labelsTr"}]``
 
-    Labels:
-        0 = background
-        1 = mitochondria
-        2 = boundary
+    When ``img_dir``/``lbl_dir`` are omitted, defaults to ``imagesTr``/``labelsTr``.
+    When ``volumes`` is None, loads all ``Dataset*`` dirs under ``root_dir``.
 
     Args:
         root_dir: Path to the MitoEM2 root (parent of Dataset* dirs).
-        split: Data split ('train', 'valid', 'test').
+        volumes: List of volume dicts with ``subdataset`` key.
         transform: Optional MONAI transforms to apply.
         cache_rate: Fraction of data to cache in memory.
-        train_val_split: Fraction for validation split.
-        dataset_name: Specific dataset to load, e.g. 'Dataset001_ME2-Beta'.
-            If None, loads all datasets found in root_dir.
         slice_mode: If True, return individual 2D slices (default: True).
-
-    Example:
-        >>> ds = MitoEM2Dataset(
-        ...     root_dir="data/mitoem2",
-        ...     dataset_name="Dataset001_ME2-Beta",
-        ...     split="train",
-        ... )
-        >>> sample = ds[0]
-        >>> print(sample["image"].shape, sample["label"].shape)
+        num_samples: Number of samples per epoch.
     """
 
     _paper = (
@@ -66,26 +45,22 @@ class MitoEM2Dataset(CircuitDataset):
     def __init__(
         self,
         root_dir: str,
-        split: str = "train",
+        volumes: Optional[List[Dict[str, str]]] = None,
         transform: Optional[Callable] = None,
         cache_rate: float = 1.0,
-        train_val_split: float = 0.2,
         num_workers: int = 0,
-        dataset_name: Optional[Union[str, List[str]]] = None,
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
     ) -> None:
-        self.dataset_name = dataset_name
         self.slice_mode = slice_mode
         self._num_samples = num_samples
         self._nfty = NFTYPreprocessor()
 
         super().__init__(
             root_dir=root_dir,
-            split=split,
+            volumes=volumes,
             transform=transform,
             cache_rate=cache_rate,
-            train_val_split=train_val_split,
             num_workers=num_workers,
         )
 
@@ -95,7 +70,6 @@ class MitoEM2Dataset(CircuitDataset):
 
     @property
     def resolution(self) -> Dict[str, float]:
-        # Read from dataset.json if available, else default
         ds_dirs = self._get_dataset_dirs()
         if ds_dirs:
             json_path = ds_dirs[0] / "dataset.json"
@@ -114,29 +88,36 @@ class MitoEM2Dataset(CircuitDataset):
     def data_files(self) -> Dict[str, Union[str, np.ndarray]]:
         return {"vol": "imagesTr/*.nii.gz", "seg": "labelsTr/*.nii.gz"}
 
+    def _default_volumes(self) -> List[Dict[str, str]]:
+        """Auto-discover all Dataset* dirs, using imagesTr/labelsTr."""
+        result = []
+        for d in sorted(self.root_dir.iterdir()):
+            if d.is_dir() and d.name.startswith("Dataset"):
+                result.append({"subdataset": d.name, "img_dir": "imagesTr", "lbl_dir": "labelsTr"})
+        return result
+
     def _get_dataset_dirs(self) -> List[Path]:
-        """Return list of dataset directories to load."""
-        if self.dataset_name is not None:
-            names = [self.dataset_name] if isinstance(self.dataset_name, str) else self.dataset_name
-            return [self.root_dir / n for n in names if (self.root_dir / n).exists()]
-        return sorted(
-            d for d in self.root_dir.iterdir()
-            if d.is_dir() and d.name.startswith("Dataset")
-        )
+        """Return list of dataset directories from volumes list."""
+        vol_list = self._get_volume_list()
+        dirs = []
+        for v in vol_list:
+            sub = v.get("subdataset", "")
+            d = self.root_dir / sub if sub else self.root_dir
+            if d.exists():
+                dirs.append(d)
+        return dirs
 
     def _prepare_data(self) -> List[Dict[str, Any]]:
-        """Prepare data dictionaries from NIfTI volumes."""
         data_list: List[Dict[str, Any]] = []
 
-        ds_dirs = self._get_dataset_dirs()
+        for vol_spec in self._get_volume_list():
+            sub = vol_spec.get("subdataset", "")
+            ds_dir = self.root_dir / sub if sub else self.root_dir
+            img_dir_name = vol_spec.get("img_dir", "imagesTr")
+            lbl_dir_name = vol_spec.get("lbl_dir", "labelsTr")
 
-        for ds_dir in ds_dirs:
-            if self.split in ("train", "valid"):
-                img_dir = ds_dir / "imagesTr"
-                lbl_dir = ds_dir / "labelsTr"
-            else:
-                img_dir = ds_dir / "imagesTs"
-                lbl_dir = ds_dir / "labelsTs"
+            img_dir = ds_dir / img_dir_name
+            lbl_dir = ds_dir / lbl_dir_name
 
             if not img_dir.exists():
                 continue
@@ -144,22 +125,11 @@ class MitoEM2Dataset(CircuitDataset):
             img_files = sorted(img_dir.glob("*.nii.gz"))
             lbl_files = sorted(lbl_dir.glob("*.nii.gz")) if lbl_dir.exists() else []
 
-            # Build pairs
             pairs: List[Tuple[Path, Optional[Path]]] = []
             for img_f in img_files:
-                # Match label: image is *_0000.nii.gz, label is *.nii.gz (no channel suffix)
                 stem = img_f.name.replace("_0000.nii.gz", ".nii.gz")
                 lbl_f = lbl_dir / stem if (lbl_dir / stem).exists() else None
                 pairs.append((img_f, lbl_f))
-
-            # Train/valid split
-            n_total = len(pairs)
-            n_train = int(n_total * (1.0 - self.train_val_split))
-
-            if self.split == "train":
-                pairs = pairs[:n_train]
-            elif self.split == "valid":
-                pairs = pairs[n_train:]
 
             for vol_idx, (img_path, lbl_path) in enumerate(pairs):
                 image = self._nfty.load(str(img_path)).astype(np.float32)

@@ -2,7 +2,7 @@
 SNEMI3D DataModule for PyTorch Lightning.
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from monai.transforms import (
     Compose,
@@ -28,16 +28,12 @@ class SNEMI3DDataModule(CircuitDataModule):
 
     Args:
         data_root: Path to SNEMI3D data directory.
-        batch_size: Batch size (default: 4).
-        num_workers: Data loading workers (default: 4).
-        train_val_split: Validation fraction (default: 0.2).
-        cache_rate: Cache fraction (default: 0.5).
-        pin_memory: Pin memory for GPU transfer (default: True).
-        image_size: Optional resize dimensions (D, H, W).
-        patch_size: Random crop size (D, H, W) for training.
+        train_volumes: e.g. ``[{"vol": "AC4_inputs", "seg": "AC4_labels"}]``
+        val_volumes: defaults to train_volumes.
+        test_volumes: e.g. ``[{"vol": "AC3_inputs", "seg": "AC3_labels"}]``
         slice_mode: Return 2D slices if True (default: False for 3D).
         num_samples: Number of samples per epoch.
-        erode_boundaries: Probability of eroding neuron boundaries (0.0=off).
+        find_boundaries: Probability of zeroing boundary pixels (0.0=off).
     """
 
     dataset_class = SNEMI3DDataset
@@ -47,43 +43,46 @@ class SNEMI3DDataModule(CircuitDataModule):
         data_root: str,
         batch_size: int = 4,
         num_workers: int = 4,
-        train_val_split: float = 0.2,
         cache_rate: float = 0.5,
         pin_memory: bool = True,
         image_size: Optional[Tuple[int, ...]] = None,
         patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
         slice_mode: bool = False,
         num_samples: Optional[int] = None,
-        erode_boundaries: float = 0.0,
+        find_boundaries: float = 0.0,
+        train_volumes: Optional[List[Dict[str, str]]] = None,
+        val_volumes: Optional[List[Dict[str, str]]] = None,
+        test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
-        self.erode_boundaries = erode_boundaries
+        self.find_boundaries = find_boundaries
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
             num_workers=num_workers,
-            train_val_split=train_val_split,
             cache_rate=cache_rate,
             pin_memory=pin_memory,
             image_size=image_size,
+            train_volumes=train_volumes,
+            val_volumes=val_volumes,
+            test_volumes=test_volumes,
             persistent_workers=persistent_workers,
         )
 
     def _get_dataset_kwargs(self) -> dict:
-        kwargs = {"slice_mode": self.slice_mode}
+        kwargs: dict = {"slice_mode": self.slice_mode}
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
         return kwargs
 
     def _label_post_crop(self, spatial_dims: int) -> list:
-        """Build label post-processing steps after spatial crop."""
         steps = [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
-        if self.erode_boundaries > 0:
+        if self.find_boundaries > 0:
             steps.append(RandFindBoundariesd(
-                keys=["label"], prob=self.erode_boundaries,
+                keys=["label"], prob=self.find_boundaries,
             ))
         return steps
 
