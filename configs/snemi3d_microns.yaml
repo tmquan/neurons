@@ -12,10 +12,10 @@ data:
   dataset: snemi3d
   data_root: data/snemi3d  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 32
+  num_workers: 16
   cache_rate: 0.0
   slice_mode: false
-  find_boundaries: 0.5
+  find_boundaries: 1.0
   num_samples: 16000
   patch_size: [48, 256, 256]
 
@@ -35,7 +35,7 @@ model:
   num_classes: 16
   emb_dim: 16
   feature_size: 48
-  dropout: 0.2
+  dropout: 0.0
 
 optimizer:
   type: adamw
@@ -59,11 +59,11 @@ loss:
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 10.0
-  weight_bone: 1.0
+  weight_bone: 10.0
   weight_geometry: 1.0
   dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 0.0
+  weight_cov: 1.0
   weight_raw: 1.0
   loss_dir: smooth_l1
   loss_cov: mse
@@ -77,7 +77,7 @@ training:
   strategy: ddp
   precision: 16-mixed
   gradient_clip_val: 1.0
-  limit_val_batches: 20
+  limit_val_batches: 100
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   benchmark: true
