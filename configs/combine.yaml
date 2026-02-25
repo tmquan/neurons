@@ -17,7 +17,7 @@ data:
   slice_mode: false
   num_samples: 8000
   find_boundaries: 0.5
-  patch_size: [32, 160, 160]
+  patch_size: [48, 256, 256]
 
   train_volumes:
     # SNEMI3D train

@@ -17,7 +17,7 @@ data:
   slice_mode: false
   find_boundaries: 0.5
   num_samples: 16000
-  patch_size: [32, 160, 160]
+  patch_size: [48, 256, 256]
 
   # Merged train: SNEMI3D AC4 + MICRONS 2048 train crop
   train_volumes:

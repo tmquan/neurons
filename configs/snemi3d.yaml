@@ -20,7 +20,7 @@ data:
     - {vol: AC3_inputs, seg: AC3_labels}
   find_boundaries: 1.0  # Probability of zeroing boundary pixels (0.0=off, 0.5=50%, 1.0=always)
   num_samples: 16000     # Number of random 3D crops per epoch (volume has 100 Z-slices)
-  patch_size: [32, 160, 160]
+  patch_size: [48, 256, 256]
     
 
 model:
