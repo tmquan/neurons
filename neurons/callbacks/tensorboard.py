@@ -273,19 +273,20 @@ class ImageLogger(pl.Callback):
             return
 
         batch = self._train_batch
-        images = batch["image"].to(pl_module.device)
-        if images.dim() == self.spatial_dims + 1:
-            images = rearrange(images, "b ... -> b 1 ...")
+        with torch.no_grad():
+            images = batch["image"].to(pl_module.device)
+            if images.dim() == self.spatial_dims + 1:
+                images = rearrange(images, "b ... -> b 1 ...")
 
-        labels = batch["label"].to(pl_module.device)
-        if labels.dim() == self.spatial_dims + 2:
-            labels = rearrange(labels, "b 1 ... -> b ...")
+            labels = batch["label"].to(pl_module.device)
+            if labels.dim() == self.spatial_dims + 2:
+                labels = rearrange(labels, "b 1 ... -> b ...")
 
-        n = min(images.shape[0], self.max_images)
+            n = min(images.shape[0], self.max_images)
 
-        # --- Automatic mode ---
-        preds_auto = pl_module.model(images)
-        clusterer = getattr(pl_module, "_clusterer", None)
+            # --- Automatic mode ---
+            preds_auto = pl_module.model(images[:n])
+            clusterer = getattr(pl_module, "_clusterer", None)
 
         images_2d = _to_2d(images[:n])
         labels_2d = rearrange(_to_2d(rearrange(labels[:n], "b ... -> b 1 ...")), "b 1 ... -> b ...")
@@ -303,19 +304,20 @@ class ImageLogger(pl.Callback):
 
         from neurons.utils.point_sampling import sample_point_prompts
 
-        sem_labels = (labels > 0).long()
-        num_pos = getattr(pl_module, "_num_pos_points", 5)
-        num_neg = getattr(pl_module, "_num_neg_points", 5)
-        sample_mode = getattr(pl_module, "_point_sample_mode", "class")
+        with torch.no_grad():
+            sem_labels = (labels[:n] > 0).long()
+            num_pos = getattr(pl_module, "_num_pos_points", 5)
+            num_neg = getattr(pl_module, "_num_neg_points", 5)
+            sample_mode = getattr(pl_module, "_point_sample_mode", "class")
 
-        point_prompts = sample_point_prompts(
-            sem_labels, labels,
-            num_pos=num_pos,
-            num_neg=num_neg,
-            sample_mode=sample_mode,
-        )
+            point_prompts = sample_point_prompts(
+                sem_labels, labels[:n],
+                num_pos=num_pos,
+                num_neg=num_neg,
+                sample_mode=sample_mode,
+            )
 
-        preds_proof = pl_module.model(images, point_prompts=point_prompts)
+            preds_proof = pl_module.model(images[:n], point_prompts=point_prompts)
 
         img_gray = _log_predictions(
             tb, "train_vis_proofread", images_2d, labels_2d,

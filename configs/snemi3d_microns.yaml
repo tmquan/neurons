@@ -12,7 +12,7 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 32
+  num_workers: 8
   cache_rate: 0.0
   slice_mode: false
   find_boundaries: 1.0   # default for the transform; overridden per-volume below
