@@ -185,7 +185,7 @@ def relabel_connected_components_3d(
         return torch.stack(batch_results)
 
     device = labels.device
-    labels_np = labels.cpu().numpy().astype(np.int32)
+    labels_np = labels.cpu().numpy().astype(np.int64)
 
     try:
         from scipy import ndimage
@@ -193,7 +193,7 @@ def relabel_connected_components_3d(
         unique_labels = np.unique(labels_np)
         unique_labels = unique_labels[unique_labels > 0]
 
-        relabeled = np.zeros_like(labels_np)
+        relabeled = np.zeros(labels_np.shape, dtype=np.int64)
         next_label = 1
 
         if connectivity == 6:
@@ -239,7 +239,7 @@ def relabel_connected_components_2d(
         return torch.stack(batch_results)
 
     device = labels.device
-    labels_np = labels.cpu().numpy().astype(np.int32)
+    labels_np = labels.cpu().numpy().astype(np.int64)
 
     try:
         from scipy import ndimage
@@ -247,7 +247,7 @@ def relabel_connected_components_2d(
         unique_labels = np.unique(labels_np)
         unique_labels = unique_labels[unique_labels > 0]
 
-        relabeled = np.zeros_like(labels_np)
+        relabeled = np.zeros(labels_np.shape, dtype=np.int64)
         next_label = 1
 
         if connectivity == 4:
