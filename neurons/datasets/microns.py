@@ -178,7 +178,8 @@ class MICRONSDataset(CircuitDataset):
 
         for vol_spec in self._get_volume_list():
             inputs = self._load_volume(str(vol_spec["vol"]))
-            assert inputs is not None
+            if inputs is None:
+                raise FileNotFoundError(f"Could not load volume '{vol_spec['vol']}' from {self.root_dir}")
             inputs = inputs.astype(np.float32)
             vmin, vmax = float(inputs.min()), float(inputs.max())
             if vmax > vmin:

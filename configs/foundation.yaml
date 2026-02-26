@@ -10,7 +10,7 @@ project_name: neurons-foundation
 
 data:
   dataset: snemi3d  # universal loader
-  data_root: data/snemi3d
+  data_root: data/SNEMI3D
   batch_size: 4
   num_workers: 8
   cache_rate: 0.0
@@ -21,15 +21,15 @@ data:
 
   train_volumes:
     # SNEMI3D (mouse somatosensory cortex, 6x6x30 nm)
-    - {vol: AC4_inputs, seg: AC4_labels, root: data/snemi3d}
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
     # MICRONS (mouse visual cortex, 8x8x40 nm)
     - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS}
 
   val_volumes:
-    - {vol: AC4_inputs, seg: AC4_labels, root: data/snemi3d}
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
 
   test_volumes:
-    - {vol: AC3_inputs, seg: AC3_labels, root: data/snemi3d}
+    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS}
 
 model:

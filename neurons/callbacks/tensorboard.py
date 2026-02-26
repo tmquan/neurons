@@ -45,8 +45,8 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     """
     B, H, W = labels.shape
     flat = rearrange(labels, "b h w -> (b h w)").long()
-    torch.manual_seed(0)
-    palette = torch.rand(flat.max().item() + 1, 3, device=labels.device)
+    gen = torch.Generator(device=labels.device).manual_seed(0)
+    palette = torch.rand(flat.max().item() + 1, 3, device=labels.device, generator=gen)
     palette[0] = 0.0
     rgb = palette[flat]
     return rearrange(rgb, "(b h w) c -> b c h w", b=B, h=H, w=W)
@@ -176,12 +176,13 @@ def _log_predictions(
     cov_mat = rearrange(cov_val, "b (s1 s2) h w -> b h w s1 s2", s1=S, s2=S)
     eigvals = torch.linalg.eigvalsh(cov_mat)  # [n, H, W, S] sorted ascending
     eigvals = eigvals.abs()
-    eigvals_rgb = rearrange(eigvals, "b h w s -> b s h w")
+    eigvals_rgb = rearrange(eigvals, "b h w s -> b s h w").flip(1)  # descending: R=largest
     if S < 3:
         pad = torch.zeros(n, 3 - S, eigvals_rgb.shape[2], eigvals_rgb.shape[3],
                           device=eigvals_rgb.device)
         eigvals_rgb = torch.cat([eigvals_rgb, pad], dim=1)
-    cov_rgb = _normalise(eigvals_rgb)
+    eig_sum = eigvals_rgb.sum(dim=1, keepdim=True).clamp(min=1e-8)
+    g_cov_rgb = (eigvals_rgb / eig_sum * S).clamp(0.0, 1.0)
 
     g_raw = torch.sigmoid(geom[:, ch_dir + ch_cov:])
     g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
@@ -203,7 +204,7 @@ def _log_predictions(
         tb.add_images(f"{tag}/instance_pred", ins_pred_rgb, global_step=epoch)
 
     tb.add_images(f"{tag}/geometry_dir", g_dir, global_step=epoch)
-    tb.add_images(f"{tag}/geometry_cov", cov_rgb, global_step=epoch)
+    tb.add_images(f"{tag}/geometry_cov", g_cov_rgb, global_step=epoch)
     tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
 
     return img_gray

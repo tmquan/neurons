@@ -42,7 +42,7 @@ def find_boundaries(
     """
     import torch.nn.functional as F
 
-    has_channel = labels.dim() > 2 and labels.shape[0] == 1 and labels.dim() == 4
+    has_channel = labels.dim() == 4 and labels.shape[0] == 1
     spatial_dims = labels.dim() - (1 if has_channel else 0)
 
     if has_channel:

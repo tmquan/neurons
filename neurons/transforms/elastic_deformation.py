@@ -65,24 +65,23 @@ class ElasticDeformationd(MapTransform, Randomizable):
             np.clip(x + dx, 0, shape[1] - 1).astype(np.int32),
         )
 
-        for key in self.keys:
-            if key in d:
-                arr = d[key]
-                is_tensor = isinstance(arr, torch.Tensor)
+        for key in self.key_iterator(d):
+            arr = d[key]
+            is_tensor = isinstance(arr, torch.Tensor)
 
-                if is_tensor:
-                    arr = arr.cpu().numpy()
+            if is_tensor:
+                arr = arr.cpu().numpy()
 
-                if arr.ndim == 3:
-                    result = np.zeros_like(arr)
-                    for c in range(arr.shape[0]):
-                        result[c] = arr[c][indices]
-                else:
-                    result = arr[indices]
+            if arr.ndim == 3:
+                result = np.zeros_like(arr)
+                for c in range(arr.shape[0]):
+                    result[c] = arr[c][indices]
+            else:
+                result = arr[indices]
 
-                if is_tensor:
-                    result = torch.from_numpy(result)
+            if is_tensor:
+                result = torch.from_numpy(result)
 
-                d[key] = result
+            d[key] = result
 
         return d

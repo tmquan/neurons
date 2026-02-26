@@ -10,24 +10,25 @@ project_name: neurons-combined
 
 data:
   dataset: snemi3d
-  data_root: data/snemi3d  # default root for volumes without explicit root
+  data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 16
+  num_workers: 32
   cache_rate: 0.0
   slice_mode: false
-  find_boundaries: 1.0
+  find_boundaries: 1.0   # default for the transform; overridden per-volume below
   num_samples: 16000
   patch_size: [48, 256, 256]
 
-  # Merged train: SNEMI3D AC4 + MICRONS 2048 train crop
+  # Merged train: SNEMI3D AC4 + MICRONS train crop
+  # find_boundaries is per-volume: 1.0 for SNEMI3D, 0 for MICRONS
   train_volumes:
-    - {vol: AC4_inputs, seg: AC4_labels, root: data/snemi3d}
-    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS}
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 0}
 
-  # Merged test: SNEMI3D AC3 + MICRONS 1024 test crop
+  # Merged test: SNEMI3D AC3 + MICRONS test crop
   test_volumes:
-    - {vol: AC3_inputs, seg: AC3_labels, root: data/snemi3d}
-    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS}
+    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 0}
 
 model:
   type: vista3d

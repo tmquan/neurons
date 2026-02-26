@@ -60,8 +60,7 @@ class CREMI3DDataset(CircuitDataset):
         self.include_clefts = include_clefts
         self.include_mito = include_mito
         self._num_samples = num_samples
-        self._image_data: Optional[np.ndarray] = None
-        self._label_data: Optional[np.ndarray] = None
+        self._loaded_volumes: List[str] = []
 
         super().__init__(
             root_dir=str(root_dir),
@@ -88,11 +87,12 @@ class CREMI3DDataset(CircuitDataset):
 
     @property
     def data_files(self) -> Dict[str, Union[str, np.ndarray]]:
-        if self._image_data is not None and self._label_data is not None:
-            return {"vol": self._image_data, "seg": self._label_data}
+        vols = self._get_volume_list()
+        if vols:
+            return {"vol": vols[0]["vol"], "seg": f"sample_{vols[0]['vol']}_*.hdf"}
         return {
-            "vol": "sample_*.h5/volumes/raw",
-            "seg": "sample_*.h5/volumes/labels/neuron_ids",
+            "vol": "sample_*.hdf/volumes/raw",
+            "seg": "sample_*.hdf/volumes/labels/neuron_ids",
         }
 
     def _prepare_data(self) -> List[Dict[str, Any]]:
@@ -112,9 +112,6 @@ class CREMI3DDataset(CircuitDataset):
                 image = (image - vmin) / (vmax - vmin)
             label = label.astype(np.int64)
 
-            self._image_data = image
-            self._label_data = label
-
             data_dict = {
                 "image": image,
                 "label": label,
@@ -132,15 +129,26 @@ class CREMI3DDataset(CircuitDataset):
         vol_name: str,
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """Load a single CREMI volume."""
-        possible_paths = [
-            self.root_dir / f"sample_{vol_name}_20160501.hdf",
-            self.root_dir / f"sample_{vol_name}+_20160601.hdf",
-            self.root_dir / f"sample_{vol_name}_padded_20160501.hdf",
-            self.root_dir / f"sample_{vol_name}.h5",
-            self.root_dir / f"sample_{vol_name}.hdf5",
-            self.root_dir / f"sample_{vol_name}.hdf",
-            self.root_dir / vol_name / "sample.h5",
-        ]
+        is_padded = vol_name.endswith("+")
+        letter = vol_name.rstrip("+")
+
+        if is_padded:
+            possible_paths = [
+                self.root_dir / f"sample_{letter}+_20160601.hdf",
+                self.root_dir / f"sample_{letter}_padded_20160601.hdf",
+                self.root_dir / f"sample_{vol_name}.h5",
+                self.root_dir / f"sample_{vol_name}.hdf5",
+                self.root_dir / f"sample_{vol_name}.hdf",
+                self.root_dir / vol_name / "sample.h5",
+            ]
+        else:
+            possible_paths = [
+                self.root_dir / f"sample_{letter}_20160501.hdf",
+                self.root_dir / f"sample_{letter}.h5",
+                self.root_dir / f"sample_{letter}.hdf5",
+                self.root_dir / f"sample_{letter}.hdf",
+                self.root_dir / letter / "sample.h5",
+            ]
 
         h5_path: Optional[Path] = None
         for path in possible_paths:

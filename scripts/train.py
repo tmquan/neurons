@@ -368,7 +368,7 @@ def main(cfg: DictConfig) -> None:
     training_cfg = cfg.training
     strategy_name = training_cfg.get("strategy", "auto")
     if strategy_name == "ddp":
-        strategy = DDPStrategy(static_graph=True)
+        strategy = DDPStrategy(find_unused_parameters=True)
     elif strategy_name == "fsdp":
         strategy = FSDPStrategy(
             sharding_strategy="FULL_SHARD",

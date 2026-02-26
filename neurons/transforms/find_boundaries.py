@@ -32,15 +32,20 @@ class RandFindBoundariesd(MapTransform, Randomizable):
         prob: float = 0.5,
         connectivity: int = 1,
         mode: str = "inner",
+        prob_key: str = "_find_boundaries",
     ) -> None:
         super().__init__(keys)
         self.prob = prob
         self.connectivity = connectivity
         self.mode = mode
+        self.prob_key = prob_key
         self._do_transform = True
 
     def randomize(self, data: Optional[Dict] = None) -> None:  # type: ignore[override]
-        self._do_transform = self.R.random() < self.prob
+        prob = self.prob
+        if data is not None and self.prob_key in data:
+            prob = float(data[self.prob_key])
+        self._do_transform = self.R.random() < prob
 
     def __call__(self, data: Dict) -> Dict:
         self.randomize(data)

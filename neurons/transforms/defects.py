@@ -57,47 +57,46 @@ class Defectsd(MapTransform, Randomizable):
 
         d = dict(data)
 
-        for key in self.keys:
-            if key in d:
-                arr = d[key]
-                is_tensor = isinstance(arr, torch.Tensor)
+        for key in self.key_iterator(d):
+            arr = d[key]
+            is_tensor = isinstance(arr, torch.Tensor)
 
-                if is_tensor:
-                    device = arr.device
-                    arr = arr.cpu().numpy()
+            if is_tensor:
+                device = arr.device
+                arr = arr.cpu().numpy()
 
-                if self._defect_type == "line":
-                    shape = arr.shape[-2:]
+            if self._defect_type == "line":
+                shape = arr.shape[-2:]
 
-                    if self.R.random() < 0.5:
-                        y = int(self.R.randint(0, shape[0]))
-                        thickness = int(self.R.randint(1, 5))
-                        intensity = float(self.R.uniform(0.5, 1.5))
+                if self.R.random() < 0.5:
+                    y = int(self.R.randint(0, shape[0]))
+                    thickness = int(self.R.randint(1, 5))
+                    intensity = float(self.R.uniform(0.5, 1.5))
 
-                        if arr.ndim == 3:
-                            arr[:, y : y + thickness, :] *= intensity
-                        else:
-                            arr[y : y + thickness, :] *= intensity
+                    if arr.ndim == 3:
+                        arr[:, y : y + thickness, :] *= intensity
                     else:
-                        x = int(self.R.randint(0, shape[1]))
-                        thickness = int(self.R.randint(1, 5))
-                        intensity = float(self.R.uniform(0.5, 1.5))
+                        arr[y : y + thickness, :] *= intensity
+                else:
+                    x = int(self.R.randint(0, shape[1]))
+                    thickness = int(self.R.randint(1, 5))
+                    intensity = float(self.R.uniform(0.5, 1.5))
 
-                        if arr.ndim == 3:
-                            arr[:, :, x : x + thickness] *= intensity
-                        else:
-                            arr[:, x : x + thickness] *= intensity
+                    if arr.ndim == 3:
+                        arr[:, :, x : x + thickness] *= intensity
+                    else:
+                        arr[:, x : x + thickness] *= intensity
 
-                elif self._defect_type == "intensity":
-                    shift = float(self.R.uniform(-0.2, 0.2))
-                    scale = float(self.R.uniform(0.8, 1.2))
-                    arr = arr * scale + shift
+            elif self._defect_type == "intensity":
+                shift = float(self.R.uniform(-0.2, 0.2))
+                scale = float(self.R.uniform(0.8, 1.2))
+                arr = arr * scale + shift
 
-                arr = np.clip(arr, 0, 1)
+            arr = np.clip(arr, 0, 1)
 
-                if is_tensor:
-                    arr = torch.from_numpy(arr).to(device)
+            if is_tensor:
+                arr = torch.from_numpy(arr).to(device)
 
-                d[key] = arr
+            d[key] = arr
 
         return d

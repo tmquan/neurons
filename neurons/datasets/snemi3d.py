@@ -20,6 +20,11 @@ class SNEMI3DDataset(CircuitDataset):
 
     Volume format: ``[{"vol": "AC4_inputs", "seg": "AC4_labels"}]``
 
+    Optional per-volume keys:
+        - ``root``: override ``root_dir`` for this volume.
+        - ``find_boundaries``: probability stored in each sample dict as
+          ``_find_boundaries`` (consumed by ``RandFindBoundariesd``).
+
     Args:
         root_dir: Path to directory containing SNEMI3D data files.
         volumes: List of {vol, seg} dicts. Defaults to AC4 train volume.
@@ -113,6 +118,7 @@ class SNEMI3DDataset(CircuitDataset):
 
             n_slices = inputs.shape[0]
             vol_name = vol_spec["vol"]
+            fb_prob = float(vol_spec.get("find_boundaries", -1))
 
             if self.slice_mode:
                 for si in range(n_slices):
@@ -122,11 +128,15 @@ class SNEMI3DDataset(CircuitDataset):
                     }
                     if labels is not None:
                         entry["label"] = labels[si]
+                    if fb_prob >= 0:
+                        entry["_find_boundaries"] = fb_prob
                     data_list.append(entry)
             else:
                 entry = {"image": inputs, "volume": vol_name, "idx": len(data_list)}
                 if labels is not None:
                     entry["label"] = labels
+                if fb_prob >= 0:
+                    entry["_find_boundaries"] = fb_prob
                 data_list.append(entry)
 
             total_slices += n_slices

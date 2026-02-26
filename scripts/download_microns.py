@@ -35,9 +35,9 @@ Crop size estimates (mip0, uint8 EM + uint64 seg, uncompressed):
   2048³ =   8 GB EM +  64 GB seg  =   72 GB total
   4096³ =  64 GB EM + 512 GB seg  =  576 GB total
 
-Default crop origin: (140000, 100000, 20000) — dense neuropil in layer 2/3.
-Train split: 1024^3 at (140000, 100000, 20000) — ~1 GB EM + ~8 GB seg.
-Test split:  1024^3 at (142000, 102000, 20000) — ~1 GB EM + ~8 GB seg. Disjoint (976 voxel gap).
+Default crop origin: (80000, 50000, 10000) — dense neuropil, central volume.
+Train split: 1024^3 at (80000, 50000, 10000) — ~1 GB EM + ~8 GB seg.
+Test split:  1024^3 at (82000, 52000, 10000) — ~1 GB EM + ~8 GB seg. Disjoint (976 voxel gap).
 
 Uses cloud-volume to fetch from AWS / Google Cloud public buckets.
 
@@ -93,15 +93,17 @@ DEFAULT_SEG_VERSION = 1300
 
 # Pre-defined train/test splits in disjoint regions of the minnie65 volume.
 # Coordinates are (X, Y, Z) in mip0 voxels.
-# Train: 1024³ at (140000, 100000, 20000) — dense neuropil in layer 2/3.
-# Test:  1024³ at (142000, 102000, 20000) — 976 voxel gap, disjoint.
+# Both crops sit in the dense, well-proofread center of the volume
+# (away from edges where segmentation coverage drops off).
+# Train: 1024³ at (80000, 50000, 10000).
+# Test:  1024³ at (82000, 52000, 10000) — 976 voxel gap, disjoint.
 SPLITS = {
     "train": {
-        "start": (140000, 100000, 20000),
+        "start": (80000, 50000, 10000),
         "size": (1024, 1024, 1024),
     },
     "test": {
-        "start": (142000, 102000, 20000),
+        "start": (82000, 52000, 10000),
         "size": (1024, 1024, 1024),
     },
 }

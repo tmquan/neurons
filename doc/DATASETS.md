@@ -26,7 +26,7 @@ This document describes the four connectomics datasets supported by the **neuron
 
 **Download:**
 ```bash
-python scripts/download_snemi3d.py --output data/snemi3d
+python scripts/download_snemi3d.py --output data/SNEMI3D
 ```
 
 ---
@@ -57,7 +57,7 @@ The offset encoding avoids ID collisions when neuron, cleft, and mitochondria an
 
 **Download:**
 ```bash
-python scripts/download_cremi3d.py --output data/cremi3d
+python scripts/download_cremi3d.py --output data/CREMI3D
 ```
 
 ---
@@ -70,8 +70,8 @@ python scripts/download_cremi3d.py --output data/cremi3d
 | **Modality** | Serial-section EM (ssEM) |
 | **Resolution** | 8 x 8 x 40 nm (mip 0, anisotropic) |
 | **Full volume** | ~175,104 x 108,544 x 21,056 voxels (~117 TB EM) |
-| **Train crop** | 1,024³ voxels at (140000, 100000, 20000) — ~1 GB EM |
-| **Test crop** | 1,024³ voxels at (142000, 102000, 20000) — ~1 GB EM |
+| **Train crop** | 1,024³ voxels at (80000, 50000, 10000) — ~1 GB EM |
+| **Test crop** | 1,024³ voxels at (82000, 52000, 10000) — ~1 GB EM |
 | **Labels** | Dense neuron segmentation (proofread, ~200K cells, ~120K neurons) |
 | **Source** | [MICrONS Explorer](https://www.microns-explorer.org/) |
 | **Reference** | MICrONS Consortium (2021) bioRxiv |
@@ -142,7 +142,7 @@ The **boundary class** serves as a separator between touching mitochondria. At i
 
 **Download:**
 ```bash
-python scripts/download_mitoem2.py --output data/mitoem2 --link /scratch/MitoEM2
+python scripts/download_mitoem2.py --output data/MitoEM2 --link /scratch/MitoEM2
 ```
 
 ---
@@ -166,8 +166,8 @@ from neurons.datamodules import CombineDataModule, SNEMI3DDataModule, MitoEM2Dat
 
 combine = CombineDataModule(
     datamodules={
-        "snemi3d": (SNEMI3DDataModule(data_root="data/snemi3d"), 1.0),
-        "mitoem2": (MitoEM2DataModule(data_root="data/mitoem2"), 2.0),
+        "snemi3d": (SNEMI3DDataModule(data_root="data/SNEMI3D"), 1.0),
+        "mitoem2": (MitoEM2DataModule(data_root="data/MitoEM2"), 2.0),
     },
     ignore_classes={"mito_boundary"},  # optional
 )
@@ -179,10 +179,10 @@ combine = CombineDataModule(
 
 | Dataset | Default Path | Scratch Path |
 |---|---|---|
-| SNEMI3D | `data/snemi3d/` | `/scratch/SNEMI3D/` |
-| CREMI3D | `data/cremi3d/` | `/scratch/CREMI3D/` |
+| SNEMI3D | `data/SNEMI3D/` | `/scratch/SNEMI3D/` |
+| CREMI3D | `data/CREMI3D/` | `/scratch/CREMI3D/` |
 | MICrONS | `data/MICRONS/` | `/scratch/MICRONS/` |
-| MitoEM2 | `data/mitoem2/` | `/scratch/MitoEM2/` |
+| MitoEM2 | `data/MitoEM2/` | `/scratch/MitoEM2/` |
 
 ## Memory-Efficient Volume Loading
 

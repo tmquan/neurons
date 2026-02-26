@@ -48,8 +48,8 @@ class MissingSectiond(MapTransform, Randomizable):
 
         d = dict(data)
 
-        for key in self.keys:
-            if key in d and d[key].ndim >= 3:
+        for key in self.key_iterator(d):
+            if d[key].ndim >= 3:
                 arr = d[key]
                 idx = self._missing_idx
 

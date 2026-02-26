@@ -10,7 +10,7 @@ project_name: neurons-combined
 
 data:
   dataset: snemi3d  # uses SNEMI3D dataset class (universal loader)
-  data_root: data/snemi3d
+  data_root: data/SNEMI3D
   batch_size: 4
   num_workers: 8
   cache_rate: 0.0
@@ -21,13 +21,13 @@ data:
 
   train_volumes:
     # SNEMI3D train
-    - {vol: AC4_inputs, seg: AC4_labels, root: data/snemi3d}
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
     # MICRONS train
     - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS}
 
   test_volumes:
     # SNEMI3D test
-    - {vol: AC3_inputs, seg: AC3_labels, root: data/snemi3d}
+    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
     # MICRONS test
     - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS}
 
