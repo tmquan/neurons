@@ -23,12 +23,12 @@ data:
   # find_boundaries is per-volume: 1.0 for SNEMI3D, 0 for MICRONS
   train_volumes:
     - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D, find_boundaries: 1.0}
-    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 0}
+    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 1.0}
 
   # Merged test: SNEMI3D AC3 + MICRONS test crop
   test_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 1.0}
-    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 0}
+    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 1.0}
 
 model:
   type: vista3d

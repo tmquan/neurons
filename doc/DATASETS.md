@@ -70,8 +70,8 @@ python scripts/download_cremi3d.py --output data/CREMI3D
 | **Modality** | Serial-section EM (ssEM) |
 | **Resolution** | 8 x 8 x 40 nm (mip 0, anisotropic) |
 | **Full volume** | ~175,104 x 108,544 x 21,056 voxels (~117 TB EM) |
-| **Train crop** | 1,024³ voxels at (80000, 50000, 10000) — ~1 GB EM |
-| **Test crop** | 1,024³ voxels at (82000, 52000, 10000) — ~1 GB EM |
+| **Train crop** | 1,024³ voxels at (120000, 90000, 20000) — ~1 GB EM |
+| **Test crop** | 1,024³ voxels at (122000, 92000, 20000) — ~1 GB EM |
 | **Labels** | Dense neuron segmentation (proofread, ~200K cells, ~120K neurons) |
 | **Source** | [MICrONS Explorer](https://www.microns-explorer.org/) |
 | **Reference** | MICrONS Consortium (2021) bioRxiv |
