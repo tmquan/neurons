@@ -16,7 +16,11 @@ from neurons.models.point_prompt_encoder import PointPromptEncoder
 
 _SPATIAL_DIMS = 2
 _CONV = nn.Conv2d
-_NORM = nn.BatchNorm2d
+
+
+def _NORM(ch: int) -> nn.GroupNorm:
+    num_groups = max(g for g in (1, 2, 4, 8, 16, 32) if ch % g == 0)
+    return nn.GroupNorm(num_groups, ch)
 
 
 class Vista2DWrapper(nn.Module):
@@ -97,10 +101,14 @@ class Vista2DWrapper(nn.Module):
                     norm="instance",
                     dsdepth=1,
                 )
-                self._use_vista3d = True
                 return
             except ImportError:
-                pass
+                import warnings
+                warnings.warn(
+                    "SegResNetDS2 not available, falling back to SegResNet. "
+                    "Install monai>=1.3 for Vista encoder support.",
+                    stacklevel=2,
+                )
 
         from monai.networks.nets import SegResNet
         self.backbone = SegResNet(

@@ -378,3 +378,12 @@ tensorboard --logdir=outputs/
 This runs ~8 training steps (16 samples / batch 2), triggers the epoch-end
 callback, and produces all visualization panels. Open TensorBoard at
 `http://localhost:6006` to inspect.
+
+### Full training command
+
+Multi-GPU training on 4 GPUs with default hyperparameters:
+
+```bash
+env CUDA_VISIBLE_DEVICES='0,1,2,3' PYTHONPATH=$(pwd) python scripts/train.py \
+    --config-name snemi3d_microns
+```

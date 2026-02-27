@@ -95,10 +95,8 @@ def compute_per_batch_ari(
     """ARI averaged over a batch [B, ...]."""
     total, count = 0.0, 0
     for b in range(pred_labels.shape[0]):
-        v = compute_per_point_ari(pred_labels[b], true_labels[b], ignore_background)
-        if v > 0:
-            total += v
-            count += 1
+        total += compute_per_point_ari(pred_labels[b], true_labels[b], ignore_background)
+        count += 1
     return total / count if count > 0 else 0.0
 
 
@@ -140,10 +138,8 @@ def compute_per_batch_ami(
     """AMI averaged over a batch [B, ...]."""
     total, count = 0.0, 0
     for b in range(pred_labels.shape[0]):
-        v = compute_per_point_ami(pred_labels[b], true_labels[b], ignore_background)
-        if v > 0:
-            total += v
-            count += 1
+        total += compute_per_point_ami(pred_labels[b], true_labels[b], ignore_background)
+        count += 1
     return total / count if count > 0 else 0.0
 
 
@@ -170,10 +166,8 @@ def compute_per_batch_axi(
     """AXI averaged over a batch [B, ...]."""
     total, count = 0.0, 0
     for b in range(pred_labels.shape[0]):
-        v = compute_per_point_axi(pred_labels[b], true_labels[b], ignore_background)
-        if v > 0:
-            total += v
-            count += 1
+        total += compute_per_point_axi(pred_labels[b], true_labels[b], ignore_background)
+        count += 1
     return total / count if count > 0 else 0.0
 
 

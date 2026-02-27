@@ -170,8 +170,8 @@ def main() -> None:
         description="Download MICrONS minnie65 subvolume (EM + segmentation)",
     )
     parser.add_argument(
-        "--output", type=str, default="/scratch/MICRONS",
-        help="Output directory (default: /scratch/MICRONS)",
+        "--output", type=str, default="data/MICRONS",
+        help="Output directory (default: data/MICRONS)",
     )
     parser.add_argument(
         "--size", type=int, nargs=3, default=[128, 128, 128],
@@ -197,8 +197,8 @@ def main() -> None:
         "--split", action="store_true",
         help=(
             "Download pre-defined train + test splits from disjoint regions. "
-            "Train: 1024^3 at (140000,100000,20000). "
-            "Test:  1024^3 at (142000,102000,20000). "
+            "Train: 1024^3 at (120000,90000,20000). "
+            "Test:  1024^3 at (122000,92000,20000). "
             "Ignores --size and --start when set."
         ),
     )

@@ -113,8 +113,11 @@ class SemanticLoss(nn.Module):
                 target = class_labels.float()
             else:
                 target_safe = class_labels.clone().long()
-                target_safe[target_safe < 0] = 0
+                neg_mask = target_safe < 0
+                target_safe[neg_mask] = 0
+                target_safe = target_safe.clamp(0, C - 1)
                 target = F.one_hot(target_safe, C).float()
+                target[neg_mask] = 0.0
                 target = rearrange(target, "b ... c -> b c ...")
             return probs, target
 
@@ -233,6 +236,7 @@ class InstanceLoss(nn.Module):
 
     # ---- weighting helpers ----
 
+    @torch.no_grad()
     def _get_weight_boundary(self, label: torch.Tensor) -> torch.Tensor:
         gt_label_float = rearrange(label, "b ... -> b 1 ...").float()
         padded_arr = F.pad(gt_label_float, _PAD_TUPLE, mode="replicate")
@@ -270,7 +274,7 @@ class InstanceLoss(nn.Module):
         label: torch.Tensor,
         weight_edge: torch.Tensor,
         weight_bone: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> Dict[str, torch.Tensor]:
         B = embed.shape[0]
         emb_flat = rearrange(embed, "b c ... -> b c (...)")
         lbl_flat = rearrange(label, "b ... -> b (...)")
@@ -442,23 +446,16 @@ class Vista3DLoss(nn.Module):
             spatial_dims=_SPATIAL_DIMS, **geom_kwargs,
         ) if weight_geometry > 0 else None
 
-        self._cache_labels_ptr: Optional[int] = None
-        self._cached_ins_weights: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
-        self._cached_geom_targets: Optional[Dict] = None
-
     def _get_cached_targets(
         self, labels: torch.Tensor,
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Optional[Dict]]:
-        """Compute or retrieve cached expensive targets for the given labels."""
-        ptr = labels.data_ptr()
-        if ptr != self._cache_labels_ptr:
-            self._cache_labels_ptr = ptr
-            self._cached_ins_weights = self.instance_loss.compute_weights(labels)
-            if self.geometry_loss is not None:
-                self._cached_geom_targets = self.geometry_loss.compute_targets(labels)
-            else:
-                self._cached_geom_targets = None
-        return self._cached_ins_weights, self._cached_geom_targets
+        """Compute expensive targets (recomputed every call to avoid stale cache)."""
+        ins_weights = self.instance_loss.compute_weights(labels)
+        if self.geometry_loss is not None:
+            geom_targets = self.geometry_loss.compute_targets(labels)
+        else:
+            geom_targets = None
+        return ins_weights, geom_targets
 
     def forward(
         self,
@@ -486,7 +483,9 @@ class Vista3DLoss(nn.Module):
             predictions["semantic"], targets["semantic_labels"],
         )
 
-        semantic_ids = targets.get("semantic_ids") or predictions.get("semantic_ids")
+        semantic_ids = targets.get("semantic_ids")
+        if semantic_ids is None:
+            semantic_ids = predictions.get("semantic_ids")
         ins_out = self.instance_loss(
             predictions["instance"], labels, semantic_ids,
             weight_edge=weight_edge, weight_bone=weight_bone,

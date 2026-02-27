@@ -52,7 +52,7 @@ def find_boundaries(
 
     if spatial_dims == 3:
         pool_fn = F.max_pool3d
-        ks = 3 if connectivity >= spatial_dims else 3
+        ks = 3
         pad = (1, 1, 1, 1, 1, 1)
     else:
         pool_fn = F.max_pool2d
@@ -73,6 +73,12 @@ def find_boundaries(
         for d in dims:
             fwd = torch.roll(core, shifts=-1, dims=d)
             bwd = torch.roll(core, shifts=1, dims=d)
+            slc_last = [slice(None)] * core.dim()
+            slc_first = [slice(None)] * core.dim()
+            slc_last[d] = slice(-1, None)
+            slc_first[d] = slice(0, 1)
+            fwd[tuple(slc_last)] = core[tuple(slc_last)]
+            bwd[tuple(slc_first)] = core[tuple(slc_first)]
             dilated = torch.max(dilated, torch.max(fwd, bwd))
             eroded = torch.min(eroded, torch.min(fwd, bwd))
     else:
@@ -155,7 +161,9 @@ def relabel_sequential(
     for new_idx, old_label in enumerate(fg_labels):
         label_map[old_label.long()] = start_label + new_idx
 
-    relabeled = label_map[labels.long().clamp(0, max_label - 1)]
+    safe = labels.long().clamp(0, max_label - 1)
+    relabeled = label_map[safe]
+    relabeled[labels < 0] = labels[labels < 0]
     return relabeled
 
 

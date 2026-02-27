@@ -1,6 +1,6 @@
 """EM imaging defect simulation transform."""
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -66,6 +66,7 @@ class Defectsd(MapTransform, Randomizable):
                 arr = arr.cpu().numpy()
 
             if self._defect_type == "line":
+                arr = arr.copy() if isinstance(arr, np.ndarray) else arr.clone()
                 shape = arr.shape[-2:]
 
                 if self.R.random() < 0.5:
@@ -75,6 +76,8 @@ class Defectsd(MapTransform, Randomizable):
 
                     if arr.ndim == 3:
                         arr[:, y : y + thickness, :] *= intensity
+                    elif arr.ndim == 4:
+                        arr[:, :, y : y + thickness, :] *= intensity
                     else:
                         arr[y : y + thickness, :] *= intensity
                 else:
@@ -84,6 +87,8 @@ class Defectsd(MapTransform, Randomizable):
 
                     if arr.ndim == 3:
                         arr[:, :, x : x + thickness] *= intensity
+                    elif arr.ndim == 4:
+                        arr[:, :, :, x : x + thickness] *= intensity
                     else:
                         arr[:, x : x + thickness] *= intensity
 

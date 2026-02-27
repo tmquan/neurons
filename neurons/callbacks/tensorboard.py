@@ -74,9 +74,12 @@ def _render_cov_glyphs(
     img_rgb: torch.Tensor,
     labels: torch.Tensor,
     S: int,
-    step: int = 8,
+    step: int = 6,
 ) -> torch.Tensor:
     """Render structure-tensor ellipse glyphs on the EM image.
+
+    Glyph size reflects the global tensor magnitude: larger ellipses
+    near instance centres (high EDT), smaller near boundaries.
 
     Args:
         cov_mat: [B, H, W, s1, s2] predicted covariance matrices (2D-sliced).
@@ -95,7 +98,7 @@ def _render_cov_glyphs(
 
     B, _, H, W = img_rgb.shape
     device = img_rgb.device
-    glyph_radius = step * 0.45
+    max_glyph_radius = step * 0.9
     COLOR = (0.0, 0.8, 1.0)
 
     result = []
@@ -104,15 +107,29 @@ def _render_cov_glyphs(
         lbl = labels[b].detach().cpu().numpy()
         mat = cov_mat[b].detach().cpu().numpy()
 
+        rows_sub = np.arange(step // 2, H, step)
+        cols_sub = np.arange(step // 2, W, step)
+
+        max_eig_global = 0.0
+        for r in rows_sub:
+            for c in cols_sub:
+                if lbl[r, c] == 0:
+                    continue
+                T = mat[r, c]
+                if S == 3:
+                    T = T[1:, 1:]
+                e = np.abs(np.linalg.eigvalsh(T)).max()
+                if e > max_eig_global:
+                    max_eig_global = e
+        if max_eig_global < 1e-8:
+            max_eig_global = 1.0
+
         fig, ax = plt.subplots(1, 1, figsize=(W / 64, H / 64), dpi=64)
         ax.imshow(bg, aspect="equal", interpolation="nearest")
         ax.set_xlim(-0.5, W - 0.5)
         ax.set_ylim(H - 0.5, -0.5)
         ax.axis("off")
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-
-        rows_sub = np.arange(step // 2, H, step)
-        cols_sub = np.arange(step // 2, W, step)
 
         for r in rows_sub:
             for c in cols_sub:
@@ -125,6 +142,8 @@ def _render_cov_glyphs(
                 abs_eig = np.abs(eigvals)
                 if abs_eig.max() < 1e-8:
                     continue
+                scale = abs_eig.max() / max_eig_global
+                glyph_radius = max_glyph_radius * np.clip(scale, 0.1, 1.0)
                 ratio = abs_eig.min() / max(abs_eig.max(), 1e-8)
                 idx_max = int(abs_eig.argmax())
                 angle = np.degrees(np.arctan2(
@@ -136,7 +155,7 @@ def _render_cov_glyphs(
                     height=2 * glyph_radius * ratio,
                     angle=angle,
                     fill=True, facecolor=COLOR, edgecolor=COLOR,
-                    linewidth=0.5, alpha=0.7,
+                    linewidth=0.8, alpha=0.7,
                 ))
 
         fig.canvas.draw()
@@ -159,9 +178,12 @@ def _render_dir_quiver(
     labels: torch.Tensor,
     S: int,
     dir_target: str = "centroid",
-    step: int = 8,
+    step: int = 6,
 ) -> torch.Tensor:
     """Render direction vectors as quiver arrows on the EM image.
+
+    Arrow length reflects the global magnitude of each direction vector
+    (boundary pixels produce longer arrows, centre pixels shorter).
 
     Args:
         dir_val: [B, S, H, W] predicted direction channels (2D-sliced).
@@ -194,15 +216,12 @@ def _render_dir_quiver(
 
         if S == 3:
             U = d[2][RR, CC]
-            V = -d[1][RR, CC]
+            V = d[1][RR, CC]
         else:
             U = d[0][RR, CC]
-            V = -d[1][RR, CC]
+            V = d[1][RR, CC]
 
         fg = lbl[RR, CC] > 0
-        mag = np.sqrt(U ** 2 + V ** 2)
-        mag = np.where(fg & (mag > 0), mag, 1.0)
-        U_n, V_n = U / mag, V / mag
 
         fig, ax = plt.subplots(1, 1, figsize=(W / 64, H / 64), dpi=64)
         ax.imshow(bg, aspect="equal", interpolation="nearest")
@@ -210,9 +229,10 @@ def _render_dir_quiver(
         if m.any():
             ax.quiver(
                 CC.ravel()[m], RR.ravel()[m],
-                U_n.ravel()[m], V_n.ravel()[m],
+                U.ravel()[m], V.ravel()[m],
                 color=COLOR,
-                scale=30, width=0.005, headwidth=2, headlength=3,
+                angles="xy", scale_units="xy", scale=1.0 / (step * 0.8),
+                width=0.007, headwidth=2.5, headlength=3,
             )
         ax.set_xlim(-0.5, W - 0.5)
         ax.set_ylim(H - 0.5, -0.5)
@@ -430,6 +450,21 @@ class ImageLogger(pl.Callback):
             return
 
         batch = self._train_batch
+        was_training = pl_module.training
+        pl_module.eval()
+        try:
+            self._run_visualization(tb, pl_module, batch)
+        finally:
+            if was_training:
+                pl_module.train()
+
+    def _run_visualization(
+        self,
+        tb: Any,
+        pl_module: pl.LightningModule,
+        batch: Dict[str, torch.Tensor],
+    ) -> None:
+        epoch = pl_module.current_epoch
         with torch.no_grad():
             images = batch["image"].to(pl_module.device)
             if images.dim() == self.spatial_dims + 1:

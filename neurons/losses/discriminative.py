@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
-from scipy.ndimage import distance_transform_edt as _scipy_edt, gaussian_filter as _gauss
+from scipy.ndimage import distance_transform_edt as _scipy_edt
 
 from neurons.losses.skeletonize import Skeletonize
 from neurons.utils.parallel import pmap
@@ -105,8 +105,8 @@ def _scatter_mean(
     sums = torch.zeros((num_clusters, E), device=device, dtype=dtype)
     counts = torch.zeros(num_clusters, device=device, dtype=dtype)
 
-    for e in range(E):
-        sums[:, e].scatter_add_(0, v_idx, v_emb_t[:, e])
+    expanded_idx = v_idx.unsqueeze(1).expand_as(v_emb_t)
+    sums.scatter_add_(0, expanded_idx, v_emb_t)
     counts.scatter_add_(0, v_idx, torch.ones(v_idx.shape[0], device=device, dtype=dtype))
     counts = counts.clamp(min=1)
     return sums / rearrange(counts, "k -> k 1")
@@ -170,7 +170,10 @@ def _flat_indices(
     return (coords_ij.long() * rearrange(strides_t, "s -> 1 s")).sum(dim=1)
 
 
-_SKEL_MODULE: Optional[Skeletonize] = None
+import threading as _threading
+
+_SKEL_LOCK = _threading.Lock()
+_SKEL_MODULES: Dict[str, Skeletonize] = {}
 
 
 @torch.no_grad()
@@ -189,11 +192,13 @@ def _skeletonize_mask(
     Returns:
         [*spatial] boolean skeleton mask.
     """
-    global _SKEL_MODULE
-    if _SKEL_MODULE is None or _SKEL_MODULE.num_iter != num_iter:
-        _SKEL_MODULE = Skeletonize(probabilistic=False, num_iter=num_iter)
-        _SKEL_MODULE.eval()
-    mod = _SKEL_MODULE.to(mask.device)
+    key = f"{mask.device}_{num_iter}"
+    with _SKEL_LOCK:
+        if key not in _SKEL_MODULES:
+            mod = Skeletonize(probabilistic=False, num_iter=num_iter)
+            mod.eval()
+            _SKEL_MODULES[key] = mod.to(mask.device)
+        mod = _SKEL_MODULES[key]
     inp = mask.float()[None, None]
     skel = mod(inp)
     return rearrange(skel, "1 1 ... -> ...") > 0.5
@@ -208,17 +213,21 @@ def _compute_centroid_offsets(
     lbl_flat: torch.Tensor,
     coords: torch.Tensor,
 ) -> torch.Tensor:
-    """Compute unit-normalised per-pixel direction toward the instance centroid.
+    """Per-pixel direction toward instance centroid with global magnitude.
+
+    Magnitude encodes relative distance to centroid within each instance:
+    boundary pixels (far from centroid) approach 1, pixels at the centroid
+    approach 0.  This produces a convergent vector field whose strength
+    reflects global position inside the instance.
 
     Args:
         lbl_flat: [N] instance labels (0 = background).
         coords: [S, N] pixel coordinates.
 
     Returns:
-        [S, N] unit direction vectors (0 for background pixels).
+        [S, N] direction vectors scaled by normalised distance to centroid.
     """
     S, N = coords.shape
-    device = coords.device
     offsets = torch.zeros_like(coords)
 
     uids = torch.unique(lbl_flat)
@@ -226,12 +235,11 @@ def _compute_centroid_offsets(
     for uid in uids:
         mask = lbl_flat == uid
         centroid = coords[:, mask].mean(dim=1)               # [S]
-        offsets[:, mask] = rearrange(centroid, "s -> s 1") - coords[:, mask]
+        raw_off = rearrange(centroid, "s -> s 1") - coords[:, mask]
+        max_dist = raw_off.norm(dim=0).max().clamp(min=1e-6)
+        offsets[:, mask] = raw_off / max_dist
 
-    norms = offsets.norm(dim=0, keepdim=True).clamp(min=1e-6)
-    offsets = offsets / norms
     offsets[:, lbl_flat == 0] = 0.0
-
     return offsets
 
 
@@ -241,10 +249,14 @@ def _compute_skeleton_offsets(
     coords: torch.Tensor,
     spatial_shape: Tuple,
 ) -> torch.Tensor:
-    """Compute unit-normalised per-pixel direction toward the nearest skeleton point.
+    """Per-pixel direction toward nearest skeleton point with global magnitude.
 
-    Skeleton is extracted via the Menten et al. (ICCV 2023) topology-preserving
+    Skeleton is extracted via Menten et al. (ICCV 2023) topology-preserving
     skeletonization (pure PyTorch convolutions, 2-D and 3-D).
+
+    Magnitude encodes relative distance to skeleton within each instance:
+    boundary pixels (far from skeleton) approach 1, pixels on the skeleton
+    approach 0.
 
     Args:
         lbl_flat: [N] instance labels (0 = background).
@@ -252,7 +264,7 @@ def _compute_skeleton_offsets(
         spatial_shape: original spatial dims, e.g. (H, W) or (D, H, W).
 
     Returns:
-        [S, N] unit direction vectors (0 for background pixels).
+        [S, N] direction vectors scaled by normalised distance to skeleton.
     """
     S = len(spatial_shape)
     N = coords.shape[1]
@@ -281,19 +293,25 @@ def _compute_skeleton_offsets(
         nearest_skel = skel_xy[dists.argmin(dim=1)]            # [P, S]
         off_xy = nearest_skel - pixel_xy                       # [P, S]
 
+        max_dist = off_xy.norm(dim=1).max().clamp(min=1e-6)
+        off_xy = off_xy / max_dist
+
         fi = _flat_indices(pixel_ij, spatial_shape)
         for s in range(S):
             offsets[s, fi] = off_xy[:, s]
 
-    norms = offsets.norm(dim=0, keepdim=True).clamp(min=1e-6)
-    offsets = offsets / norms
-    offsets[:, rearrange(lbl_flat, "... -> (...)") == 0] = 0.0
-
+    offsets[:, lbl_flat == 0] = 0.0
     return offsets
 
 
 def _covariance_worker(args):
-    """Per-instance structure tensor worker (numpy only, no torch)."""
+    """Per-instance structure tensor worker (numpy only, no torch).
+
+    The structure tensor is scaled by normalised EDT so that pixels near
+    the instance centre (high EDT) carry larger magnitude and boundary
+    pixels (low EDT) are attenuated.  This encodes global instance
+    structure into the tensor field.
+    """
     from scipy.ndimage import distance_transform_edt, gaussian_filter
     labels_np, uid, S, sigma = args
     sigma_d = max(1.0, sigma / 3.0)
@@ -339,6 +357,12 @@ def _covariance_worker(args):
                 st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(np.float32)
             idx += 1
 
+    edt_scale = np.zeros_like(dt, dtype=np.float32)
+    if edt_max > 1e-6:
+        edt_scale[mask] = (dt[mask] / edt_max).astype(np.float32)
+    for c in range(S * S):
+        st_inst[c][mask] *= edt_scale[mask]
+
     return (uid, mask, st_inst)
 
 
@@ -349,7 +373,11 @@ def _compute_covariance(
     spatial_shape: Optional[Tuple] = None,
     sigma: float = 5.0,
 ) -> torch.Tensor:
-    """EDT structure tensor per foreground pixel (morphology-aware).
+    """EDT structure tensor per foreground pixel with global magnitude scaling.
+
+    The tensor is scaled by normalised EDT (distance-to-boundary / max)
+    so that pixels near the instance centre carry larger magnitude and
+    boundary pixels are attenuated.
 
     Parallelized across instances using ``torch.multiprocessing``.
 
@@ -727,14 +755,14 @@ class SkeletonEmbeddingLoss(nn.Module):
 
         if is_3d:
             D, H, W = spatial
-            grid_x = (embeddings[:, 0] / (W - 1)) * 2.0 - 1.0
-            grid_y = (embeddings[:, 1] / (H - 1)) * 2.0 - 1.0
-            grid_z = (embeddings[:, 2] / (D - 1)) * 2.0 - 1.0
+            grid_x = (embeddings[:, 0] / max(W - 1, 1)) * 2.0 - 1.0
+            grid_y = (embeddings[:, 1] / max(H - 1, 1)) * 2.0 - 1.0
+            grid_z = (embeddings[:, 2] / max(D - 1, 1)) * 2.0 - 1.0
             sample_grid = torch.stack([grid_x, grid_y, grid_z], dim=-1)
         else:
             H, W = spatial
-            grid_x = (embeddings[:, 0] / (W - 1)) * 2.0 - 1.0
-            grid_y = (embeddings[:, 1] / (H - 1)) * 2.0 - 1.0
+            grid_x = (embeddings[:, 0] / max(W - 1, 1)) * 2.0 - 1.0
+            grid_y = (embeddings[:, 1] / max(H - 1, 1)) * 2.0 - 1.0
             sample_grid = torch.stack([grid_x, grid_y], dim=-1)
 
         sampled_dt = F.grid_sample(
@@ -822,9 +850,11 @@ class GeometryLoss(nn.Module):
     ``head_geometry`` against on-the-fly computed targets:
 
     * **L_dir**  (first S channels):  per-pixel offset toward instance
-      centroid or nearest skeleton point.
+      centroid or nearest skeleton point, with magnitude proportional to
+      relative distance (boundary pixels strongest, centre weakest).
     * **L_cov**  (next S*S channels):  EDT structure tensor with
-      depth-blended isotropy (see ``_compute_covariance``).
+      depth-blended isotropy, scaled by normalised EDT so centre pixels
+      carry larger magnitude (see ``_compute_covariance``).
     * **L_raw**  (last 4 channels):  RGBA reconstruction of the input
       image (requires ``raw_image``).
 

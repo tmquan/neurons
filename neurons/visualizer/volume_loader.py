@@ -28,7 +28,7 @@ _EXT_MAP = {
     ".h5": _hdf5, ".hdf5": _hdf5, ".hdf": _hdf5, ".he5": _hdf5,
     ".tif": _tiff, ".tiff": _tiff,
     ".nrrd": _nrrd, ".nhdr": _nrrd,
-    ".nii": _nfty, ".gz": _nfty,
+    ".nii": _nfty, ".nii.gz": _nfty, ".gz": _nfty,
     ".npy": None, ".npz": None,
 }
 
@@ -36,8 +36,8 @@ _EXT_MAP = {
 def _resolve_ext(path: str) -> str:
     """Return the canonical extension, handling ``.nii.gz``."""
     p = Path(path)
-    if p.suffixes[-2:] == [".nii", ".gz"]:
-        return ".gz"
+    if len(p.suffixes) >= 2 and p.suffixes[-2:] == [".nii", ".gz"]:
+        return ".nii.gz"
     return p.suffix.lower()
 
 

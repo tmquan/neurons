@@ -143,7 +143,7 @@ class CreateClassIds(Dataset):
         label = sample["label"]
 
         is_tensor = isinstance(label, torch.Tensor)
-        label_np = label.numpy() if is_tensor else np.asarray(label)
+        label_np = label.cpu().numpy() if is_tensor else np.asarray(label)
 
         semantic_ids = np.zeros_like(label_np, dtype=np.int64)
 

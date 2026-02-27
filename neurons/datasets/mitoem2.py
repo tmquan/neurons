@@ -33,6 +33,8 @@ class MitoEM2Dataset(CircuitDataset):
         transform: Optional MONAI transforms to apply.
         cache_rate: Fraction of data to cache in memory.
         slice_mode: If True, return individual 2D slices (default: True).
+        slice_axis: Axis to slice along in slice_mode (0=first, -1=last).
+            Default 0 (standard NIfTI Z-axis).
         num_samples: Number of samples per epoch.
     """
 
@@ -50,9 +52,11 @@ class MitoEM2Dataset(CircuitDataset):
         cache_rate: float = 1.0,
         num_workers: int = 0,
         slice_mode: bool = True,
+        slice_axis: int = 0,
         num_samples: Optional[int] = None,
     ) -> None:
         self.slice_mode = slice_mode
+        self.slice_axis = slice_axis
         self._num_samples = num_samples
         self._nfty = NFTYPreprocessor()
 
@@ -141,11 +145,11 @@ class MitoEM2Dataset(CircuitDataset):
                     label = label.astype(np.int64)
 
                 if self.slice_mode and image.ndim == 3:
-                    z_dim = image.shape[2] if image.shape[2] < image.shape[0] else image.shape[0]
-                    use_last_axis = image.shape[2] < image.shape[0]
+                    ax = self.slice_axis if self.slice_axis >= 0 else image.ndim + self.slice_axis
+                    z_dim = image.shape[ax]
 
                     for z in range(z_dim):
-                        sl_img = image[:, :, z] if use_last_axis else image[z]
+                        sl_img = np.take(image, z, axis=ax)
                         entry: Dict[str, Any] = {
                             "image": sl_img,
                             "dataset": ds_dir.name,
@@ -154,7 +158,7 @@ class MitoEM2Dataset(CircuitDataset):
                             "idx": len(data_list),
                         }
                         if label is not None:
-                            sl_lbl = label[:, :, z] if use_last_axis else label[z]
+                            sl_lbl = np.take(label, z, axis=ax)
                             entry["label"] = sl_lbl
                         data_list.append(entry)
                 else:

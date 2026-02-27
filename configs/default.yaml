@@ -61,7 +61,7 @@ loss:
   weight_edge: 10.0
   weight_bone: 10.0
   weight_geometry: 0.0
-  dir_target: skeleton         # centroid or skeleton
+  dir_target: centroid         # centroid or skeleton
   weight_dir: 1.0
   weight_cov: 1.0
   weight_raw: 1.0

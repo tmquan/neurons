@@ -36,8 +36,6 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import numpy as np
 import torch
 from einops import rearrange
@@ -183,18 +181,7 @@ def main():
             min_instance_size=args.min_instance_size,
         )
 
-        stride_used = stride or (patch_size[0] // 2, patch_size[1] // 2, patch_size[2] // 2)
-        D, H, W = vol_shape
-        positions = []
-        for i in range(max(1, (D - patch_size[0] + stride_used[0]) // stride_used[0])):
-            for j in range(max(1, (H - patch_size[1] + stride_used[1]) // stride_used[1])):
-                for k in range(max(1, (W - patch_size[2] + stride_used[2]) // stride_used[2])):
-                    positions.append((
-                        min(i * stride_used[0], D - patch_size[0]),
-                        min(j * stride_used[1], H - patch_size[1]),
-                        min(k * stride_used[2], W - patch_size[2]),
-                    ))
-
+        positions = result.get("_positions", [])
         final_labels = stitcher.stitch(final_labels, emb, positions, patch_size)
         output = final_labels.cpu().numpy().astype(np.uint32)
 

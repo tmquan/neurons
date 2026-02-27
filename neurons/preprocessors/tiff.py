@@ -36,7 +36,7 @@ class TIFFPreprocessor(BasePreprocessor):
 
     @property
     def supported_extensions(self) -> List[str]:
-        return [".tiff", ".tif", ".TIFF", ".TIF"]
+        return [".tiff", ".tif"]
 
     def load(
         self,

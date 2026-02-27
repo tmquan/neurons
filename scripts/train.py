@@ -267,7 +267,7 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
         callbacks.append(LearningRateMonitor(logging_interval="step"))
 
     img_cfg = callback_cfg.get("image_logger", {})
-    if img_cfg.get("enabled", False):
+    if img_cfg.get("enabled", True):
         from neurons.callbacks import ImageLogger
         spatial = cfg.get("model", {}).get("type", "vista2d")
         callbacks.append(
@@ -410,10 +410,12 @@ def main(cfg: DictConfig) -> None:
     print("Starting Training")
     print("=" * 60 + "\n")
 
+    interrupted = False
     try:
         trainer.fit(module, datamodule)
     except KeyboardInterrupt:
         print("\n\nTraining interrupted by user")
+        interrupted = True
     except Exception as e:
         print(f"\n\nTraining failed: {e}")
         raise
@@ -422,6 +424,8 @@ def main(cfg: DictConfig) -> None:
         output_dir = cfg.get("output_dir", "outputs")
         final_path = Path(output_dir) / "checkpoints" / "final_model.ckpt"
         final_path.parent.mkdir(parents=True, exist_ok=True)
+        if interrupted:
+            print("\nWARNING: Saving checkpoint from interrupted training — weights may be partially updated")
         trainer.save_checkpoint(str(final_path))
         print(f"\nFinal model saved: {final_path}")
 

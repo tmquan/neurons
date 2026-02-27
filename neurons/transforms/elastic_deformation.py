@@ -1,6 +1,6 @@
 """Elastic deformation transform for connectomics/EM data."""
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -68,11 +68,17 @@ class ElasticDeformationd(MapTransform, Randomizable):
         for key in self.key_iterator(d):
             arr = d[key]
             is_tensor = isinstance(arr, torch.Tensor)
+            device = arr.device if is_tensor else None
 
             if is_tensor:
                 arr = arr.cpu().numpy()
 
-            if arr.ndim == 3:
+            if arr.ndim == 4:
+                result = np.zeros_like(arr)
+                for c in range(arr.shape[0]):
+                    for z in range(arr.shape[1]):
+                        result[c, z] = arr[c, z][indices]
+            elif arr.ndim == 3:
                 result = np.zeros_like(arr)
                 for c in range(arr.shape[0]):
                     result[c] = arr[c][indices]
@@ -80,7 +86,7 @@ class ElasticDeformationd(MapTransform, Randomizable):
                 result = arr[indices]
 
             if is_tensor:
-                result = torch.from_numpy(result)
+                result = torch.from_numpy(result).to(device)
 
             d[key] = result
 

@@ -354,4 +354,11 @@ class Vista3DModule(pl.LightningModule):
             )
             return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
+        if stype:
+            import warnings
+            warnings.warn(
+                f"Unknown scheduler type '{stype}', using no scheduler. "
+                f"Supported: 'cosine'.",
+                stacklevel=2,
+            )
         return optimizer

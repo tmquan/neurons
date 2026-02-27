@@ -51,8 +51,8 @@ def _build_palette(seg: VolumeData, seed: int = 0) -> np.ndarray:
     """Random RGBA palette for segment IDs.  ID 0 maps to transparent."""
     labels = np.unique(seg.data)
     max_id = int(labels.max()) + 1
-    rng = np.random.RandomState(seed)
-    pal = rng.randint(60, 256, size=(max_id, 3), dtype=np.uint8)
+    rng = np.random.default_rng(seed)
+    pal = rng.integers(60, 256, size=(max_id, 3), dtype=np.uint8)
     pal[0] = 0
     return pal
 

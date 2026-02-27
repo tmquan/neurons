@@ -141,6 +141,12 @@ class EmbeddingStitcher:
                 relabel_connected_components_3d(rearrange(merged, "d h w -> 1 d h w")),
                 "1 d h w -> d h w",
             )
+        elif self.spatial_dims == 2 and merged.dim() == 2:
+            from neurons.utils.labels import relabel_connected_components_2d
+            split = rearrange(
+                relabel_connected_components_2d(rearrange(merged, "h w -> 1 h w")),
+                "1 h w -> h w",
+            )
         else:
             split = merged
 

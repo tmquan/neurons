@@ -77,6 +77,7 @@ def sliding_window_inference(
         "instance_embeddings": [E, D, H, W]}``.
         Otherwise: ``[num_classes, D, H, W]`` probability tensor.
     """
+    was_training = model.training
     model.eval()
 
     if volume.dim() == 3:
@@ -201,11 +202,16 @@ def sliding_window_inference(
 
     sem_output = sem_output[:, :D, :H, :W]
 
+    if was_training:
+        model.train()
+
     if is_dual:
         emb_output = emb_output[:, :D, :H, :W]
         return {
             "semantic_probs": sem_output,
             "instance_embeddings": emb_output,
+            "_positions": positions,
+            "_padding": (pad_d, pad_h, pad_w),
         }
 
     return sem_output

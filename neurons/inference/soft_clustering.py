@@ -188,6 +188,7 @@ class SoftMeanShift(nn.Module):
         self, labels: torch.Tensor, K: int,
     ) -> torch.Tensor:
         """Remove clusters smaller than min_cluster_size."""
+        labels = labels.clone()
         for uid in range(1, K + 1):
             mask = labels == uid
             if mask.sum() < self.min_cluster_size:

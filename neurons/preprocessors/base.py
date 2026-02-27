@@ -95,7 +95,7 @@ class BasePreprocessor(ABC):
         Returns:
             Torch tensor with the specified dtype and device.
         """
-        tensor = torch.from_numpy(data.copy())
+        tensor = torch.from_numpy(np.ascontiguousarray(data))
 
         if dtype is not None:
             tensor = tensor.to(dtype)

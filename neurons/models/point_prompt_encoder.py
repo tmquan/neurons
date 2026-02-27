@@ -6,7 +6,7 @@ into a dense spatial feature map that is added (residual) to backbone
 features before the task heads.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import List
 
 import torch
 import torch.nn as nn
@@ -95,7 +95,10 @@ class PointPromptEncoder(nn.Module):
         for b in range(B):
             pts_pos = pos_points[b]  # [N_pos, spatial_dims]
             pts_neg = neg_points[b]  # [N_neg, spatial_dims]
-            sem_id = target_semantic_ids[b].long()
+            sem_id = target_semantic_ids[b].long().clamp(0, self.num_classes - 1)
+            ins_id = target_instance_ids[b].float()
+            ins_max = ins_id.abs().clamp(min=1.0)
+            norm_iid = ins_id / ins_max
 
             if pts_pos.numel() > 0:
                 idx = pts_pos.long()
@@ -103,12 +106,12 @@ class PointPromptEncoder(nn.Module):
                     z, y, x = idx[:, 0], idx[:, 1], idx[:, 2]
                     vol[b, 0, z, y, x] = 1.0                          # pos_map
                     vol[b, 2 + sem_id, z, y, x] = 1.0                 # semantic_map
-                    vol[b, -1, z, y, x] = 1.0                         # instance_map (binary indicator)
+                    vol[b, -1, z, y, x] = norm_iid                    # instance_map
                 else:
                     y, x = idx[:, 0], idx[:, 1]
                     vol[b, 0, y, x] = 1.0
                     vol[b, 2 + sem_id, y, x] = 1.0
-                    vol[b, -1, y, x] = 1.0
+                    vol[b, -1, y, x] = norm_iid
 
             if pts_neg.numel() > 0:
                 idx = pts_neg.long()

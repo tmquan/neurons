@@ -11,7 +11,7 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D
   batch_size: 8
-  num_workers: 64
+  num_workers: 8
   cache_rate: 0.0
   slice_mode: false
   train_volumes:

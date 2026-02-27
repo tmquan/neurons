@@ -44,7 +44,6 @@ class Skeletonize(nn.Module):
         self.tau = tau
         self.beta = beta
         self.num_iter = num_iter
-        self._expanded_dims = False
 
         self.endpoint_check = self._single_neighbor_check
         if simple_point_detection == "Boolean":
@@ -57,7 +56,7 @@ class Skeletonize(nn.Module):
             )
 
     def forward(self, img):
-        img = self._prepare_input(img)
+        img, expanded = self._prepare_input(img)
         if self.probabilistic:
             img = self._stochastic_discretization(img)
 
@@ -76,15 +75,16 @@ class Skeletonize(nn.Module):
                     1 - deletion,
                 )
 
-        return self._prepare_output(img)
+        return self._prepare_output(img, expanded)
 
     # ------------------------------------------------------------------
 
     def _prepare_input(self, img):
+        expanded = False
         if img.dim() == 5:
-            self._expanded_dims = False
+            pass
         elif img.dim() == 4:
-            self._expanded_dims = True
+            expanded = True
             img = rearrange(img, "b c h w -> b c 1 h w")
         else:
             raise ValueError(
@@ -93,11 +93,11 @@ class Skeletonize(nn.Module):
             )
         if img.min() < 0.0 or img.max() > 1.0:
             raise ValueError("Image values must lie in [0, 1].")
-        return F.pad(img, (1, 1, 1, 1, 1, 1), value=0)
+        return F.pad(img, (1, 1, 1, 1, 1, 1), value=0), expanded
 
-    def _prepare_output(self, img):
+    def _prepare_output(self, img, expanded=False):
         img = img[:, :, 1:-1, 1:-1, 1:-1]
-        if self._expanded_dims:
+        if expanded:
             img = rearrange(img, "b c 1 h w -> b c h w")
         return img
 
