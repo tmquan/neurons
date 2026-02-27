@@ -66,8 +66,8 @@ loss:
   weight_dir: 1.0
   weight_cov: 1.0
   weight_raw: 1.0
-  loss_dir: smooth_l1
-  loss_cov: mse
+  loss_dir: l1
+  loss_cov: l1
   loss_raw: l1
   ignore_index: -100
 
