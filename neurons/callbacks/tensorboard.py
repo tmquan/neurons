@@ -12,6 +12,7 @@ Works for both 2-D slices and 3-D volumes (takes a central slice).
 
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
@@ -66,6 +67,182 @@ def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
     proj = Vh[:, :n_components]
     proj = rearrange(proj, "b c (h w) -> b c h w", h=H, w=W)
     return _normalise(proj)
+
+
+def _render_cov_glyphs(
+    cov_mat: torch.Tensor,
+    img_rgb: torch.Tensor,
+    labels: torch.Tensor,
+    S: int,
+    step: int = 8,
+) -> torch.Tensor:
+    """Render structure-tensor ellipse glyphs on the EM image.
+
+    Args:
+        cov_mat: [B, H, W, s1, s2] predicted covariance matrices (2D-sliced).
+        img_rgb: [B, 3, H, W] grayscale EM repeated to 3 channels.
+        labels: [B, H, W] instance labels for coloring glyphs.
+        S: spatial_dims (2 or 3). Only the last 2 eigenvectors are used for 2D glyphs.
+        step: grid spacing for glyph placement.
+
+    Returns:
+        [B, 3, H, W] tensor with ellipse glyphs overlaid on the EM image.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Ellipse
+
+    B, _, H, W = img_rgb.shape
+    device = img_rgb.device
+    glyph_radius = step * 0.45
+
+    gen = torch.Generator(device="cpu").manual_seed(0)
+    max_id = max(int(labels.max().item()), 1)
+    palette = torch.rand(max_id + 1, 3, generator=gen).numpy()
+    palette[0] = 0.5
+
+    result = []
+    for b in range(B):
+        bg = img_rgb[b].detach().cpu().permute(1, 2, 0).numpy().copy()
+        lbl = labels[b].detach().cpu().numpy()
+        mat = cov_mat[b].detach().cpu().numpy()  # [H, W, s1, s2]
+
+        fig, ax = plt.subplots(1, 1, figsize=(W / 64, H / 64), dpi=64)
+        ax.imshow(bg, aspect="equal", interpolation="nearest")
+        ax.set_xlim(-0.5, W - 0.5)
+        ax.set_ylim(H - 0.5, -0.5)
+        ax.axis("off")
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+
+        rows_sub = np.arange(step // 2, H, step)
+        cols_sub = np.arange(step // 2, W, step)
+
+        for r in rows_sub:
+            for c in cols_sub:
+                if lbl[r, c] == 0:
+                    continue
+                T = mat[r, c]  # [s1, s2]
+                if S == 3:
+                    T = T[1:, 1:]  # use YX submatrix for 2D visualization
+                eigvals, eigvecs = np.linalg.eigh(T)
+                abs_eig = np.abs(eigvals)
+                if abs_eig.max() < 1e-8:
+                    continue
+                ratio = abs_eig.min() / max(abs_eig.max(), 1e-8)
+                idx_max = int(abs_eig.argmax())
+                angle = np.degrees(np.arctan2(
+                    eigvecs[1, idx_max], eigvecs[0, idx_max],
+                ))
+                color = palette[int(lbl[r, c]) % len(palette)]
+                ax.add_patch(Ellipse(
+                    xy=(c, r),
+                    width=2 * glyph_radius,
+                    height=2 * glyph_radius * ratio,
+                    angle=angle,
+                    fill=True, facecolor=color, edgecolor=color,
+                    linewidth=0.5, alpha=0.7,
+                ))
+
+        fig.canvas.draw()
+        buf = fig.canvas.buffer_rgba()
+        arr = np.asarray(buf)[:, :, :3].copy()
+        plt.close(fig)
+
+        arr_resized = torch.from_numpy(arr).permute(2, 0, 1).float() / 255.0
+        arr_resized = F.interpolate(
+            arr_resized.unsqueeze(0), size=(H, W), mode="bilinear", align_corners=False,
+        ).squeeze(0)
+        result.append(arr_resized)
+
+    return torch.stack(result).to(device)
+
+
+def _render_dir_quiver(
+    dir_val: torch.Tensor,
+    img_rgb: torch.Tensor,
+    labels: torch.Tensor,
+    S: int,
+    dir_target: str = "centroid",
+    step: int = 8,
+) -> torch.Tensor:
+    """Render direction vectors as quiver arrows on the EM image.
+
+    Args:
+        dir_val: [B, S, H, W] predicted direction channels (2D-sliced).
+        img_rgb: [B, 3, H, W] grayscale EM repeated to 3 channels.
+        labels: [B, H, W] instance labels for coloring arrows.
+        S: spatial_dims (2 or 3). For 3D, uses last 2 channels (Y, X).
+        dir_target: ``"centroid"`` or ``"skeleton"`` (for title only).
+        step: grid spacing for arrow placement.
+
+    Returns:
+        [B, 3, H, W] tensor with quiver arrows overlaid on the EM image.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    B, _, H, W = img_rgb.shape
+    device = img_rgb.device
+
+    gen = torch.Generator(device="cpu").manual_seed(0)
+    max_id = max(int(labels.max().item()), 1)
+    palette = torch.rand(max_id + 1, 4, generator=gen).numpy()
+    palette[:, 3] = 1.0
+    palette[0] = [0.5, 0.5, 0.5, 0.0]
+
+    rows_sub = np.arange(step // 2, H, step)
+    cols_sub = np.arange(step // 2, W, step)
+    CC, RR = np.meshgrid(cols_sub, rows_sub)
+
+    result = []
+    for b in range(B):
+        bg = img_rgb[b].detach().cpu().permute(1, 2, 0).numpy().copy()
+        lbl = labels[b].detach().cpu().numpy()
+        d = dir_val[b].detach().cpu().numpy()  # [S, H, W]
+
+        if S == 3:
+            U = d[2][RR, CC]   # X direction
+            V = -d[1][RR, CC]  # -Y direction (quiver V+ = screen-up)
+        else:
+            U = d[0][RR, CC]
+            V = -d[1][RR, CC]
+
+        fg = lbl[RR, CC] > 0
+        mag = np.sqrt(U ** 2 + V ** 2)
+        mag = np.where(fg & (mag > 0), mag, 1.0)
+        U_n, V_n = U / mag, V / mag
+
+        arrow_colors = palette[lbl[RR, CC].ravel().astype(int) % len(palette)]
+
+        fig, ax = plt.subplots(1, 1, figsize=(W / 64, H / 64), dpi=64)
+        ax.imshow(bg, aspect="equal", interpolation="nearest")
+        m = fg.ravel()
+        if m.any():
+            ax.quiver(
+                CC.ravel()[m], RR.ravel()[m],
+                U_n.ravel()[m], V_n.ravel()[m],
+                color=arrow_colors[m],
+                scale=30, width=0.005, headwidth=2, headlength=3,
+            )
+        ax.set_xlim(-0.5, W - 0.5)
+        ax.set_ylim(H - 0.5, -0.5)
+        ax.axis("off")
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+
+        fig.canvas.draw()
+        buf = fig.canvas.buffer_rgba()
+        arr = np.asarray(buf)[:, :, :3].copy()
+        plt.close(fig)
+
+        arr_t = torch.from_numpy(arr).permute(2, 0, 1).float() / 255.0
+        arr_t = F.interpolate(
+            arr_t.unsqueeze(0), size=(H, W), mode="bilinear", align_corners=False,
+        ).squeeze(0)
+        result.append(arr_t)
+
+    return torch.stack(result).to(device)
 
 
 def _draw_points_on_image(
@@ -133,6 +310,7 @@ def _log_predictions(
     n: int,
     epoch: int,
     clusterer: Any = None,
+    dir_target: str = "centroid",
 ) -> None:
     """Log a standard set of prediction visualizations.
 
@@ -147,6 +325,7 @@ def _log_predictions(
         epoch: global step for TensorBoard.
         clusterer: optional clustering module (e.g. SoftMeanShift) for
             producing ``instance_pred`` from embeddings.
+        dir_target: ``"centroid"`` or ``"skeleton"`` (controls direction vis title).
     """
     sem = preds["semantic"][:n]
     inst = preds["instance"][:n]
@@ -166,23 +345,13 @@ def _log_predictions(
     sem_rgb = _label_to_rgb(sem_ids)
     inst_rgb = _pca_project(inst, n_components=3)
 
-    g_dir = _normalise(geom[:, :ch_dir])
-    if ch_dir < 3:
-        pad = torch.zeros(n, 3 - ch_dir, g_dir.shape[2], g_dir.shape[3],
-                          device=g_dir.device)
-        g_dir = torch.cat([g_dir, pad], dim=1)
+    g_dir_rgb = _render_dir_quiver(
+        geom[:, :ch_dir], img_gray, labels, S, dir_target=dir_target,
+    )
 
     cov_val = geom[:, ch_dir:ch_dir + ch_cov]  # [n, S*S, H, W]
     cov_mat = rearrange(cov_val, "b (s1 s2) h w -> b h w s1 s2", s1=S, s2=S)
-    eigvals = torch.linalg.eigvalsh(cov_mat)  # [n, H, W, S] sorted ascending
-    eigvals = eigvals.abs()
-    eigvals_rgb = rearrange(eigvals, "b h w s -> b s h w").flip(1)  # descending: R=largest
-    if S < 3:
-        pad = torch.zeros(n, 3 - S, eigvals_rgb.shape[2], eigvals_rgb.shape[3],
-                          device=eigvals_rgb.device)
-        eigvals_rgb = torch.cat([eigvals_rgb, pad], dim=1)
-    eig_sum = eigvals_rgb.sum(dim=1, keepdim=True).clamp(min=1e-8)
-    g_cov_rgb = (eigvals_rgb / eig_sum * S).clamp(0.0, 1.0)
+    g_cov_rgb = _render_cov_glyphs(cov_mat, img_gray, labels, S)
 
     g_raw = torch.sigmoid(geom[:, ch_dir + ch_cov:])
     g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
@@ -203,7 +372,7 @@ def _log_predictions(
         ins_pred_rgb = _label_to_rgb(ins_pred_2d.long())
         tb.add_images(f"{tag}/instance_pred", ins_pred_rgb, global_step=epoch)
 
-    tb.add_images(f"{tag}/geometry_dir", g_dir, global_step=epoch)
+    tb.add_images(f"{tag}/geometry_dir_{dir_target}", g_dir_rgb, global_step=epoch)
     tb.add_images(f"{tag}/geometry_cov", g_cov_rgb, global_step=epoch)
     tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
 
@@ -288,6 +457,10 @@ class ImageLogger(pl.Callback):
             preds_auto = pl_module.model(images[:n])
             clusterer = getattr(pl_module, "_clusterer", None)
 
+        criterion = getattr(pl_module, "criterion", None)
+        geom_loss = getattr(criterion, "geometry_loss", None) if criterion else None
+        dir_target = getattr(geom_loss, "dir_target", "centroid") if geom_loss else "centroid"
+
         images_2d = _to_2d(images[:n])
         labels_2d = rearrange(_to_2d(rearrange(labels[:n], "b ... -> b 1 ...")), "b 1 ... -> b ...")
 
@@ -295,6 +468,7 @@ class ImageLogger(pl.Callback):
             tb, "train_vis_automatic", images_2d, labels_2d,
             preds_auto, self.spatial_dims, n, epoch,
             clusterer=clusterer,
+            dir_target=dir_target,
         )
 
         # --- Proofread mode ---
@@ -323,6 +497,7 @@ class ImageLogger(pl.Callback):
             tb, "train_vis_proofread", images_2d, labels_2d,
             preds_proof, self.spatial_dims, n, epoch,
             clusterer=clusterer,
+            dir_target=dir_target,
         )
 
         center_d = images.shape[2] // 2 if self.spatial_dims == 3 else None
