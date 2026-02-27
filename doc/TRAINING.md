@@ -339,3 +339,42 @@ the proofread branch is training at a similar scale.  A large gap
 early on usually means the point encoder is disrupting backbone features
 (check GroupNorm initialisation) or that the prompted targets are
 misaligned.
+
+---
+
+## 7. TensorBoard Image Visualizations
+
+The `ImageLogger` callback logs visual grids at the end of each epoch:
+
+| Panel | Content |
+|---|---|
+| `image` | EM input (grayscale) |
+| `label` | Ground truth instance labels (random color per ID) |
+| `semantic` | Predicted semantic class (argmax) |
+| `instance_pca` | Instance embedding (PCA → RGB) |
+| `instance_pred` | Clustered instances (mean-shift on **predicted** fg mask) |
+| `geometry_dir_{centroid\|skeleton}` | Direction vectors as quiver arrows (orange) |
+| `geometry_cov` | Structure tensor as ellipse glyphs (cyan) |
+| `geometry_raw` | RGBA reconstruction (sigmoid output) |
+
+For 3D volumes, the central Z-slice is displayed.
+
+### Quick test command
+
+Run a single epoch on one GPU to verify visualizations render correctly:
+
+```bash
+env CUDA_VISIBLE_DEVICES='0' PYTHONPATH=$(pwd) python scripts/train.py \
+    --config-name snemi3d_microns \
+    training.max_epochs=1 \
+    training.devices=1 \
+    training.strategy=auto \
+    training.limit_val_batches=2 \
+    data.num_samples=16
+
+tensorboard --logdir=outputs/
+```
+
+This runs ~8 training steps (16 samples / batch 2), triggers the epoch-end
+callback, and produces all visualization panels. Open TensorBoard at
+`http://localhost:6006` to inspect.
