@@ -81,7 +81,7 @@ def _render_cov_glyphs(
     Args:
         cov_mat: [B, H, W, s1, s2] predicted covariance matrices (2D-sliced).
         img_rgb: [B, 3, H, W] grayscale EM repeated to 3 channels.
-        labels: [B, H, W] instance labels for coloring glyphs.
+        labels: [B, H, W] instance labels (used only for fg/bg masking).
         S: spatial_dims (2 or 3). Only the last 2 eigenvectors are used for 2D glyphs.
         step: grid spacing for glyph placement.
 
@@ -96,17 +96,13 @@ def _render_cov_glyphs(
     B, _, H, W = img_rgb.shape
     device = img_rgb.device
     glyph_radius = step * 0.45
-
-    gen = torch.Generator(device="cpu").manual_seed(0)
-    max_id = max(int(labels.max().item()), 1)
-    palette = torch.rand(max_id + 1, 3, generator=gen).numpy()
-    palette[0] = 0.5
+    COLOR = (0.0, 0.8, 1.0)
 
     result = []
     for b in range(B):
         bg = img_rgb[b].detach().cpu().permute(1, 2, 0).numpy().copy()
         lbl = labels[b].detach().cpu().numpy()
-        mat = cov_mat[b].detach().cpu().numpy()  # [H, W, s1, s2]
+        mat = cov_mat[b].detach().cpu().numpy()
 
         fig, ax = plt.subplots(1, 1, figsize=(W / 64, H / 64), dpi=64)
         ax.imshow(bg, aspect="equal", interpolation="nearest")
@@ -122,9 +118,9 @@ def _render_cov_glyphs(
             for c in cols_sub:
                 if lbl[r, c] == 0:
                     continue
-                T = mat[r, c]  # [s1, s2]
+                T = mat[r, c]
                 if S == 3:
-                    T = T[1:, 1:]  # use YX submatrix for 2D visualization
+                    T = T[1:, 1:]
                 eigvals, eigvecs = np.linalg.eigh(T)
                 abs_eig = np.abs(eigvals)
                 if abs_eig.max() < 1e-8:
@@ -134,13 +130,12 @@ def _render_cov_glyphs(
                 angle = np.degrees(np.arctan2(
                     eigvecs[1, idx_max], eigvecs[0, idx_max],
                 ))
-                color = palette[int(lbl[r, c]) % len(palette)]
                 ax.add_patch(Ellipse(
                     xy=(c, r),
                     width=2 * glyph_radius,
                     height=2 * glyph_radius * ratio,
                     angle=angle,
-                    fill=True, facecolor=color, edgecolor=color,
+                    fill=True, facecolor=COLOR, edgecolor=COLOR,
                     linewidth=0.5, alpha=0.7,
                 ))
 
@@ -171,7 +166,7 @@ def _render_dir_quiver(
     Args:
         dir_val: [B, S, H, W] predicted direction channels (2D-sliced).
         img_rgb: [B, 3, H, W] grayscale EM repeated to 3 channels.
-        labels: [B, H, W] instance labels for coloring arrows.
+        labels: [B, H, W] instance labels (used only for fg/bg masking).
         S: spatial_dims (2 or 3). For 3D, uses last 2 channels (Y, X).
         dir_target: ``"centroid"`` or ``"skeleton"`` (for title only).
         step: grid spacing for arrow placement.
@@ -185,12 +180,7 @@ def _render_dir_quiver(
 
     B, _, H, W = img_rgb.shape
     device = img_rgb.device
-
-    gen = torch.Generator(device="cpu").manual_seed(0)
-    max_id = max(int(labels.max().item()), 1)
-    palette = torch.rand(max_id + 1, 4, generator=gen).numpy()
-    palette[:, 3] = 1.0
-    palette[0] = [0.5, 0.5, 0.5, 0.0]
+    COLOR = (1.0, 0.4, 0.0, 0.9)
 
     rows_sub = np.arange(step // 2, H, step)
     cols_sub = np.arange(step // 2, W, step)
@@ -200,11 +190,11 @@ def _render_dir_quiver(
     for b in range(B):
         bg = img_rgb[b].detach().cpu().permute(1, 2, 0).numpy().copy()
         lbl = labels[b].detach().cpu().numpy()
-        d = dir_val[b].detach().cpu().numpy()  # [S, H, W]
+        d = dir_val[b].detach().cpu().numpy()
 
         if S == 3:
-            U = d[2][RR, CC]   # X direction
-            V = -d[1][RR, CC]  # -Y direction (quiver V+ = screen-up)
+            U = d[2][RR, CC]
+            V = -d[1][RR, CC]
         else:
             U = d[0][RR, CC]
             V = -d[1][RR, CC]
@@ -214,8 +204,6 @@ def _render_dir_quiver(
         mag = np.where(fg & (mag > 0), mag, 1.0)
         U_n, V_n = U / mag, V / mag
 
-        arrow_colors = palette[lbl[RR, CC].ravel().astype(int) % len(palette)]
-
         fig, ax = plt.subplots(1, 1, figsize=(W / 64, H / 64), dpi=64)
         ax.imshow(bg, aspect="equal", interpolation="nearest")
         m = fg.ravel()
@@ -223,7 +211,7 @@ def _render_dir_quiver(
             ax.quiver(
                 CC.ravel()[m], RR.ravel()[m],
                 U_n.ravel()[m], V_n.ravel()[m],
-                color=arrow_colors[m],
+                color=COLOR,
                 scale=30, width=0.005, headwidth=2, headlength=3,
             )
         ax.set_xlim(-0.5, W - 0.5)
@@ -362,11 +350,11 @@ def _log_predictions(
     tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
 
     if clusterer is not None:
-        fg_mask = labels > 0
+        fg_mask_pred = sem_ids > 0
         if inst.dim() == 5:
-            fg_mask_full = rearrange(_to_2d(rearrange(fg_mask, "b ... -> b 1 ...")), "b 1 ... -> b ...")
+            fg_mask_full = rearrange(_to_2d(rearrange(fg_mask_pred, "b ... -> b 1 ...")), "b 1 ... -> b ...")
         else:
-            fg_mask_full = fg_mask
+            fg_mask_full = fg_mask_pred
         ins_pred, _, _ = clusterer(inst, rearrange(fg_mask_full, "b ... -> b 1 ...") if fg_mask_full.dim() == 3 else fg_mask_full)
         ins_pred_2d = rearrange(_to_2d(rearrange(ins_pred, "b ... -> b 1 ...")), "b 1 ... -> b ...") if ins_pred.dim() > 3 else ins_pred
         ins_pred_rgb = _label_to_rgb(ins_pred_2d.long())
