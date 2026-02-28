@@ -3,7 +3,7 @@ Label utilities for connectomics segmentation.
 
 Provides functions for:
 - Relabeling/reindexing instance labels after cropping
-- Connected component relabeling
+- Connected component relabeling (GPU via cupy, CPU via scipy + pmap)
 - Embedding clustering for instance prediction
 
 Metrics live in ``neurons.metrics``.
@@ -31,9 +31,9 @@ def find_boundaries(
         labels: Integer label tensor [*spatial] or [C, *spatial].
         connectivity: 1 = face-adjacent (thin), ``labels.ndim`` = include
             corners (thick).  Maps to the structuring element radius.
-        mode: ``"thick"`` — any pixel not fully surrounded by same label.
-            ``"inner"`` — boundary pixels inside foreground only.
-            ``"outer"`` — boundary pixels in background around objects;
+        mode: ``"thick"`` -- any pixel not fully surrounded by same label.
+            ``"inner"`` -- boundary pixels inside foreground only.
+            ``"outer"`` -- boundary pixels in background around objects;
             also marks where two objects touch.
         background: Label value treated as background (default 0).
 
@@ -60,7 +60,6 @@ def find_boundaries(
         pad = (1, 1, 1, 1)
 
     if connectivity < spatial_dims:
-        # Face-adjacent only: use per-axis shift-and-compare
         if has_channel:
             core = labels
             dims = list(range(1, spatial_dims + 1))
@@ -82,7 +81,6 @@ def find_boundaries(
             dilated = torch.max(dilated, torch.max(fwd, bwd))
             eroded = torch.min(eroded, torch.min(fwd, bwd))
     else:
-        # Full connectivity: use max_pool / min_pool (3x3x3 kernel)
         padded = F.pad(lbl, pad, mode="replicate")
         dilated_t = pool_fn(padded, kernel_size=ks, stride=1, padding=0)
         eroded_t = pool_fn(-padded, kernel_size=ks, stride=1, padding=0).neg_()
@@ -100,7 +98,6 @@ def find_boundaries(
         boundaries = boundaries & (labels != background)
     elif mode == "outer":
         is_bg = labels == background
-        # Where two different objects touch (via full connectivity)
         padded_full = F.pad(lbl, pad, mode="replicate")
         if spatial_dims == 3:
             dil_full = F.max_pool3d(padded_full, kernel_size=3, stride=1, padding=0)
@@ -128,23 +125,10 @@ def relabel_sequential(
     labels: torch.Tensor,
     start_label: int = 1,
 ) -> torch.Tensor:
-    """
-    Relabel instance labels to be sequential starting from start_label.
+    """Relabel instance labels to be sequential starting from start_label.
 
     Background (0) is preserved. All other unique labels are mapped to
     consecutive integers starting from start_label.
-
-    Args:
-        labels: Instance labels tensor of any shape.
-        start_label: Starting label for foreground instances (default: 1).
-
-    Returns:
-        Relabeled tensor with sequential labels.
-
-    Example:
-        >>> labels = torch.tensor([0, 5, 0, 5, 12, 12, 0])
-        >>> relabel_sequential(labels)
-        tensor([0, 1, 0, 1, 2, 2, 0])
     """
     device = labels.device
     dtype = labels.dtype
@@ -167,23 +151,73 @@ def relabel_sequential(
     return relabeled
 
 
+# -----------------------------------------------------------------------
+# Connected-component relabelling worker for pmap (CPU / scipy)
+# -----------------------------------------------------------------------
+
+def _cc_worker_3d(args):
+    """Per-instance CC labelling for 3D volumes -- used by pmap."""
+    from scipy import ndimage
+    labels_np, old_label, structure = args
+    mask = labels_np == old_label
+    labeled_mask, num_features = ndimage.label(mask, structure=structure)
+    return (old_label, labeled_mask, num_features)
+
+
+def _cc_worker_2d(args):
+    """Per-instance CC labelling for 2D images -- used by pmap."""
+    from scipy import ndimage
+    labels_np, old_label, structure = args
+    mask = labels_np == old_label
+    labeled_mask, num_features = ndimage.label(mask, structure=structure)
+    return (old_label, labeled_mask, num_features)
+
+
+# -----------------------------------------------------------------------
+# GPU path: cupy-native connected components
+# -----------------------------------------------------------------------
+
+def _relabel_cc_gpu(labels_t, spatial_dims, connectivity):
+    """Relabel via connected components on GPU using cupy + DLPack.
+
+    Accepts a torch.Tensor (CUDA or CPU). Returns a torch.Tensor on
+    the same device. Uses DLPack zero-copy for CUDA tensors.
+    """
+    import cupy as cp
+    from neurons.utils.gpu_ndimage import (
+        cupy_label, cupy_gen_struct, torch_to_cupy, cupy_to_torch,
+    )
+
+    labels_cp = torch_to_cupy(labels_t.long().contiguous())
+    structure_cp = cupy_gen_struct(
+        spatial_dims, 1 if connectivity <= spatial_dims else connectivity,
+    )
+
+    unique_ids = cp.unique(labels_cp)
+    unique_ids = unique_ids[unique_ids > 0]
+
+    relabeled = cp.zeros_like(labels_cp, dtype=cp.int64)
+    next_label = 1
+
+    for old_label in unique_ids:
+        mask = labels_cp == old_label
+        labeled_mask, num_features = cupy_label(mask, structure_cp)
+        for i in range(1, int(num_features) + 1):
+            relabeled[labeled_mask == i] = next_label
+            next_label += 1
+
+    return cupy_to_torch(relabeled, device=labels_t.device)
+
+
 def relabel_connected_components_3d(
     labels: torch.Tensor,
     connectivity: int = 6,
 ) -> torch.Tensor:
-    """
-    Relabel 3D volume by finding connected components.
+    """Relabel 3D volume by finding connected components.
 
-    After cropping, a single instance label might represent multiple
-    disconnected components. This function assigns unique labels to
-    each connected component.
-
-    Args:
-        labels: 3D label volume [D, H, W] or [B, D, H, W].
-        connectivity: Connectivity for finding components (6, 18, or 26).
-
-    Returns:
-        Relabeled volume with unique labels for each connected component.
+    Main-process GPU path: cupyx.scipy.ndimage.label (cupy-native).
+    Main-process CPU path: scipy.ndimage.label per instance via pmap.
+    DataLoader-worker path: sequential scipy (safe after fork).
     """
     if labels.dim() == 4:
         batch_results = []
@@ -192,52 +226,61 @@ def relabel_connected_components_3d(
             batch_results.append(result)
         return torch.stack(batch_results)
 
+    from neurons.utils.gpu_ndimage import _use_gpu
+
+    if _use_gpu():
+        return _relabel_cc_gpu(labels, 3, connectivity).to(dtype=labels.dtype)
+
+    # CPU path
     device = labels.device
     labels_np = labels.cpu().numpy().astype(np.int64)
 
-    try:
-        from scipy import ndimage
+    from scipy import ndimage
 
-        unique_labels = np.unique(labels_np)
-        unique_labels = unique_labels[unique_labels > 0]
+    if connectivity == 6:
+        structure = ndimage.generate_binary_structure(3, 1)
+    elif connectivity == 18:
+        structure = ndimage.generate_binary_structure(3, 2)
+    else:
+        structure = ndimage.generate_binary_structure(3, 3)
 
-        relabeled = np.zeros(labels_np.shape, dtype=np.int64)
-        next_label = 1
+    unique_labels = np.unique(labels_np)
+    unique_labels = unique_labels[unique_labels > 0]
 
-        if connectivity == 6:
-            structure = ndimage.generate_binary_structure(3, 1)
-        elif connectivity == 18:
-            structure = ndimage.generate_binary_structure(3, 2)
-        else:
-            structure = ndimage.generate_binary_structure(3, 3)
+    if len(unique_labels) == 0:
+        return labels.clone()
 
-        for old_label in unique_labels:
-            mask = labels_np == old_label
-            labeled_mask, num_features = ndimage.label(mask, structure=structure)
+    import os
+    from neurons.utils.gpu_ndimage import _MAIN_PID
+    in_worker = _MAIN_PID is not None and os.getpid() != _MAIN_PID
 
-            for i in range(1, num_features + 1):
-                relabeled[labeled_mask == i] = next_label
-                next_label += 1
+    if in_worker:
+        results = [_cc_worker_3d((labels_np, int(old), structure))
+                   for old in unique_labels]
+    else:
+        from neurons.utils.parallel import pmap
+        args = [(labels_np, int(old), structure) for old in unique_labels]
+        results = pmap(_cc_worker_3d, args)
 
-        return torch.from_numpy(relabeled).to(device=device, dtype=labels.dtype)
+    relabeled = np.zeros(labels_np.shape, dtype=np.int64)
+    next_label = 1
+    for old_label, labeled_mask, num_features in results:
+        for i in range(1, num_features + 1):
+            relabeled[labeled_mask == i] = next_label
+            next_label += 1
 
-    except ImportError:
-        return relabel_sequential(labels)
+    return torch.from_numpy(relabeled).to(device=device, dtype=labels.dtype)
 
 
 def relabel_connected_components_2d(
     labels: torch.Tensor,
     connectivity: int = 4,
 ) -> torch.Tensor:
-    """
-    Relabel 2D image by finding connected components.
+    """Relabel 2D image by finding connected components.
 
-    Args:
-        labels: 2D label image [H, W] or [B, H, W].
-        connectivity: Connectivity for finding components (4 or 8).
-
-    Returns:
-        Relabeled image with unique labels for each connected component.
+    Main-process GPU path: DLPack zero-copy torch→cupy, cupy CC, zero-copy back.
+    Main-process CPU path: scipy.ndimage.label per instance via pmap.
+    DataLoader-worker path: sequential scipy (safe after fork).
     """
     if labels.dim() == 3:
         batch_results = []
@@ -246,35 +289,48 @@ def relabel_connected_components_2d(
             batch_results.append(result)
         return torch.stack(batch_results)
 
+    from neurons.utils.gpu_ndimage import _use_gpu
+
+    if _use_gpu():
+        return _relabel_cc_gpu(labels, 2, connectivity).to(dtype=labels.dtype)
+
+    # CPU path
     device = labels.device
     labels_np = labels.cpu().numpy().astype(np.int64)
 
-    try:
-        from scipy import ndimage
+    from scipy import ndimage
 
-        unique_labels = np.unique(labels_np)
-        unique_labels = unique_labels[unique_labels > 0]
+    if connectivity == 4:
+        structure = ndimage.generate_binary_structure(2, 1)
+    else:
+        structure = ndimage.generate_binary_structure(2, 2)
 
-        relabeled = np.zeros(labels_np.shape, dtype=np.int64)
-        next_label = 1
+    unique_labels = np.unique(labels_np)
+    unique_labels = unique_labels[unique_labels > 0]
 
-        if connectivity == 4:
-            structure = ndimage.generate_binary_structure(2, 1)
-        else:
-            structure = ndimage.generate_binary_structure(2, 2)
+    if len(unique_labels) == 0:
+        return labels.clone()
 
-        for old_label in unique_labels:
-            mask = labels_np == old_label
-            labeled_mask, num_features = ndimage.label(mask, structure=structure)
+    import os
+    from neurons.utils.gpu_ndimage import _MAIN_PID
+    in_worker = _MAIN_PID is not None and os.getpid() != _MAIN_PID
 
-            for i in range(1, num_features + 1):
-                relabeled[labeled_mask == i] = next_label
-                next_label += 1
+    if in_worker:
+        results = [_cc_worker_2d((labels_np, int(old), structure))
+                   for old in unique_labels]
+    else:
+        from neurons.utils.parallel import pmap
+        args = [(labels_np, int(old), structure) for old in unique_labels]
+        results = pmap(_cc_worker_2d, args)
 
-        return torch.from_numpy(relabeled).to(device=device, dtype=labels.dtype)
+    relabeled = np.zeros(labels_np.shape, dtype=np.int64)
+    next_label = 1
+    for old_label, labeled_mask, num_features in results:
+        for i in range(1, num_features + 1):
+            relabeled[labeled_mask == i] = next_label
+            next_label += 1
 
-    except ImportError:
-        return relabel_sequential(labels)
+    return torch.from_numpy(relabeled).to(device=device, dtype=labels.dtype)
 
 
 def relabel_after_crop(
@@ -282,23 +338,13 @@ def relabel_after_crop(
     spatial_dims: int = 3,
     connectivity: Optional[int] = None,
 ) -> torch.Tensor:
-    """
-    Relabel instance labels after cropping.
+    """Relabel instance labels after cropping.
 
     After cropping a volume/image, some instances may be split into
     disconnected components, or some may be entirely removed. This
     function:
     1. Finds connected components (to separate split instances)
     2. Relabels sequentially (to have consecutive IDs)
-
-    Args:
-        labels: Label tensor [D, H, W], [B, D, H, W], [H, W], or [B, H, W].
-        spatial_dims: Number of spatial dimensions (2 or 3).
-        connectivity: Connectivity for component detection
-            (default: 6 for 3D, 4 for 2D).
-
-    Returns:
-        Relabeled tensor with sequential unique labels per component.
     """
     if spatial_dims == 3:
         if connectivity is None:
@@ -318,20 +364,10 @@ def cluster_embeddings_meanshift(
     bandwidth: float = 0.5,
     min_cluster_size: int = 50,
 ) -> torch.Tensor:
-    """
-    Cluster pixel embeddings using mean-shift clustering.
+    """Cluster pixel embeddings using mean-shift clustering.
 
     WARNING: This is slow for large volumes. Only use for evaluation,
     not during training.
-
-    Args:
-        embedding: Pixel embeddings [E, D, H, W] or [E, H, W].
-        foreground_mask: Binary mask, same spatial shape as embedding.
-        bandwidth: Mean-shift bandwidth (related to delta_var).
-        min_cluster_size: Minimum pixels per cluster.
-
-    Returns:
-        Instance labels with same spatial shape as embedding.
     """
     device = embedding.device
     is_3d = embedding.dim() == 4
@@ -374,17 +410,7 @@ def _cluster_with_sklearn(
     bandwidth: float,
     min_cluster_size: int,
 ) -> np.ndarray:
-    """
-    Cluster embeddings using sklearn MeanShift (CPU fallback).
-
-    Args:
-        emb_fg: Foreground embeddings [N, E] as numpy array.
-        bandwidth: Mean-shift bandwidth.
-        min_cluster_size: Minimum cluster size.
-
-    Returns:
-        Cluster labels [N] starting from 1 (0 = filtered out).
-    """
+    """Cluster embeddings using sklearn MeanShift (CPU fallback)."""
     try:
         from sklearn.cluster import MeanShift
     except ImportError:
@@ -422,22 +448,7 @@ def cluster_embeddings_soft(
     temperature: float = 1.0,
     min_cluster_size: int = 50,
 ) -> torch.Tensor:
-    """Cluster pixel embeddings using differentiable soft mean-shift.
-
-    This is the GPU-friendly, gradient-preserving alternative to
-    ``cluster_embeddings_meanshift``.
-
-    Args:
-        embedding: Pixel embeddings [E, *spatial] or [B, E, *spatial].
-        foreground_mask: Binary mask, same spatial shape.
-        bandwidth: Gaussian kernel bandwidth.
-        num_iters: Mean-shift iterations.
-        temperature: Softmax temperature (lower = harder assignments).
-        min_cluster_size: Minimum pixels per cluster.
-
-    Returns:
-        Instance labels with same spatial shape.
-    """
+    """Cluster pixel embeddings using differentiable soft mean-shift."""
     from neurons.inference.soft_clustering import SoftMeanShift
 
     batched = embedding.dim() >= 4
@@ -467,19 +478,7 @@ def cluster_offsets_hough(
     threshold: float = 0.3,
     min_votes: int = 50,
 ) -> torch.Tensor:
-    """Cluster via Hough voting on predicted spatial offsets.
-
-    Args:
-        offsets: Predicted offsets [S, *spatial] or [B, S, *spatial].
-        foreground_mask: Binary mask, same spatial shape.
-        bin_size: Spatial bin size for vote accumulator.
-        sigma: Gaussian smoothing sigma for votes.
-        threshold: Relative peak threshold.
-        min_votes: Minimum votes for a valid peak.
-
-    Returns:
-        Instance labels with same spatial shape.
-    """
+    """Cluster via Hough voting on predicted spatial offsets."""
     from neurons.inference.soft_clustering import HoughVoting
 
     batched = offsets.dim() >= 4

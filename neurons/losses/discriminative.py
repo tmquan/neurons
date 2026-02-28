@@ -3,17 +3,17 @@ Discriminative Loss for Instance Segmentation.
 
 Three loss modules in logical order:
 
-1. **CentroidEmbeddingLoss** — classic De Brabandere et al. (2017).
+1. **CentroidEmbeddingLoss** -- classic De Brabandere et al. (2017).
    Pull embeddings toward their instance *centroid* (mean embedding),
    push centroids apart, regularise norms.
 
-2. **SkeletonEmbeddingLoss** — geometry-aware variant.
+2. **SkeletonEmbeddingLoss** -- geometry-aware variant.
    Pull embeddings toward the nearest *skeleton* point, push instance
    centres apart, and add two geometric terms:
-     * *boundary penalty*  — cosine alignment with the DT gradient
-     * *skeleton benefit*  — differentiable sampling of the normalised DT
+     * *boundary penalty*  -- cosine alignment with the DT gradient
+     * *skeleton benefit*  -- differentiable sampling of the normalised DT
 
-3. **GeometryLoss** — regression loss for the geometry head
+3. **GeometryLoss** -- regression loss for the geometry head
    (direction, covariance, raw reconstruction).  Each sub-loss supports
    configurable loss type: ``mse``, ``l1``, or ``smooth_l1``.
    Defaults: Smooth-L1 for direction, MSE for covariance, L1 for raw.
@@ -44,10 +44,7 @@ def _flatten_spatial(
     embedding: torch.Tensor,
     ins_label: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, bool]:
-    """Flatten spatial dims for both 2-D and 3-D inputs.
-
-    Returns (embed_flat [B, E, N], label_flat [B, N], is_3d).
-    """
+    """Flatten spatial dims for both 2-D and 3-D inputs."""
     is_3d = embedding.dim() == 5
     if is_3d:
         embed_flat = rearrange(embedding, "b e d h w -> b e (d h w)")
@@ -68,10 +65,7 @@ def _build_instance_index(
     ins: torch.Tensor,
     unique_ids: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, int]:
-    """Map raw instance ids to contiguous 0..K-1 indices.
-
-    Returns (cluster_indices [N], valid_mask [N], num_instances).
-    """
+    """Map raw instance ids to contiguous 0..K-1 indices."""
     num = len(unique_ids)
     max_id = int(ins.max().item()) + 1
     id2idx = torch.full((max_id,), -1, device=ins.device, dtype=torch.long)
@@ -88,29 +82,19 @@ def _scatter_mean(
     valid: torch.Tensor,
     num_clusters: int,
 ) -> torch.Tensor:
-    """Compute per-cluster mean embedding via scatter_add.
-
-    Args:
-        emb: [E, N] embeddings.
-        idx: [N] cluster index (-1 for invalid).
-        valid: [N] bool mask.
-        num_clusters: K.
-
-    Returns:
-        [K, E] cluster means.
-    """
+    """Compute per-cluster mean embedding via scatter_add."""
     E = emb.shape[0]
     device, dtype = emb.device, emb.dtype
 
-    v_emb = emb[:, valid]                    # [E, M]
-    v_idx = idx[valid]                        # [M]
-    v_emb_t = rearrange(v_emb, "e m -> m e") # [M, E]
+    v_emb = emb[:, valid]
+    v_idx = idx[valid]
+    v_emb_t = rearrange(v_emb, "e m -> m e")
 
     sums = torch.zeros((num_clusters, E), device=device, dtype=dtype)
     counts = torch.zeros(num_clusters, device=device, dtype=dtype)
 
-    expanded_idx = v_idx.unsqueeze(1).expand_as(v_emb_t)
-    sums.scatter_add_(0, expanded_idx, v_emb_t)
+    idx_for_scatter = repeat(v_idx, "m -> m e", e=E)
+    sums.scatter_add_(0, idx_for_scatter, v_emb_t)
     counts.scatter_add_(0, v_idx, torch.ones(v_idx.shape[0], device=device, dtype=dtype))
     counts = counts.clamp(min=1)
     return sums / rearrange(counts, "k -> k 1")
@@ -122,20 +106,13 @@ def _make_coord_grid(spatial_shape: Tuple, device: torch.device) -> torch.Tensor
     ranges = [torch.arange(s, device=device, dtype=torch.float32)
               for s in spatial_shape]
     grids = torch.meshgrid(*ranges, indexing="ij")
-    stacked = torch.stack(list(reversed(grids)), dim=0)  # [S, *spatial]
+    stacked = torch.stack(list(reversed(grids)), dim=0)
     S = len(spatial_shape)
     return rearrange(stacked, "s ... -> s (...)")
 
 
 def _spatial_gradient(x: torch.Tensor) -> List[torch.Tensor]:
-    """Central-difference spatial gradient (matches ``numpy.gradient``).
-
-    Args:
-        x: [*spatial] tensor (2-D or 3-D).
-
-    Returns:
-        List of *S* tensors (one per spatial dim, in dim-order).
-    """
+    """Central-difference spatial gradient (matches ``numpy.gradient``)."""
     grads: List[torch.Tensor] = []
     for d in range(x.dim()):
         g = torch.zeros_like(x)
@@ -184,18 +161,7 @@ _SKEL_MODULES: Dict[str, Skeletonize] = {}
 def _skeletonize_mask(
     mask: torch.Tensor, num_iter: int = 50,
 ) -> torch.Tensor:
-    """Thin a binary mask to a 1-pixel-wide skeleton (topology-preserving).
-
-    Uses the Menten et al. (ICCV 2023) iterative boundary-peeling algorithm
-    implemented entirely with convolutions.
-
-    Args:
-        mask: [*spatial] boolean or float binary mask (2-D or 3-D).
-        num_iter: peeling iterations (should be >= max inscribed radius).
-
-    Returns:
-        [*spatial] boolean skeleton mask.
-    """
+    """Thin a binary mask to a 1-pixel-wide skeleton (topology-preserving)."""
     key = f"{mask.device}_{num_iter}"
     with _SKEL_LOCK:
         if key not in _SKEL_MODULES:
@@ -203,7 +169,7 @@ def _skeletonize_mask(
             mod.eval()
             _SKEL_MODULES[key] = mod.to(mask.device)
         mod = _SKEL_MODULES[key]
-    inp = mask.float()[None, None]
+    inp = rearrange(mask.float(), "... -> 1 1 ...")               # [1, 1, *spatial]
     skel = mod(inp)
     return rearrange(skel, "1 1 ... -> ...") > 0.5
 
@@ -217,20 +183,7 @@ def _compute_centroid_offsets(
     lbl_flat: torch.Tensor,
     coords: torch.Tensor,
 ) -> torch.Tensor:
-    """Per-pixel direction toward instance centroid with global magnitude.
-
-    Magnitude encodes relative distance to centroid within each instance:
-    boundary pixels (far from centroid) approach 1, pixels at the centroid
-    approach 0.  This produces a convergent vector field whose strength
-    reflects global position inside the instance.
-
-    Args:
-        lbl_flat: [N] instance labels (0 = background).
-        coords: [S, N] pixel coordinates.
-
-    Returns:
-        [S, N] direction vectors scaled by normalised distance to centroid.
-    """
+    """Per-pixel direction toward instance centroid with global magnitude."""
     S, N = coords.shape
     offsets = torch.zeros_like(coords)
 
@@ -238,7 +191,7 @@ def _compute_centroid_offsets(
     uids = uids[uids > 0]
     for uid in uids:
         mask = lbl_flat == uid
-        centroid = coords[:, mask].mean(dim=1)               # [S]
+        centroid = coords[:, mask].mean(dim=1)
         raw_off = rearrange(centroid, "s -> s 1") - coords[:, mask]
         max_dist = raw_off.norm(dim=0).max().clamp(min=1e-6)
         offsets[:, mask] = raw_off / max_dist
@@ -253,28 +206,12 @@ def _compute_skeleton_offsets(
     coords: torch.Tensor,
     spatial_shape: Tuple,
 ) -> torch.Tensor:
-    """Per-pixel direction toward nearest skeleton point with global magnitude.
-
-    Skeleton is extracted via Menten et al. (ICCV 2023) topology-preserving
-    skeletonization (pure PyTorch convolutions, 2-D and 3-D).
-
-    Magnitude encodes relative distance to skeleton within each instance:
-    boundary pixels (far from skeleton) approach 1, pixels on the skeleton
-    approach 0.
-
-    Args:
-        lbl_flat: [N] instance labels (0 = background).
-        coords: [S, N] pixel coordinates.
-        spatial_shape: original spatial dims, e.g. (H, W) or (D, H, W).
-
-    Returns:
-        [S, N] direction vectors scaled by normalised distance to skeleton.
-    """
+    """Per-pixel direction toward nearest skeleton point with global magnitude."""
     S = len(spatial_shape)
     N = coords.shape[1]
     device = coords.device
 
-    labels = lbl_flat.reshape(spatial_shape)
+    labels = lbl_flat.view(spatial_shape)                           # [*spatial]
     offsets = torch.zeros(S, N, device=device, dtype=torch.float32)
 
     uids = torch.unique(labels)
@@ -304,7 +241,7 @@ def _compute_skeleton_offsets(
                 chunk = pixel_xy[i:i + CHUNK]
                 d = torch.cdist(chunk, skel_xy)
                 nearest_skel[i:i + CHUNK] = skel_xy[d.argmin(dim=1)]
-        off_xy = nearest_skel - pixel_xy                       # [P, S]
+        off_xy = nearest_skel - pixel_xy
 
         max_dist = off_xy.norm(dim=1).max().clamp(min=1e-6)
         off_xy = off_xy / max_dist
@@ -317,41 +254,44 @@ def _compute_skeleton_offsets(
     return offsets
 
 
-def _covariance_one(labels_np, uid, S, sigma):
-    """Per-instance structure tensor (uses gpu_ndimage: cupy when available).
+# -----------------------------------------------------------------------
+# Covariance target: cupy-native (GPU) and scipy (CPU/pmap) paths
+# -----------------------------------------------------------------------
 
-    The structure tensor is scaled by normalised EDT so that pixels near
-    the instance centre (high EDT) carry larger magnitude and boundary
-    pixels (low EDT) are attenuated.
-    """
+def _covariance_one_cupy(labels_cp, uid, S, sigma):
+    """Per-instance structure tensor entirely in cupy -- no host transfers."""
+    import cupy as cp
+    from cupyx.scipy.ndimage import distance_transform_edt as cp_edt
+    from cupyx.scipy.ndimage import gaussian_filter as cp_gauss
+
     sigma_d = max(1.0, sigma / 3.0)
-    spatial_shape = labels_np.shape
+    spatial_shape = labels_cp.shape
 
-    mask = labels_np == uid
-    if mask.sum() < 2:
+    mask = labels_cp == uid
+    if int(mask.sum()) < 2:
         return None
 
-    dt = _gpu_edt(mask).astype(np.float64)
-    mask_f = mask.astype(np.float64)
-    edt_max = dt.max()
-    norm = np.maximum(_gpu_gauss(mask_f, sigma=sigma), 1e-10)
+    dt = cp_edt(mask).astype(cp.float64)
+    mask_f = mask.astype(cp.float64)
+    edt_max = float(dt.max())
+    norm = cp.maximum(cp_gauss(mask_f, sigma=sigma), 1e-10)
 
     grads = []
     for i in range(S):
         order = [0] * S
         order[S - 1 - i] = 1
-        g = _gpu_gauss(dt, sigma=sigma_d, order=order)
-        g *= mask_f
+        g = cp_gauss(dt, sigma=sigma_d, order=order)
+        g = g * mask_f
         grads.append(g)
 
-    st_inst = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
+    st_inst = cp.zeros((S * S,) + spatial_shape, dtype=cp.float32)
     idx = 0
     for i in range(S):
         for j in range(S):
-            st_inst[idx][mask] = (_gpu_gauss(grads[i] * grads[j], sigma=sigma) / norm)[mask]
+            st_inst[idx][mask] = (cp_gauss(grads[i] * grads[j], sigma=sigma) / norm)[mask]
             idx += 1
 
-    w = np.zeros_like(dt)
+    w = cp.zeros_like(dt)
     if edt_max > 1e-6:
         w[mask] = (dt[mask] / edt_max) ** 2
 
@@ -362,22 +302,22 @@ def _covariance_one(labels_np, uid, S, sigma):
     for i in range(S):
         for j in range(S):
             if i == j:
-                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask] + w[mask] * iso_val[mask]).astype(np.float32)
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask] + w[mask] * iso_val[mask]).astype(cp.float32)
             else:
-                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(np.float32)
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(cp.float32)
             idx += 1
 
-    edt_scale = np.zeros_like(dt, dtype=np.float32)
+    edt_scale = cp.zeros_like(dt, dtype=cp.float32)
     if edt_max > 1e-6:
-        edt_scale[mask] = (dt[mask] / edt_max).astype(np.float32)
+        edt_scale[mask] = (dt[mask] / edt_max).astype(cp.float32)
     for c in range(S * S):
-        st_inst[c][mask] *= edt_scale[mask]
+        st_inst[c][mask] = st_inst[c][mask] * edt_scale[mask]
 
-    return (uid, mask, st_inst)
+    return (int(uid), cp.asnumpy(mask), cp.asnumpy(st_inst))
 
 
 def _covariance_worker(args):
-    """Wrapper for pmap (CPU fallback path)."""
+    """Per-instance structure tensor using scipy (CPU) -- for pmap."""
     from scipy.ndimage import distance_transform_edt, gaussian_filter
     labels_np, uid, S, sigma = args
     sigma_d = max(1.0, sigma / 3.0)
@@ -439,22 +379,11 @@ def _compute_covariance(
     spatial_shape: Optional[Tuple] = None,
     sigma: float = 5.0,
 ) -> torch.Tensor:
-    """EDT structure tensor per foreground pixel with global magnitude scaling.
+    """EDT structure tensor per foreground pixel.
 
-    The tensor is scaled by normalised EDT (distance-to-boundary / max)
-    so that pixels near the instance centre carry larger magnitude and
-    boundary pixels are attenuated.
-
-    Uses parallel processing for many instances, sequential for few.
-
-    Args:
-        lbl_flat: [N] instance labels (0 = background).
-        coords: [S, N] pixel coordinates.
-        spatial_shape: e.g. (H, W) or (D, H, W).  Required.
-        sigma: Integration scale for structure tensor smoothing.
-
-    Returns:
-        [S*S, N] structure tensor flattened row-major per pixel.
+    GPU path: cupy-native via DLPack — zero-copy torch→cupy, all per-instance
+    EDT + gaussian_filter stay in cupy, zero-copy cupy→torch at the end.
+    CPU path: all instances processed in parallel via pmap.
     """
     if spatial_shape is None:
         raise ValueError("spatial_shape is required")
@@ -462,6 +391,29 @@ def _compute_covariance(
     S, N = coords.shape
     device = coords.device
 
+    if _cupy_available():
+        import cupy as cp
+        from neurons.utils.gpu_ndimage import torch_to_cupy, cupy_to_torch
+
+        labels_cp = torch_to_cupy(lbl_flat).reshape(spatial_shape) # zero-copy GPU
+        st_cp = cp.zeros((S * S,) + spatial_shape, dtype=cp.float32)
+
+        uids = cp.unique(labels_cp)
+        uids = uids[uids > 0]
+
+        for uid in uids:
+            res = _covariance_one_cupy(labels_cp, int(uid), S, sigma)
+            if res is None:
+                continue
+            _, mask, st_inst = res
+            for c in range(S * S):
+                st_cp[c][mask] = cp.asarray(st_inst[c][mask])
+
+        return rearrange(
+            cupy_to_torch(st_cp, device=device).float(), "c ... -> c (...)",
+        )                                                          # [S*S, N]
+
+    # CPU fallback — parallel via pmap
     labels_np = lbl_flat.cpu().numpy().reshape(spatial_shape)
     st_np = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
 
@@ -469,50 +421,27 @@ def _compute_covariance(
     uids = uids[uids > 0]
 
     if len(uids) > 0:
-        if _cupy_available():
-            results = [_covariance_one(labels_np, int(uid), S, sigma)
-                       for uid in uids]
-        else:
-            args = [(labels_np, int(uid), S, sigma) for uid in uids]
-            if len(uids) > 4:
-                results = pmap(_covariance_worker, args)
-            else:
-                results = [_covariance_worker(a) for a in args]
-
+        results = pmap(
+            _covariance_worker,
+            [(labels_np, int(uid), S, sigma) for uid in uids],
+        )
         for res in results:
             if res is None:
                 continue
-            uid, mask, st_inst = res
+            _, mask, st_inst = res
             for c in range(S * S):
                 st_np[c][mask] = st_inst[c][mask]
 
-    st_flat = torch.from_numpy(
-        st_np.reshape(S * S, N)
-    ).to(device=device, dtype=torch.float32)
-    return st_flat
+    return rearrange(
+        torch.from_numpy(st_np), "c ... -> c (...)",
+    ).to(device=device, dtype=torch.float32)                       # [S*S, N]
 
 
 @torch.no_grad()
 def _compute_skeleton_targets(
     gt_labels: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Compute skeleton-based targets from instance labels.
-
-    Skeleton via Menten et al. (ICCV 2023) topology-preserving peeling;
-    EDT via torch-distmap for normalised DT and DT gradient.
-    Stays on-device, works for 2-D and 3-D.
-
-    Args:
-        gt_labels: [B, *spatial] instance labels (0 = background).
-
-    Returns:
-        nr_skel:      [B, S, *spatial] absolute coords of nearest skeleton
-                      point in (x, y[, z]) order.
-        dt_norm:      [B, 1, *spatial] normalised distance transform
-                      (0 at boundary, 1 at skeleton ridge).
-        dt_grad:      [B, S, *spatial] spatial gradient of the DT
-                      in (x, y[, z]) order.
-    """
+    """Compute skeleton-based targets from instance labels."""
     B = gt_labels.shape[0]
     spatial_shape = gt_labels.shape[1:]
     S = len(spatial_shape)
@@ -540,17 +469,23 @@ def _compute_skeleton_targets(
             pixel_ij = torch.nonzero(mask, as_tuple=False)
             pixel_xy = pixel_ij.flip(1).float()
 
-            dists = torch.cdist(pixel_xy, skel_xy)                 # [P, R]
-            nearest_ridge = skel_xy[dists.argmin(dim=1)]            # [P, S]
+            dists = torch.cdist(pixel_xy, skel_xy)
+            nearest_ridge = skel_xy[dists.argmin(dim=1)]
 
             fi = _flat_indices(pixel_ij, spatial_shape)
             nr_skel_flat = rearrange(nr_skel[b], "s ... -> s (...)")
             for s in range(S):
                 nr_skel_flat[s, fi] = nearest_ridge[:, s]
 
-            dt = torch.from_numpy(
-                _gpu_edt(mask.cpu().numpy())
-            ).to(device=device, dtype=torch.float32)
+            if _cupy_available():
+                from neurons.utils.gpu_ndimage import torch_to_cupy, cupy_to_torch, cupy_edt
+                dt = cupy_to_torch(
+                    cupy_edt(torch_to_cupy(mask)), device=device,
+                ).float()
+            else:
+                dt = torch.from_numpy(
+                    _gpu_edt(mask.cpu().numpy())
+                ).to(device=device, dtype=torch.float32)
             dt_max = dt[mask].max()
             normed = dt / dt_max if dt_max > 0 else dt
             dt_norm[b, 0][mask] = normed[mask]
@@ -559,7 +494,8 @@ def _compute_skeleton_targets(
             grads_xy = list(reversed(grads_dim))
             dt_grad_flat = rearrange(dt_grad[b], "s ... -> s (...)")
             for s in range(S):
-                dt_grad_flat[s, fi] = grads_xy[s].reshape(-1)[fi]
+                grad_flat = rearrange(grads_xy[s], "... -> (...)")
+                dt_grad_flat[s, fi] = grad_flat[fi]
 
     return nr_skel, dt_norm, dt_grad
 
@@ -569,21 +505,7 @@ def _compute_skeleton_targets(
 # ======================================================================
 
 class CentroidEmbeddingLoss(nn.Module):
-    """Discriminative pull/push/regularisation loss on instance embeddings.
-
-    * **L_pull** (variance):  hinged L2 from each pixel embedding to its
-      instance centroid (mean embedding).  Pulls same-instance pixels together.
-    * **L_push** (distance):  pairwise margin on instance centroids.
-      Pushes different instances apart.
-    * **L_reg**:  L-p norm on centroids, keeps embeddings near the origin.
-
-    Args:
-        delta_pull: pull hinge margin (default 0.5).
-        delta_push: push margin — centroids closer than ``2 * delta_push``
-            are penalised (default 1.5).
-        norm: p-norm for all distance computations (default 2).
-        w_pull, w_push, w_reg: scalar weights for the three terms.
-    """
+    """Discriminative pull/push/regularisation loss on instance embeddings."""
 
     def __init__(
         self,
@@ -608,68 +530,40 @@ class CentroidEmbeddingLoss(nn.Module):
         self.w_push = B if B is not None else w_push
         self.w_reg  = R if R is not None else w_reg
 
-    def _pull_loss(
-        self,
-        emb: torch.Tensor,
-        idx: torch.Tensor,
-        valid: torch.Tensor,
-        centers: torch.Tensor,
-        K: int,
-    ) -> torch.Tensor:
-        """Per-instance mean of hinged L2 from pixels to their centroid."""
+    def _pull_loss(self, emb, idx, valid, centers, K):
         if K == 0:
             return torch.tensor(0.0, device=emb.device, dtype=torch.float32)
-
         v_emb = emb[:, valid]
         v_idx = idx[valid]
         gathered = rearrange(centers[v_idx], "m e -> e m")
-
         dist = torch.norm(v_emb.float() - gathered.float(), p=self.norm, dim=0)
         hinged = F.relu(dist - self.delta_pull) ** 2
-
         cl = torch.zeros(K, device=emb.device, dtype=torch.float32)
         cc = torch.zeros(K, device=emb.device, dtype=torch.float32)
         cl.scatter_add_(0, v_idx, hinged.float())
         cc.scatter_add_(0, v_idx, torch.ones_like(hinged, dtype=torch.float32))
         return reduce(cl / cc.clamp(min=1), "k -> ", "mean")
 
-    def _push_loss(self, centers: torch.Tensor) -> torch.Tensor:
-        """Pairwise hinge on centroid distances — pushes instances apart."""
+    def _push_loss(self, centers):
         K = centers.shape[0]
         if K <= 1:
             return torch.tensor(0.0, device=centers.device, dtype=torch.float32)
-
         ci = rearrange(centers.float(), "k e -> k 1 e")
         cj = rearrange(centers.float(), "k e -> 1 k e")
         pw = torch.norm(ci - cj, p=self.norm, dim=2)
-
         triu = torch.triu_indices(K, K, offset=1, device=centers.device)
         hinged = F.relu(2 * self.delta_push - pw[triu[0], triu[1]]) ** 2
         return reduce(hinged, "n -> ", "mean")
 
-    def _reg_loss(self, centers: torch.Tensor) -> torch.Tensor:
-        """L-p norm regularisation on centroid embeddings."""
+    def _reg_loss(self, centers):
         if centers.shape[0] == 0:
             return torch.tensor(0.0, device=centers.device, dtype=torch.float32)
         return torch.norm(centers.float(), p=self.norm, dim=1).mean()
 
-    def forward(
-        self,
-        embedding: torch.Tensor,
-        ins_label: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            embedding: [B, E, *spatial] instance embedding.
-            ins_label: [B, *spatial] instance labels (0 = background).
-
-        Returns:
-            Dict with keys ``loss``, ``l_pull``, ``l_push``, ``l_reg``.
-        """
+    def forward(self, embedding, ins_label):
         emb_flat, lbl_flat, _ = _flatten_spatial(embedding, ins_label)
         dev = embedding.device
         zero = torch.tensor(0.0, device=dev, dtype=torch.float32)
-
         L_pull, L_push, L_reg = zero.clone(), zero.clone(), zero.clone()
         valid_b = 0
 
@@ -688,7 +582,6 @@ class CentroidEmbeddingLoss(nn.Module):
         n = max(valid_b, 1)
         L_pull, L_push, L_reg = L_pull / n, L_push / n, L_reg / n
         total = self.w_pull * L_pull + self.w_push * L_push + self.w_reg * L_reg
-
         return {"loss": total, "l_pull": L_pull, "l_push": L_push, "l_reg": L_reg}
 
     def __repr__(self) -> str:
@@ -700,7 +593,6 @@ class CentroidEmbeddingLoss(nn.Module):
         )
 
 
-# Backward-compatible aliases
 DiscriminativeLoss = CentroidEmbeddingLoss
 DiscriminativeLossVectorized = CentroidEmbeddingLoss
 
@@ -710,31 +602,8 @@ DiscriminativeLossVectorized = CentroidEmbeddingLoss
 # ======================================================================
 
 class SkeletonEmbeddingLoss(nn.Module):
-    """Discriminative loss that pulls **offset-based embeddings** toward
-    the instance *skeleton*.
-
-    Supports both **2-D** and **3-D** inputs (auto-detected from
-    ``offsets.dim()``).
-
-    * 2-D: offsets ``[B, 2, H, W]``, embedding ``e_i = (x,y)_i + offset_i``
-    * 3-D: offsets ``[B, 3, D, H, W]``, embedding ``e_i = (x,y,z)_i + offset_i``
-
-    Four loss terms (all differentiable):
-
-    * **L_pull**    — L2 between ``e_i`` and the nearest GT skeleton point.
-    * **L_push**    — pairwise margin on per-instance mean embeddings.
-    * **L_penalty** — cosine alignment between the offset and the DT
-      gradient (repels from boundaries).
-    * **L_benefit** — ``F.grid_sample`` of the normalised DT at ``e_i``
-      (attracts toward the skeleton ridge).
-
-    Args:
-        delta_push: push margin between instance centres (default 20.0).
-        w_pull: weight for L_pull   (default 1.0).
-        w_push: weight for L_push   (default 1.0).
-        w_penalty: weight for L_penalty (default 1.0).
-        w_benefit: weight for L_benefit (default 5.0).
-    """
+    """Discriminative loss that pulls offset-based embeddings toward
+    the instance skeleton."""
 
     def __init__(
         self,
@@ -752,42 +621,15 @@ class SkeletonEmbeddingLoss(nn.Module):
         self.w_benefit = w_benefit
 
     @staticmethod
-    def _make_coords(spatial_shape: Tuple, device: torch.device) -> torch.Tensor:
-        """Build absolute coordinate tensor [1, S, *spatial_shape]."""
+    def _make_coords(spatial_shape, device):
         ranges = [torch.arange(s, device=device, dtype=torch.float32)
                   for s in spatial_shape]
         grids = torch.meshgrid(*ranges, indexing="ij")
         return rearrange(torch.stack(list(reversed(grids)), dim=0), "s ... -> 1 s ...")
 
-    def forward(
-        self,
-        offsets: torch.Tensor,
-        gt_labels: torch.Tensor,
-        gt_nr_skel: Optional[torch.Tensor] = None,
-        gt_dt_norm: Optional[torch.Tensor] = None,
-        gt_dt_grad: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            offsets:         [B, S, *spatial]  predicted offset field (S=2 or 3).
-            gt_labels:       [B, *spatial]     instance labels (0 = background).
-            gt_nr_skel:      [B, S, *spatial]  coords of nearest skeleton point.
-                             Computed on the fly from *gt_labels* when ``None``.
-            gt_dt_norm:      [B, 1, *spatial]  normalised DT (0=boundary, 1=skeleton).
-                             Computed on the fly from *gt_labels* when ``None``.
-            gt_dt_grad:      [B, S, *spatial]  gradient of the DT.
-                             Computed on the fly from *gt_labels* when ``None``.
-
-        Returns:
-            Dict with ``loss``, ``l_pull``, ``l_push``,
-            ``l_penalty``, ``l_benefit``, and optionally
-            ``gt_nr_skel``, ``gt_dt_norm``, ``gt_dt_grad``
-            (present when any target was computed on the fly).
-        """
+    def forward(self, offsets, gt_labels, gt_nr_skel=None, gt_dt_norm=None, gt_dt_grad=None):
         computed_targets = (
-            gt_nr_skel is None
-            or gt_dt_norm is None
-            or gt_dt_grad is None
+            gt_nr_skel is None or gt_dt_norm is None or gt_dt_grad is None
         )
         if computed_targets:
             _skel, _dt_n, _dt_g = _compute_skeleton_targets(gt_labels)
@@ -919,41 +761,10 @@ def _resolve_loss_fn(name: str) -> str:
 class GeometryLoss(nn.Module):
     """Regression loss for the geometry head output.
 
-    Supervises three groups of channels produced by the model's
-    ``head_geometry`` against on-the-fly computed targets:
-
-    * **L_dir**  (first S channels):  per-pixel offset toward instance
-      centroid or nearest skeleton point, with magnitude proportional to
-      relative distance (boundary pixels strongest, centre weakest).
-    * **L_cov**  (next S*S channels):  EDT structure tensor with
-      depth-blended isotropy, scaled by normalised EDT so centre pixels
-      carry larger magnitude (see ``_compute_covariance``).
-    * **L_raw**  (last 4 channels):  RGBA reconstruction of the input
-      image (requires ``raw_image``).
-
-    The channel layout of the geometry tensor is ``[dir, cov, raw]``
-    with a total of ``S + S*S + 4`` channels.
-
-    Each sub-loss supports a configurable loss type:
-
-    * ``"mse"`` / ``"l2"``  — mean squared error
-    * ``"l1"`` / ``"mae"``  — mean absolute error (sharper)
-    * ``"smooth_l1"`` / ``"huber"``  — Smooth-L1 (robust to outliers)
-
-    Defaults: Smooth-L1 for direction (outlier-robust offset regression),
-    MSE for covariance (Frobenius-norm on tensors), L1 for raw
-    reconstruction (sharper image quality).
-
-    Args:
-        spatial_dims: 2 or 3 (default 2).
-        dir_target: ``"centroid"`` or ``"skeleton"`` (default ``"centroid"``).
-        weight_dir: weight for L_dir (default 1.0).
-        weight_cov: weight for L_cov (default 1.0).
-        weight_raw: weight for L_raw (default 1.0).
-        loss_dir: loss type for L_dir (default ``"smooth_l1"``).
-        loss_cov: loss type for L_cov (default ``"mse"``).
-        loss_raw: loss type for L_raw (default ``"l1"``).
-        smooth_l1_beta: beta parameter for Smooth-L1 (default 1.0).
+    Supervises three groups of channels:
+    * L_dir  (first S channels):  per-pixel offset toward centroid/skeleton.
+    * L_cov  (next S*S channels):  EDT structure tensor.
+    * L_raw  (last 4 channels):  RGBA reconstruction.
     """
 
     def __init__(
@@ -984,21 +795,7 @@ class GeometryLoss(nn.Module):
         self._ch_cov = S * S
         self._ch_raw = 4
 
-    def _fg_loss(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        fg: torch.Tensor,
-        loss_type: str,
-    ) -> torch.Tensor:
-        """Foreground-masked regression loss for one sample.
-
-        Args:
-            pred: [C, N] predicted channels (flattened spatial).
-            target: [C, N] target channels.
-            fg: [N] bool foreground mask.
-            loss_type: one of ``"mse"``, ``"l1"``, ``"smooth_l1"``.
-        """
+    def _fg_loss(self, pred, target, fg, loss_type):
         N_fg = fg.sum().float().clamp(min=1.0)
         diff = pred[:, fg] - target[:, fg]
         numel = N_fg * diff.shape[0]
@@ -1013,14 +810,8 @@ class GeometryLoss(nn.Module):
                 beta=self.smooth_l1_beta, reduction="sum",
             ) / numel
 
-    def compute_targets(
-        self,
-        ins_label: torch.Tensor,
-    ) -> Dict[str, List[Optional[torch.Tensor]]]:
-        """Pre-compute geometry targets (expensive, cache-friendly).
-
-        Returns dict with ``dir_targets`` and ``cov_targets`` lists (one per batch element).
-        """
+    def compute_targets(self, ins_label):
+        """Pre-compute geometry targets (expensive, cache-friendly)."""
         B = ins_label.shape[0]
         spatial_shape = ins_label.shape[1:]
         dev = ins_label.device
@@ -1055,24 +846,7 @@ class GeometryLoss(nn.Module):
 
         return {"dir_targets": dir_targets, "cov_targets": cov_targets}
 
-    def forward(
-        self,
-        geometry: torch.Tensor,
-        ins_label: torch.Tensor,
-        raw_image: Optional[torch.Tensor] = None,
-        cached_targets: Optional[Dict[str, List[Optional[torch.Tensor]]]] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            geometry: [B, S+S*S+4, *spatial] geometry head prediction.
-            ins_label: [B, *spatial] instance labels (0 = background).
-            raw_image: [B, 1, *spatial] (optional, for L_raw target).
-            cached_targets: pre-computed targets from ``compute_targets``
-                (skips expensive recomputation).
-
-        Returns:
-            Dict with keys ``loss``, ``dir``, ``cov``, ``raw``.
-        """
+    def forward(self, geometry, ins_label, raw_image=None, cached_targets=None):
         B = geometry.shape[0]
         spatial_shape = geometry.shape[2:]
         dev = geometry.device

@@ -384,6 +384,5 @@ callback, and produces all visualization panels. Open TensorBoard at
 Multi-GPU training on 4 GPUs with default hyperparameters:
 
 ```bash
-env CUDA_VISIBLE_DEVICES='0,1,2,3' PYTHONPATH=$(pwd) python scripts/train.py \
-    --config-name snemi3d_microns
+env CUDA_VISIBLE_DEVICES='0,1,2,3,4' PYTHONPATH=$(pwd) python scripts/train.py --config-name snemi3d_microns
 ```

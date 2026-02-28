@@ -12,7 +12,8 @@ class ElasticDeformationd(MapTransform, Randomizable):
     """Apply elastic deformation to simulate tissue deformation artifacts.
 
     Common in serial section EM where slices can be warped during
-    sample preparation.
+    sample preparation.  Uses cupy-accelerated gaussian_filter when
+    available, falls back to scipy.
 
     Args:
         keys: Keys of data to transform.
@@ -48,14 +49,14 @@ class ElasticDeformationd(MapTransform, Randomizable):
         ref_key = self.keys[0]
         shape = d[ref_key].shape[-2:]  # H, W
 
-        from scipy.ndimage import gaussian_filter
+        from neurons.utils.gpu_ndimage import gaussian_filter
 
         dx = gaussian_filter(
-            (self.R.random(shape) * 2 - 1),
+            (self.R.random(shape) * 2 - 1).astype(np.float64),
             self.sigma,
         ) * self.alpha
         dy = gaussian_filter(
-            (self.R.random(shape) * 2 - 1),
+            (self.R.random(shape) * 2 - 1).astype(np.float64),
             self.sigma,
         ) * self.alpha
 

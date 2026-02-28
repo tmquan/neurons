@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from neurons.losses.discriminative import GeometryLoss
-from neurons.losses.vista3d_losses import _edt_worker, _edt_worker_gpu
+from neurons.losses.vista3d_losses import _edt_worker
 from neurons.utils.parallel import pmap
 
 _SPATIAL_DIMS = 2
@@ -101,13 +101,16 @@ class SemanticLoss(nn.Module):
             if class_labels.dim() == logits.dim():
                 target = class_labels.float()
             else:
-                target_safe = class_labels.clone().long()
-                neg_mask = target_safe < 0
-                target_safe[neg_mask] = 0
-                target_safe = target_safe.clamp(0, C - 1)
-                target = F.one_hot(target_safe, C).float()
-                target[neg_mask] = 0.0
-                target = rearrange(target, "b ... c -> b c ...")
+                safe = class_labels.clone().long()
+                neg = safe < 0
+                safe[neg] = 0
+                safe = safe.clamp(0, C - 1)
+                target = rearrange(
+                    F.one_hot(safe, C).float(),
+                    "b ... c -> b c ...",
+                )                                                  # [B, C, *spatial]
+                neg_bc = rearrange(neg, "b ... -> b 1 ...")        # broadcast across C
+                target[neg_bc.expand_as(target)] = 0.0
             return probs, target
 
     def _compute_ce(
@@ -227,150 +230,154 @@ class InstanceLoss(nn.Module):
 
     @torch.no_grad()
     def _get_weight_boundary(self, label: torch.Tensor) -> torch.Tensor:
-        gt_label_float = rearrange(label, "b ... -> b 1 ...").float()
-        padded_arr = F.pad(gt_label_float, _PAD_TUPLE, mode="replicate")
-        pooled_max = _POOL_FN(+padded_arr, 3, stride=1, padding=0)
-        pooled_min = _POOL_FN(-padded_arr, 3, stride=1, padding=0).neg_()
-        boundary = rearrange(pooled_max != pooled_min, "b 1 ... -> b ...").float()
+        """Boundary weight via morphological gradient (max_pool != min_pool)."""
+        label_4d = rearrange(label, "b ... -> b 1 ...").float()   # [B,1,H,W]
+        padded = F.pad(label_4d, _PAD_TUPLE, mode="replicate")
+        dilated = _POOL_FN(+padded, 3, stride=1, padding=0)
+        eroded = _POOL_FN(-padded, 3, stride=1, padding=0).neg_()
+        boundary = rearrange(dilated != eroded, "b 1 ... -> b ...").float()
         return 1.0 + boundary * (self.weight_edge - 1.0)
 
     @torch.no_grad()
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
-        from neurons.utils.gpu_ndimage import _use_gpu as _cupy_ok
-        weight_bone = torch.ones_like(label, dtype=torch.float32)
-        label_np = label.cpu().numpy()
-        use_gpu = _cupy_ok()
+        """Per-instance EDT skeleton weight.
 
-        for b in range(label.shape[0]):
+        GPU path:  DLPack zero-copy torch→cupy, all EDTs in cupy, zero-copy back.
+        CPU path:  all instances via pmap (always parallel).
+        """
+        from neurons.utils.gpu_ndimage import _use_gpu as _cupy_ok
+
+        B = label.shape[0]
+
+        if _cupy_ok():
+            import cupy as cp
+            from cupyx.scipy.ndimage import distance_transform_edt as cp_edt
+            from neurons.utils.gpu_ndimage import torch_to_cupy, cupy_to_torch
+
+            label_cp = torch_to_cupy(label)                        # zero-copy GPU
+            weight_cp = cp.ones(label_cp.shape, dtype=cp.float32)
+
+            for b in range(B):
+                fg_ids = cp.unique(label_cp[b])
+                fg_ids = fg_ids[fg_ids > 0]
+                if len(fg_ids) == 0:
+                    continue
+                for uid in fg_ids:
+                    mask = label_cp[b] == uid
+                    dt = cp_edt(mask).astype(cp.float32)
+                    dt_max = dt.max()
+                    if float(dt_max) > 0:
+                        dt = dt / dt_max
+                    weight_cp[b][mask] = 1.0 + dt[mask] * (self.weight_bone - 1.0)
+
+            return cupy_to_torch(weight_cp, device=label.device).float()
+
+        label_np = label.cpu().numpy()
+        weight_bone = np.ones_like(label_np, dtype=np.float32)
+        for b in range(B):
             unique_ids = np.unique(label_np[b])
             fg_ids = unique_ids[unique_ids > 0]
             if len(fg_ids) == 0:
                 continue
-
-            if use_gpu:
-                results = [_edt_worker_gpu(label_np[b], int(uid))
-                           for uid in fg_ids]
-            else:
-                args = [(label_np[b], int(uid)) for uid in fg_ids]
-                if len(fg_ids) > 4:
-                    results = pmap(_edt_worker, args)
-                else:
-                    results = [_edt_worker(a) for a in args]
-
+            args = [(label_np[b], int(uid)) for uid in fg_ids]
+            results = pmap(_edt_worker, args)
             for uid, dt in results:
-                inst_mask = label[b] == uid
-                dt_t = torch.from_numpy(dt).to(label.device)
-                weight_bone[b][inst_mask] = 1.0 + dt_t[inst_mask] * (self.weight_bone - 1.0)
+                inst_mask = label_np[b] == uid
+                weight_bone[b][inst_mask] = 1.0 + dt[inst_mask] * (self.weight_bone - 1.0)
 
-        return weight_bone
+        return torch.from_numpy(weight_bone).to(label.device)
 
     # ---- core loss ----
 
-    def _loss_single(
-        self,
-        embed: torch.Tensor,
-        label: torch.Tensor,
-        weight_edge: torch.Tensor,
-        weight_bone: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        B = embed.shape[0]
-        emb_flat = rearrange(embed, "b c ... -> b c (...)")
-        lbl_flat = rearrange(label, "b ... -> b (...)")
-        weight_flat = rearrange(weight_edge * weight_bone, "b ... -> b (...)")
+    def _loss_single(self, embed, label, w_edge, w_bone) -> Dict[str, torch.Tensor]:
+        """Pull/push/norm over all instances in the batch.
 
-        loss_pull = torch.tensor(0.0, device=embed.device)
-        loss_push = torch.tensor(0.0, device=embed.device)
-        loss_norm = torch.tensor(0.0, device=embed.device)
-        valid = 0
+        Shapes
+        ------
+        embed  : [B, E, H, W]   instance embeddings
+        label  : [B, H, W]      instance ids (0 = background)
+        w_edge : [B, H, W]      boundary boost
+        w_bone : [B, H, W]      skeleton boost
+        """
+        emb_flat = rearrange(embed, "b e ... -> b e (...)")        # [B, E, N]
+        lbl_flat = rearrange(label, "b ... -> b (...)")            # [B, N]
+        wgt_flat = rearrange(w_edge * w_bone, "b ... -> b (...)")  # [B, N]
 
-        for b in range(B):
+        dev = embed.device
+        loss_pull = torch.tensor(0.0, device=dev)
+        loss_push = torch.tensor(0.0, device=dev)
+        loss_norm = torch.tensor(0.0, device=dev)
+        n_valid = 0
+
+        for b in range(embed.shape[0]):
             ids = torch.unique(lbl_flat[b])
             ids = ids[ids > 0]
             if len(ids) == 0:
                 continue
-            valid += 1
-            n_inst = len(ids)
+            n_valid += 1
+            K = len(ids)
 
+            # --- weighted centroids + pull ---
             centers = []
-            b_pull = torch.tensor(0.0, device=embed.device)
+            b_pull = torch.tensor(0.0, device=dev)
             for uid in ids:
-                mask = lbl_flat[b] == uid
-                w = weight_flat[b, mask]
-                emb = emb_flat[b, :, mask]
-                center = (emb * rearrange(w, "n -> 1 n")).sum(1) / (w.sum() + 1e-8)
-                centers.append(center)
+                mask = lbl_flat[b] == uid                          # [N]
+                w = wgt_flat[b, mask]                              # [M]
+                e = emb_flat[b, :, mask]                           # [E, M]
+                c = (e * rearrange(w, "m -> 1 m")).sum(1) / (w.sum() + 1e-8)  # [E]
+                centers.append(c)
+                dist = torch.norm(e - rearrange(c, "e -> e 1"), dim=0)
+                b_pull = b_pull + (F.relu(dist - self.delta_v) ** 2 * w).mean()
+            loss_pull = loss_pull + b_pull / K
 
-                dist = torch.norm(emb - rearrange(center, "e -> e 1"), dim=0)
-                pull = F.relu(dist - self.delta_v) ** 2
-                b_pull = b_pull + (pull * w).mean()
+            # --- push (pairwise centroid margin) ---
+            if K > 1:
+                c_stack = torch.stack(centers)                     # [K, E]
+                pw = torch.norm(
+                    rearrange(c_stack, "i e -> i 1 e") -
+                    rearrange(c_stack, "j e -> 1 j e"),
+                    dim=2,
+                )
+                triu = torch.triu_indices(K, K, offset=1, device=dev)
+                loss_push = loss_push + (F.relu(2 * self.delta_d - pw[triu[0], triu[1]]) ** 2).mean()
 
-            loss_pull = loss_pull + b_pull / n_inst
-
-            if len(centers) > 1:
-                c = torch.stack(centers)
-                ci = rearrange(c, "n e -> n 1 e")
-                cj = rearrange(c, "n e -> 1 n e")
-                pw = torch.norm(ci - cj, dim=2)
-                triu = torch.triu_indices(len(ids), len(ids), offset=1, device=pw.device)
-                push = F.relu(2 * self.delta_d - pw[triu[0], triu[1]]) ** 2
-                loss_push = loss_push + push.mean()
-
+            # --- norm (centroid regularisation) ---
             loss_norm = loss_norm + torch.stack([c.norm() for c in centers]).mean()
 
-        n = max(valid, 1)
-        l_pull = loss_pull / n
-        l_push = loss_push / n
-        l_norm = loss_norm / n
-        total = self.weight_pull * l_pull + self.weight_push * l_push + self.weight_norm * l_norm
-        return {"loss": total, "pull": l_pull, "push": l_push, "norm": l_norm}
+        n = max(n_valid, 1)
+        pull = loss_pull / n
+        push = loss_push / n
+        norm = loss_norm / n
+        total = self.weight_pull * pull + self.weight_push * push + self.weight_norm * norm
+        return {"loss": total, "pull": pull, "push": push, "norm": norm}
 
-    def compute_weights(
-        self, label: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Pre-compute boundary and skeleton weights (expensive, cache-friendly).
+    # ---- public interface ----
 
-        Returns:
-            (weight_edge, weight_bone) tensors same shape as label.
-        """
-        weight_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else torch.ones_like(label, dtype=torch.float32)
-        weight_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else torch.ones_like(label, dtype=torch.float32)
-        return weight_edge, weight_bone
+    def compute_weights(self, label):
+        """Pre-compute boundary + skeleton weights (cache-friendly)."""
+        w_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else torch.ones_like(label, dtype=torch.float32)
+        w_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else torch.ones_like(label, dtype=torch.float32)
+        return w_edge, w_bone
 
-    def forward(
-        self,
-        embed: torch.Tensor,
-        label: torch.Tensor,
-        semantic_ids: Optional[torch.Tensor] = None,
-        weight_edge: Optional[torch.Tensor] = None,
-        weight_bone: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            embed: [B, E, *spatial] instance embedding.
-            label: [B, *spatial] instance labels (0 = background).
-            semantic_ids: [B, *spatial] optional semantic class ids.
-            weight_edge: pre-computed boundary weights (skips recomputation).
-            weight_bone: pre-computed skeleton weights (skips recomputation).
-
-        Returns:
-            Dict with ``loss``, ``pull``, ``push``, ``norm``.
-        """
+    def forward(self, embed, label, semantic_ids=None,
+                weight_edge=None, weight_bone=None) -> Dict[str, torch.Tensor]:
         if weight_edge is None or weight_bone is None:
             weight_edge, weight_bone = self.compute_weights(label)
 
         if semantic_ids is not None:
-            unique_classes = torch.unique(semantic_ids)
-            unique_classes = unique_classes[unique_classes > 0]
-            if len(unique_classes) > 0:
+            classes = torch.unique(semantic_ids)
+            classes = classes[classes > 0]
+            if len(classes) > 0:
                 zero = torch.tensor(0.0, device=embed.device)
-                accum = {"loss": zero.clone(), "pull": zero.clone(), "push": zero.clone(), "norm": zero.clone()}
-                for cid in unique_classes:
-                    class_mask = (semantic_ids == cid).long()
-                    out = self._loss_single(embed, label * class_mask, weight_edge, weight_bone)
-                    for k in accum:
-                        accum[k] = accum[k] + out[k]
-                nc = len(unique_classes)
-                return {k: v / nc for k, v in accum.items()}
+                acc = {k: zero.clone() for k in ("loss", "pull", "push", "norm")}
+                for cid in classes:
+                    out = self._loss_single(
+                        embed, label * (semantic_ids == cid).long(),
+                        weight_edge, weight_bone,
+                    )
+                    for k in acc:
+                        acc[k] = acc[k] + out[k]
+                return {k: v / len(classes) for k, v in acc.items()}
 
         return self._loss_single(embed, label, weight_edge, weight_bone)
 
