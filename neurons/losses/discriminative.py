@@ -313,7 +313,7 @@ def _covariance_one_cupy(labels_cp, uid, S, sigma):
     for c in range(S * S):
         st_inst[c][mask] = st_inst[c][mask] * edt_scale[mask]
 
-    return (int(uid), cp.asnumpy(mask), cp.asnumpy(st_inst))
+    return (int(uid), mask, st_inst)  # cupy arrays — no host transfer
 
 
 def _covariance_worker(args):
@@ -405,9 +405,9 @@ def _compute_covariance(
             res = _covariance_one_cupy(labels_cp, int(uid), S, sigma)
             if res is None:
                 continue
-            _, mask, st_inst = res
+            _, mask_cp, st_inst_cp = res                           # cupy arrays
             for c in range(S * S):
-                st_cp[c][mask] = cp.asarray(st_inst[c][mask])
+                st_cp[c][mask_cp] = st_inst_cp[c][mask_cp]
 
         return rearrange(
             cupy_to_torch(st_cp, device=device).float(), "c ... -> c (...)",

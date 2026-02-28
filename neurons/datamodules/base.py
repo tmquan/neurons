@@ -151,6 +151,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
+            prefetch_factor=2 if self.num_workers > 0 else None,
             drop_last=True,
         )
 
@@ -162,6 +163,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
+            prefetch_factor=2 if self.num_workers > 0 else None,
         )
 
     def test_dataloader(self) -> torch.utils.data.DataLoader:

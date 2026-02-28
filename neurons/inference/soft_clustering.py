@@ -169,7 +169,7 @@ class SoftMeanShift(nn.Module):
     def _merge_modes(
         self, modes: torch.Tensor, factor: float = 0.5,
     ) -> torch.Tensor:
-        """Merge modes closer than factor * bandwidth."""
+        """Merge modes closer than factor * bandwidth (greedy, vectorised)."""
         if modes.shape[0] <= 1:
             return modes
         pw = torch.cdist(modes, modes)
@@ -179,9 +179,9 @@ class SoftMeanShift(nn.Module):
         for i in range(K):
             if not keep[i]:
                 continue
-            for j in range(i + 1, K):
-                if keep[j] and pw[i, j] < threshold:
-                    keep[j] = False
+            dups = (pw[i] < threshold) & keep
+            dups[i] = False
+            keep[dups] = False
         return modes[keep]
 
     def _filter_small_clusters(
