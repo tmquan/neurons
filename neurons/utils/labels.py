@@ -156,7 +156,15 @@ def relabel_sequential(
 # -----------------------------------------------------------------------
 
 def _cc_worker_3d(args):
-    """Per-instance CC labelling for 3D volumes -- used by pmap."""
+    """Per-instance connected-component labelling for 3D volumes (pmap worker).
+
+    Args:
+        args: (labels_np, old_label, structure) — full label volume, target id,
+              and scipy structuring element.
+
+    Returns:
+        (old_label, labeled_mask, num_features).
+    """
     from scipy import ndimage
     labels_np, old_label, structure = args
     mask = labels_np == old_label
@@ -165,7 +173,10 @@ def _cc_worker_3d(args):
 
 
 def _cc_worker_2d(args):
-    """Per-instance CC labelling for 2D images -- used by pmap."""
+    """Per-instance connected-component labelling for 2D images (pmap worker).
+
+    Same interface as ``_cc_worker_3d`` but for 2D label arrays.
+    """
     from scipy import ndimage
     labels_np, old_label, structure = args
     mask = labels_np == old_label
@@ -401,7 +412,7 @@ def cluster_embeddings_meanshift(
     labels_full = torch.zeros(emb_flat.shape[0], device=device, dtype=torch.long)
     labels_full[fg_indices] = labels_fg
 
-    labels_out = labels_full.reshape(spatial_shape)
+    labels_out = labels_full.view(spatial_shape)
     return labels_out
 
 

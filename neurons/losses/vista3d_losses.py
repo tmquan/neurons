@@ -29,7 +29,14 @@ _PAD_TUPLE = (1, 1, 1, 1, 1, 1)
 # -----------------------------------------------------------------------
 
 def _edt_worker(args):
-    """Per-instance EDT for pmap subprocesses (CPU/scipy)."""
+    """Per-instance normalised EDT for pmap subprocesses (CPU/scipy).
+
+    Args:
+        args: tuple of (label_np_b, uid) — 3D label array and instance id.
+
+    Returns:
+        (uid, dt) where dt is the normalised [0,1] distance transform.
+    """
     from scipy.ndimage import distance_transform_edt
     label_np_b, uid = args
     mask = label_np_b == uid

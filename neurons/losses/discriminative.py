@@ -44,7 +44,7 @@ def _flatten_spatial(
     embedding: torch.Tensor,
     ins_label: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, bool]:
-    """Flatten spatial dims for both 2-D and 3-D inputs."""
+    """Flatten spatial dims → (embed_flat [B,E,N], label_flat [B,N], is_3d)."""
     is_3d = embedding.dim() == 5
     if is_3d:
         embed_flat = rearrange(embedding, "b e d h w -> b e (d h w)")
@@ -65,7 +65,7 @@ def _build_instance_index(
     ins: torch.Tensor,
     unique_ids: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, int]:
-    """Map raw instance ids to contiguous 0..K-1 indices."""
+    """Map raw instance ids → contiguous 0..K-1.  Returns (idx, valid_mask, K)."""
     num = len(unique_ids)
     max_id = int(ins.max().item()) + 1
     id2idx = torch.full((max_id,), -1, device=ins.device, dtype=torch.long)
@@ -82,7 +82,7 @@ def _scatter_mean(
     valid: torch.Tensor,
     num_clusters: int,
 ) -> torch.Tensor:
-    """Compute per-cluster mean embedding via scatter_add."""
+    """Per-cluster mean embedding via scatter_add.  Returns [K, E]."""
     E = emb.shape[0]
     device, dtype = emb.device, emb.dtype
 
@@ -102,7 +102,7 @@ def _scatter_mean(
 
 
 def _make_coord_grid(spatial_shape: Tuple, device: torch.device) -> torch.Tensor:
-    """Build coordinate grid [S, N] in (x, y[, z]) order, flattened."""
+    """Build flattened coordinate grid [S, N] in reversed (x,y[,z]) order."""
     ranges = [torch.arange(s, device=device, dtype=torch.float32)
               for s in spatial_shape]
     grids = torch.meshgrid(*ranges, indexing="ij")
@@ -112,10 +112,17 @@ def _make_coord_grid(spatial_shape: Tuple, device: torch.device) -> torch.Tensor
 
 
 def _spatial_gradient(x: torch.Tensor) -> List[torch.Tensor]:
-    """Central-difference spatial gradient (matches ``numpy.gradient``)."""
+    """Central-difference spatial gradient, one tensor per dim.
+
+    Matches ``numpy.gradient``:  interior uses (f[i+1] - f[i-1]) / 2,
+    boundaries use forward/backward first-order differences.
+    Returns a list of S tensors, one per spatial dimension.
+    """
     grads: List[torch.Tensor] = []
     for d in range(x.dim()):
         g = torch.zeros_like(x)
+
+        # Interior: central difference  (f[i+1] - f[i-1]) / 2
         pre  = [slice(None)] * x.dim()
         post = [slice(None)] * x.dim()
         ctr  = [slice(None)] * x.dim()
@@ -123,14 +130,19 @@ def _spatial_gradient(x: torch.Tensor) -> List[torch.Tensor]:
         post[d] = slice(2, None)
         ctr[d]  = slice(1, -1)
         g[tuple(ctr)] = (x[tuple(post)] - x[tuple(pre)]) / 2.0
+
+        # First element: forward difference  f[1] - f[0]
         s0 = [slice(None)] * x.dim()
         s1 = [slice(None)] * x.dim()
         s0[d], s1[d] = slice(0, 1), slice(1, 2)
         g[tuple(s0)] = x[tuple(s1)] - x[tuple(s0)]
+
+        # Last element: backward difference  f[-1] - f[-2]
         sm1 = [slice(None)] * x.dim()
         sm2 = [slice(None)] * x.dim()
         sm1[d], sm2[d] = slice(-1, None), slice(-2, -1)
         g[tuple(sm1)] = x[tuple(sm1)] - x[tuple(sm2)]
+
         grads.append(g)
     return grads
 
@@ -138,8 +150,13 @@ def _spatial_gradient(x: torch.Tensor) -> List[torch.Tensor]:
 def _flat_indices(
     coords_ij: torch.Tensor, spatial_shape: Tuple,
 ) -> torch.Tensor:
-    """Convert [P, S] dim-order coordinates to flat linear indices."""
+    """Convert [P, S] dim-order coordinates → flat linear indices.
+
+    Computes row-major strides for *spatial_shape* and dot-products
+    each coordinate row with the stride vector.
+    """
     S = len(spatial_shape)
+    # Row-major strides: last dim has stride 1, second-to-last has stride W, etc.
     stride = 1
     strides: List[int] = []
     for d in reversed(range(S)):
@@ -259,7 +276,17 @@ def _compute_skeleton_offsets(
 # -----------------------------------------------------------------------
 
 def _covariance_one_cupy(labels_cp, uid, S, sigma):
-    """Per-instance structure tensor entirely in cupy -- no host transfers."""
+    """Per-instance EDT structure tensor, entirely in cupy (no host transfers).
+
+    Five phases:
+    1. EDT of the binary instance mask
+    2. Smoothed gradient estimation (derivative-order gaussian_filter)
+    3. Structure tensor: outer product of gradients, smoothed
+    4. Isotropy blending: lerp toward isotropic tensor at the medial axis
+    5. EDT magnitude scaling: centre voxels carry larger tensors
+
+    Returns (uid, mask_cp, st_cp) — all cupy arrays.
+    """
     import cupy as cp
     from cupyx.scipy.ndimage import distance_transform_edt as cp_edt
     from cupyx.scipy.ndimage import gaussian_filter as cp_gauss
@@ -271,19 +298,22 @@ def _covariance_one_cupy(labels_cp, uid, S, sigma):
     if int(mask.sum()) < 2:
         return None
 
+    # Phase 1: Euclidean distance transform of the instance mask
     dt = cp_edt(mask).astype(cp.float64)
     mask_f = mask.astype(cp.float64)
     edt_max = float(dt.max())
     norm = cp.maximum(cp_gauss(mask_f, sigma=sigma), 1e-10)
 
+    # Phase 2: smoothed spatial gradient of the EDT (one per spatial dim)
     grads = []
     for i in range(S):
         order = [0] * S
-        order[S - 1 - i] = 1
+        order[S - 1 - i] = 1                                      # derivative along dim i (reversed xy order)
         g = cp_gauss(dt, sigma=sigma_d, order=order)
-        g = g * mask_f
+        g = g * mask_f                                             # zero outside instance
         grads.append(g)
 
+    # Phase 3: structure tensor = smoothed outer product of gradient vectors
     st_inst = cp.zeros((S * S,) + spatial_shape, dtype=cp.float32)
     idx = 0
     for i in range(S):
@@ -291,12 +321,14 @@ def _covariance_one_cupy(labels_cp, uid, S, sigma):
             st_inst[idx][mask] = (cp_gauss(grads[i] * grads[j], sigma=sigma) / norm)[mask]
             idx += 1
 
+    # Phase 4: isotropy blending — lerp ST toward (trace/S)*I at medial axis
+    # w = 0 at boundary (preserve anisotropy), w = 1 at centre (fully isotropic)
     w = cp.zeros_like(dt)
     if edt_max > 1e-6:
         w[mask] = (dt[mask] / edt_max) ** 2
 
     trace = sum(st_inst[i * S + i] for i in range(S))
-    iso_val = trace / S
+    iso_val = trace / S                                            # isotropic value = trace / S
 
     idx = 0
     for i in range(S):
@@ -307,13 +339,14 @@ def _covariance_one_cupy(labels_cp, uid, S, sigma):
                 st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(cp.float32)
             idx += 1
 
+    # Phase 5: scale by normalised EDT so centre voxels have larger magnitude
     edt_scale = cp.zeros_like(dt, dtype=cp.float32)
     if edt_max > 1e-6:
         edt_scale[mask] = (dt[mask] / edt_max).astype(cp.float32)
     for c in range(S * S):
         st_inst[c][mask] = st_inst[c][mask] * edt_scale[mask]
 
-    return (int(uid), mask, st_inst)  # cupy arrays — no host transfer
+    return (int(uid), mask, st_inst)
 
 
 def _covariance_worker(args):

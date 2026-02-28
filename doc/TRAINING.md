@@ -296,9 +296,9 @@ loss:
   weight_edge: 10.0         # boundary pixel weight multiplier
   weight_bone: 10.0         # skeleton pixel weight multiplier
 
-  # Geometry
+  # Geometry (auxiliary — not used at inference)
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0            # 0.0 recommended: disables expensive structure tensor
   weight_raw: 1.0
   dir_target: centroid       # "centroid" or "skeleton"
 
@@ -384,5 +384,64 @@ callback, and produces all visualization panels. Open TensorBoard at
 Multi-GPU training on 4 GPUs with default hyperparameters:
 
 ```bash
-env CUDA_VISIBLE_DEVICES='0,1,2,3,4' PYTHONPATH=$(pwd) python scripts/train.py --config-name snemi3d_microns
+env CUDA_VISIBLE_DEVICES='0,1,2,3' PYTHONPATH=$(pwd) python scripts/train.py --config-name snemi3d_microns
 ```
+
+---
+
+## 8. Performance Tips
+
+### Disable L_cov (structure tensor)
+
+The covariance target computation is the single most expensive operation
+per training step — it runs EDT + multiple gaussian_filters per instance
+per batch element.  Set `weight_cov: 0.0` to skip it entirely:
+
+```yaml
+loss:
+  weight_cov: 0.0    # eliminates ~5000 cupy ops/step
+```
+
+L_dir and L_raw remain active and provide useful auxiliary gradients at
+negligible cost.
+
+### GPU acceleration with cupy
+
+Install [cupy](https://cupy.dev/) to accelerate EDT, gaussian_filter,
+and connected-component labelling on GPU.  Data transfers between PyTorch
+and cupy use DLPack zero-copy (no host round-trips).
+
+The codebase automatically falls back to scipy when cupy is unavailable,
+and to sequential scipy inside DataLoader workers (where CUDA contexts
+are invalid after fork).
+
+### Data pipeline tuning
+
+- **`cache_rate: 0.0`** with `fork`-based workers: volumes are loaded
+  once and shared via copy-on-write.  No need for MONAI caching.
+- **`num_workers: 8`** is a reasonable default for 2 volumes with
+  scipy-based transforms in each worker.
+- **`persistent_workers: true`** (default) keeps worker processes alive
+  between epochs, avoiding re-fork overhead.
+- **`prefetch_factor: 2`** (default) ensures the next batch is ready
+  while the current batch trains.
+
+### Validation budget
+
+`limit_val_batches` controls how many validation batches run per epoch.
+Each val batch computes the full loss (including geometry targets) plus
+SoftMeanShift clustering and four sklearn metrics.  For faster iteration,
+reduce to 10--20:
+
+```yaml
+training:
+  limit_val_batches: 10
+```
+
+### DDP strategy
+
+When only `automatic` mode is active, the point encoder receives no
+gradients.  The training script automatically sets
+`find_unused_parameters=True` and `static_graph=False` for this case.
+When both `automatic` and `proofread` modes are enabled, all parameters
+are used and `static_graph=True` is set for better DDP performance.

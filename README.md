@@ -56,21 +56,27 @@ neurons/
 
 ## Loss Functions
 
+### Vista3DLoss / Vista2DLoss
+
+The main training losses compose three branches:
+
+| Branch | Head | Loss components |
+|--------|------|-----------------|
+| **Semantic** | `head_semantic` | CE + soft IoU + soft Dice |
+| **Instance** | `head_instance` | Pull/push/norm discriminative (boundary + skeleton weighted) |
+| **Geometry** | `head_geometry` | L_dir + L_cov + L_raw (auxiliary, not used at inference) |
+
+The geometry head is purely an auxiliary training signal that enriches
+backbone gradients.  Set `weight_cov: 0.0` to disable the expensive
+structure tensor computation (recommended for large-scale training).
+L_dir (centroid offsets) and L_raw (image reconstruction) are cheap
+and provide useful regularisation.
+
 ### CentroidEmbeddingLoss
 
-Classic De Brabandere et al. (2017) discriminative loss with three optional
-learned projection heads that decode geometric properties from the E-dim
-embedding space:
-
-| Head | Projection | Target |
-|------|-----------|--------|
-| `proj_dir` | `E -> S` | Per-pixel direction toward centroid or skeleton |
-| `proj_cov` | `E -> S*S` | Per-pixel EDT structure tensor (tensor glyph) |
-| `proj_raw` | `E -> 4` | RGBA image reconstruction |
-
-The `dir_target` parameter selects between `"centroid"` (offset toward
-instance centroid) and `"skeleton"` (offset toward nearest topology-preserving
-skeleton point).
+Classic De Brabandere et al. (2017) discriminative loss.
+Pull same-instance embeddings together, push different-instance centroids
+apart, regularise norms.
 
 ### SkeletonEmbeddingLoss
 
@@ -78,12 +84,6 @@ Geometry-aware variant operating on predicted offset fields. Four
 differentiable terms: L2 pull to nearest skeleton point, pairwise push on
 instance centres, cosine boundary penalty (DT gradient alignment), and
 skeleton benefit (differentiable DT sampling via `grid_sample`).
-
-### Vista2DLoss / Vista3DLoss
-
-Combined semantic (CE + optional Dice) and instance (pull/push/norm)
-losses for the two-head Vista architecture, with boundary and skeleton
-weighting via morphological gradient and normalised EDT.
 
 ## Quick Start
 
@@ -162,6 +162,9 @@ All behavior is driven by YAML configs in `configs/`:
 | `cremi3d.yaml` | CREMI3D multi-class segmentation |
 | `microns.yaml` | MICRONS large-scale connectomics |
 | `combine.yaml` | Multi-dataset Vista3D training |
+| `snemi3d_microns.yaml` | Combined SNEMI3D + MICRONS training |
+| `foundation.yaml` | Foundation model (all datasets) |
+| `profiler.yaml` | Profiling configuration |
 
 ## Training
 
@@ -173,13 +176,34 @@ model:
   num_classes: 16
   emb_dim: 16
 loss:
-  ce_weight: 0.5
-  dice_weight: 0.5
+  weight_ce: 1.0
+  weight_dice: 1.0
+  weight_iou: 1.0
   weight_pull: 1.0
   weight_push: 1.0
   delta_v: 0.5
   delta_d: 1.5
+  weight_geometry: 1.0   # auxiliary geometry head (0.0 to disable)
+  weight_cov: 0.0        # disable expensive structure tensor (recommended)
 ```
+
+## GPU Acceleration
+
+When [cupy](https://cupy.dev/) is installed, several expensive operations
+are automatically accelerated on GPU:
+
+| Operation | CPU fallback | GPU (cupy) |
+|-----------|-------------|------------|
+| Distance transform (EDT) | `scipy.ndimage.distance_transform_edt` | `cupyx.scipy.ndimage.distance_transform_edt` |
+| Gaussian filter | `scipy.ndimage.gaussian_filter` | `cupyx.scipy.ndimage.gaussian_filter` |
+| Connected components | `scipy.ndimage.label` | `cupyx.scipy.ndimage.label` |
+
+Data transfer between PyTorch and cupy uses **DLPack zero-copy** — no
+host/device round-trips.  See `neurons/utils/gpu_ndimage.py` for the
+`torch_to_cupy()` / `cupy_to_torch()` helpers.
+
+DataLoader workers (forked processes) automatically fall back to the CPU
+path since CUDA contexts do not survive `fork()`.
 
 ## Running Tests
 

@@ -118,37 +118,44 @@ class SoftMeanShift(nn.Module):
             modes = self._init_seeds(emb_b, fg_b, max_seeds)
             K = modes.shape[0]
 
+            # --- Mean-shift iteration: refine modes via Gaussian-weighted average ---
             for _ in range(self.num_iters):
-                emb_fg = emb_b[:, fg_b]                           # [E, M]
+                emb_fg = emb_b[:, fg_b]                           # [E, M] foreground only
                 diff = (rearrange(emb_fg, "e n -> 1 e n")
                         - rearrange(modes, "k e -> k e 1"))       # [K, E, M]
                 sq_dist = (diff ** 2).sum(dim=1)                   # [K, M]
+
+                # Gaussian kernel: weight each pixel by proximity to each mode
                 weights = torch.exp(-sq_dist / (2 * self.bandwidth ** 2))
                 weights_sum = weights.sum(dim=1, keepdim=True).clamp(min=1e-8)
+
+                # Weighted mean update: each mode moves toward its kernel-weighted centroid
                 modes = (rearrange(weights, "k n -> k 1 n")
                          * rearrange(emb_fg, "e n -> 1 e n")).sum(dim=2) / weights_sum
 
+                # Merge modes that have converged close together
                 merged = self._merge_modes(modes)
                 if merged.shape[0] < modes.shape[0]:
                     modes = merged
                     K = modes.shape[0]
 
+            # --- Soft assignment: Gaussian distance to each final mode ---
             diff_all = (rearrange(emb_b, "e n -> 1 e n")
                         - rearrange(modes, "k e -> k e 1"))       # [K, E, N]
             sq_dist_all = (diff_all ** 2).sum(dim=1)
             logits = -sq_dist_all / (2 * self.bandwidth ** 2 * self.temperature)
-            soft = F.softmax(logits, dim=0)
+            soft = F.softmax(logits, dim=0)                        # [K, N]
 
+            # Hard assignment: argmax + 1 (0 reserved for background)
             hard = soft.argmax(dim=0) + 1
             hard[~fg_b] = 0
-
             hard = self._filter_small_clusters(hard, K)
 
             all_labels.append(hard)
             all_soft.append(soft)
             all_centers.append(modes)
 
-        labels = torch.stack(all_labels).reshape(B, *spatial_shape)
+        labels = torch.stack(all_labels).view(B, *spatial_shape)
 
         max_K = max(s.shape[0] for s in all_soft)
         padded_soft = []
@@ -161,7 +168,7 @@ class SoftMeanShift(nn.Module):
             padded_soft.append(s)
             padded_centers.append(c)
 
-        soft_assign = torch.stack(padded_soft).reshape(B, max_K, *spatial_shape)
+        soft_assign = torch.stack(padded_soft).view(B, max_K, *spatial_shape)
         centers = torch.stack(padded_centers)
 
         return labels, soft_assign, centers
@@ -169,7 +176,11 @@ class SoftMeanShift(nn.Module):
     def _merge_modes(
         self, modes: torch.Tensor, factor: float = 0.5,
     ) -> torch.Tensor:
-        """Merge modes closer than factor * bandwidth (greedy, vectorised)."""
+        """Greedily merge modes closer than ``factor * bandwidth``.
+
+        Keeps the first mode in each cluster of near-duplicates and
+        discards the rest.  Uses vectorised mask updates.
+        """
         if modes.shape[0] <= 1:
             return modes
         pw = torch.cdist(modes, modes)
@@ -187,6 +198,7 @@ class SoftMeanShift(nn.Module):
     def _filter_small_clusters(
         self, labels: torch.Tensor, K: int,
     ) -> torch.Tensor:
+        """Set clusters with fewer than ``min_cluster_size`` pixels to 0."""
         """Remove clusters smaller than min_cluster_size."""
         labels = labels.clone()
         for uid in range(1, K + 1):
@@ -311,6 +323,6 @@ class HoughVoting(nn.Module):
 
             label_flat = torch.zeros(fg.numel(), device=device, dtype=torch.long)
             label_flat[fg_indices] = nearest
-            all_labels.append(label_flat.reshape(spatial_shape))
+            all_labels.append(label_flat.view(spatial_shape))
 
         return torch.stack(all_labels)
