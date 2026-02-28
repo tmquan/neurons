@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from neurons.losses.discriminative import GeometryLoss
-from neurons.losses.vista3d_losses import _edt_worker
+from neurons.losses.vista3d_losses import _edt_worker, _edt_worker_gpu
 from neurons.utils.parallel import pmap
 
 _SPATIAL_DIMS = 2
@@ -236,8 +236,10 @@ class InstanceLoss(nn.Module):
 
     @torch.no_grad()
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
+        from neurons.utils.gpu_ndimage import _use_gpu as _cupy_ok
         weight_bone = torch.ones_like(label, dtype=torch.float32)
         label_np = label.cpu().numpy()
+        use_gpu = _cupy_ok()
 
         for b in range(label.shape[0]):
             unique_ids = np.unique(label_np[b])
@@ -245,11 +247,15 @@ class InstanceLoss(nn.Module):
             if len(fg_ids) == 0:
                 continue
 
-            args = [(label_np[b], int(uid)) for uid in fg_ids]
-            if len(fg_ids) > 4:
-                results = pmap(_edt_worker, args)
+            if use_gpu:
+                results = [_edt_worker_gpu(label_np[b], int(uid))
+                           for uid in fg_ids]
             else:
-                results = [_edt_worker(a) for a in args]
+                args = [(label_np[b], int(uid)) for uid in fg_ids]
+                if len(fg_ids) > 4:
+                    results = pmap(_edt_worker, args)
+                else:
+                    results = [_edt_worker(a) for a in args]
 
             for uid, dt in results:
                 inst_mask = label[b] == uid

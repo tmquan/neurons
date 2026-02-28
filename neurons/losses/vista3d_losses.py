@@ -24,8 +24,19 @@ _POOL_FN = F.max_pool3d
 _PAD_TUPLE = (1, 1, 1, 1, 1, 1)
 
 
+def _edt_worker_gpu(label_np_b, uid):
+    """Per-instance EDT using GPU-accelerated ndimage (cupy or scipy)."""
+    from neurons.utils.gpu_ndimage import distance_transform_edt
+    mask = label_np_b == uid
+    dt = distance_transform_edt(mask).astype(np.float32)
+    max_d = dt.max()
+    if max_d > 0:
+        dt /= max_d
+    return (uid, dt)
+
+
 def _edt_worker(args):
-    """Per-instance EDT worker for multiprocessing (numpy only)."""
+    """Per-instance EDT worker for pmap (CPU scipy only -- no cupy in subprocesses)."""
     from scipy.ndimage import distance_transform_edt
     label_np_b, uid = args
     mask = label_np_b == uid
@@ -247,8 +258,10 @@ class InstanceLoss(nn.Module):
 
     @torch.no_grad()
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
+        from neurons.utils.gpu_ndimage import _use_gpu as _cupy_ok
         weight_bone = torch.ones_like(label, dtype=torch.float32)
         label_np = label.cpu().numpy()
+        use_gpu = _cupy_ok()
 
         for b in range(label.shape[0]):
             unique_ids = np.unique(label_np[b])
@@ -256,11 +269,15 @@ class InstanceLoss(nn.Module):
             if len(fg_ids) == 0:
                 continue
 
-            args = [(label_np[b], int(uid)) for uid in fg_ids]
-            if len(fg_ids) > 4:
-                results = pmap(_edt_worker, args)
+            if use_gpu:
+                results = [_edt_worker_gpu(label_np[b], int(uid))
+                           for uid in fg_ids]
             else:
-                results = [_edt_worker(a) for a in args]
+                args = [(label_np[b], int(uid)) for uid in fg_ids]
+                if len(fg_ids) > 4:
+                    results = pmap(_edt_worker, args)
+                else:
+                    results = [_edt_worker(a) for a in args]
 
             for uid, dt in results:
                 inst_mask = label[b] == uid

@@ -26,7 +26,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
-from scipy.ndimage import distance_transform_edt as _scipy_edt
+from neurons.utils.gpu_ndimage import (
+    distance_transform_edt as _gpu_edt,
+    gaussian_filter as _gpu_gauss,
+    _use_gpu as _cupy_available,
+)
 
 from neurons.losses.skeletonize import Skeletonize
 from neurons.utils.parallel import pmap
@@ -313,14 +317,67 @@ def _compute_skeleton_offsets(
     return offsets
 
 
-def _covariance_worker(args):
-    """Per-instance structure tensor worker (numpy only, no torch).
+def _covariance_one(labels_np, uid, S, sigma):
+    """Per-instance structure tensor (uses gpu_ndimage: cupy when available).
 
     The structure tensor is scaled by normalised EDT so that pixels near
     the instance centre (high EDT) carry larger magnitude and boundary
-    pixels (low EDT) are attenuated.  This encodes global instance
-    structure into the tensor field.
+    pixels (low EDT) are attenuated.
     """
+    sigma_d = max(1.0, sigma / 3.0)
+    spatial_shape = labels_np.shape
+
+    mask = labels_np == uid
+    if mask.sum() < 2:
+        return None
+
+    dt = _gpu_edt(mask).astype(np.float64)
+    mask_f = mask.astype(np.float64)
+    edt_max = dt.max()
+    norm = np.maximum(_gpu_gauss(mask_f, sigma=sigma), 1e-10)
+
+    grads = []
+    for i in range(S):
+        order = [0] * S
+        order[S - 1 - i] = 1
+        g = _gpu_gauss(dt, sigma=sigma_d, order=order)
+        g *= mask_f
+        grads.append(g)
+
+    st_inst = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
+    idx = 0
+    for i in range(S):
+        for j in range(S):
+            st_inst[idx][mask] = (_gpu_gauss(grads[i] * grads[j], sigma=sigma) / norm)[mask]
+            idx += 1
+
+    w = np.zeros_like(dt)
+    if edt_max > 1e-6:
+        w[mask] = (dt[mask] / edt_max) ** 2
+
+    trace = sum(st_inst[i * S + i] for i in range(S))
+    iso_val = trace / S
+
+    idx = 0
+    for i in range(S):
+        for j in range(S):
+            if i == j:
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask] + w[mask] * iso_val[mask]).astype(np.float32)
+            else:
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(np.float32)
+            idx += 1
+
+    edt_scale = np.zeros_like(dt, dtype=np.float32)
+    if edt_max > 1e-6:
+        edt_scale[mask] = (dt[mask] / edt_max).astype(np.float32)
+    for c in range(S * S):
+        st_inst[c][mask] *= edt_scale[mask]
+
+    return (uid, mask, st_inst)
+
+
+def _covariance_worker(args):
+    """Wrapper for pmap (CPU fallback path)."""
     from scipy.ndimage import distance_transform_edt, gaussian_filter
     labels_np, uid, S, sigma = args
     sigma_d = max(1.0, sigma / 3.0)
@@ -412,11 +469,15 @@ def _compute_covariance(
     uids = uids[uids > 0]
 
     if len(uids) > 0:
-        args = [(labels_np, int(uid), S, sigma) for uid in uids]
-        if len(uids) > 4:
-            results = pmap(_covariance_worker, args)
+        if _cupy_available():
+            results = [_covariance_one(labels_np, int(uid), S, sigma)
+                       for uid in uids]
         else:
-            results = [_covariance_worker(a) for a in args]
+            args = [(labels_np, int(uid), S, sigma) for uid in uids]
+            if len(uids) > 4:
+                results = pmap(_covariance_worker, args)
+            else:
+                results = [_covariance_worker(a) for a in args]
 
         for res in results:
             if res is None:
@@ -488,7 +549,7 @@ def _compute_skeleton_targets(
                 nr_skel_flat[s, fi] = nearest_ridge[:, s]
 
             dt = torch.from_numpy(
-                _scipy_edt(mask.cpu().numpy())
+                _gpu_edt(mask.cpu().numpy())
             ).to(device=device, dtype=torch.float32)
             dt_max = dt[mask].max()
             normed = dt / dt_max if dt_max > 0 else dt
