@@ -60,7 +60,7 @@ def pmap(
     if len(args_list) == 0:
         return []
 
-    if len(args_list) <= 2:
+    if len(args_list) <= 4:
         return [fn(a) for a in args_list]
 
     try:

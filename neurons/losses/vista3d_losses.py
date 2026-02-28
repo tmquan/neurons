@@ -257,7 +257,10 @@ class InstanceLoss(nn.Module):
                 continue
 
             args = [(label_np[b], int(uid)) for uid in fg_ids]
-            results = pmap(_edt_worker, args)
+            if len(fg_ids) > 4:
+                results = pmap(_edt_worker, args)
+            else:
+                results = [_edt_worker(a) for a in args]
 
             for uid, dt in results:
                 inst_mask = label[b] == uid
@@ -446,16 +449,27 @@ class Vista3DLoss(nn.Module):
             spatial_dims=_SPATIAL_DIMS, **geom_kwargs,
         ) if weight_geometry > 0 else None
 
+        self._cache_key: Optional[Tuple] = None
+        self._cached_ins_weights: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        self._cached_geom_targets: Optional[Dict] = None
+
+    @staticmethod
+    def _label_fingerprint(labels: torch.Tensor) -> Tuple:
+        return (labels.shape, labels.data_ptr(), int(labels.sum().item()))
+
     def _get_cached_targets(
         self, labels: torch.Tensor,
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Optional[Dict]]:
-        """Compute expensive targets (recomputed every call to avoid stale cache)."""
-        ins_weights = self.instance_loss.compute_weights(labels)
-        if self.geometry_loss is not None:
-            geom_targets = self.geometry_loss.compute_targets(labels)
-        else:
-            geom_targets = None
-        return ins_weights, geom_targets
+        """Compute or retrieve cached expensive targets for the given labels."""
+        key = self._label_fingerprint(labels)
+        if key != self._cache_key:
+            self._cache_key = key
+            self._cached_ins_weights = self.instance_loss.compute_weights(labels)
+            if self.geometry_loss is not None:
+                self._cached_geom_targets = self.geometry_loss.compute_targets(labels)
+            else:
+                self._cached_geom_targets = None
+        return self._cached_ins_weights, self._cached_geom_targets
 
     def forward(
         self,

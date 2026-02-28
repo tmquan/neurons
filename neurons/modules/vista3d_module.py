@@ -246,6 +246,9 @@ class Vista3DModule(pl.LightningModule):
 
         targets = self._prepare_targets(batch)
 
+        if len(self.training_modes) > 1:
+            self.criterion._get_cached_targets(targets["labels"])
+
         all_losses: Dict[str, torch.Tensor] = {}
         mode_losses = []
 

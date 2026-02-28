@@ -289,8 +289,17 @@ def _compute_skeleton_offsets(
         pixel_ij = torch.nonzero(mask, as_tuple=False)
         pixel_xy = pixel_ij.flip(1).float()
 
-        dists = torch.cdist(pixel_xy, skel_xy)                # [P, R]
-        nearest_skel = skel_xy[dists.argmin(dim=1)]            # [P, S]
+        P = pixel_xy.shape[0]
+        CHUNK = 4096
+        if P <= CHUNK:
+            dists = torch.cdist(pixel_xy, skel_xy)
+            nearest_skel = skel_xy[dists.argmin(dim=1)]
+        else:
+            nearest_skel = torch.empty_like(pixel_xy)
+            for i in range(0, P, CHUNK):
+                chunk = pixel_xy[i:i + CHUNK]
+                d = torch.cdist(chunk, skel_xy)
+                nearest_skel[i:i + CHUNK] = skel_xy[d.argmin(dim=1)]
         off_xy = nearest_skel - pixel_xy                       # [P, S]
 
         max_dist = off_xy.norm(dim=1).max().clamp(min=1e-6)
@@ -379,7 +388,7 @@ def _compute_covariance(
     so that pixels near the instance centre carry larger magnitude and
     boundary pixels are attenuated.
 
-    Parallelized across instances using ``torch.multiprocessing``.
+    Uses parallel processing for many instances, sequential for few.
 
     Args:
         lbl_flat: [N] instance labels (0 = background).
@@ -404,7 +413,10 @@ def _compute_covariance(
 
     if len(uids) > 0:
         args = [(labels_np, int(uid), S, sigma) for uid in uids]
-        results = pmap(_covariance_worker, args)
+        if len(uids) > 4:
+            results = pmap(_covariance_worker, args)
+        else:
+            results = [_covariance_worker(a) for a in args]
 
         for res in results:
             if res is None:
