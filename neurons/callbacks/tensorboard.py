@@ -280,8 +280,8 @@ def _render_dir_quiver(
                 CC.ravel()[m], RR.ravel()[m],
                 U.ravel()[m], V.ravel()[m],
                 color=COLOR,
-                angles="xy", scale_units="xy", scale=1.0 / (step * 1.0),
-                width=0.010, headwidth=3.0, headlength=3.5,
+                angles="xy", scale_units="xy", scale=1.0 / (step * 2.0),
+                width=0.014, headwidth=4.0, headlength=4.5,
             )
         ax.set_xlim(-0.5, W - 0.5)
         ax.set_ylim(H - 0.5, -0.5)
