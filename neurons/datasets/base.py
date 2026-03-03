@@ -39,10 +39,12 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
         transform: Optional[Callable] = None,
         cache_rate: float = 1.0,
         num_workers: int = 0,
+        patch_size: Optional[Tuple[int, ...]] = None,
     ) -> None:
         self.root_dir = Path(root_dir)
         self.volumes = volumes
         self._virtual_len: Optional[int] = None
+        self._patch_size = tuple(patch_size) if patch_size is not None else None
 
         if not self.root_dir.exists():
             raise FileNotFoundError(
@@ -72,7 +74,57 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
 
     def __getitem__(self, index: int) -> Any:
         real_index = index % super().__len__() if self._virtual_len is not None else index
+
+        if self._patch_size is not None:
+            return self._fast_crop(real_index)
+
         return super().__getitem__(real_index)
+
+    def _fast_crop(self, index: int) -> Any:
+        """Crop directly from shared tensor, then apply transforms on the small patch.
+
+        Bypasses MONAI's SpatialPadd / RandSpatialCropd / EnsureChannelFirstd
+        on the full volume.  Instead we do a single tensor slice + clone
+        (microseconds on a shared-memory tensor) and hand the tiny crop
+        to the remaining transforms.  Pads if the volume is smaller than
+        patch_size in any dimension.
+        """
+        d = dict(self.data[index])
+        ps = self._patch_size
+
+        for key in ("image", "label"):
+            arr = d.get(key)
+            if arr is None:
+                continue
+            if not isinstance(arr, torch.Tensor):
+                arr = torch.as_tensor(np.ascontiguousarray(arr))
+
+            ndim = arr.ndim
+            if ndim < len(ps):
+                d[key] = arr.clone().unsqueeze(0)
+                continue
+
+            slices = []
+            for dim_i, p in enumerate(ps):
+                sz = arr.shape[dim_i]
+                start = torch.randint(0, max(1, sz - p + 1), (1,)).item()
+                end = min(start + p, sz)
+                slices.append(slice(start, end))
+
+            crop = arr[tuple(slices)].clone()
+
+            pad_needed = [p - crop.shape[i] for i, p in enumerate(ps)]
+            if any(p > 0 for p in pad_needed):
+                pad_args = []
+                for p in reversed(pad_needed):
+                    pad_args.extend([0, max(0, p)])
+                crop = torch.nn.functional.pad(crop, pad_args)
+
+            d[key] = crop.unsqueeze(0)
+
+        if self.transform is not None:
+            d = self.transform(d)
+        return d
 
     def _get_volume_list(self) -> List[Dict[str, str]]:
         """Return the volume list, falling back to dataset-specific defaults."""

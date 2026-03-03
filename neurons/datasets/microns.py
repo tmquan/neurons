@@ -68,6 +68,7 @@ class MICRONSDataset(CircuitDataset):
             transform=transform,
             cache_rate=cache_rate,
             num_workers=num_workers,
+            patch_size=patch_size if not slice_mode else None,
         )
 
     @property
@@ -205,7 +206,8 @@ class MICRONSDataset(CircuitDataset):
                         entry["label"] = self._to_shared(labels[si])
                     data_list.append(entry)
 
-            elif self.patch_size is not None:
+            elif self.patch_size is not None and self._patch_size is None:
+                # Pre-extract patches only when base class fast crop is NOT active
                 patch_indices = self._generate_patch_indices(
                     inputs.shape, self.patch_size, self.patch_overlap
                 )

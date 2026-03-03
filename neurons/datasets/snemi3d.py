@@ -52,6 +52,7 @@ class SNEMI3DDataset(CircuitDataset):
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
         num_workers: int = 0,
+        patch_size: Optional[tuple] = None,
     ) -> None:
         self.slice_mode = slice_mode
         self._num_samples = num_samples
@@ -64,6 +65,7 @@ class SNEMI3DDataset(CircuitDataset):
             transform=transform,
             cache_rate=cache_rate,
             num_workers=num_workers,
+            patch_size=patch_size if not slice_mode else None,
         )
 
     @property

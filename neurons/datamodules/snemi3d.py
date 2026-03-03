@@ -72,8 +72,16 @@ class SNEMI3DDataModule(CircuitDataModule):
             persistent_workers=persistent_workers,
         )
 
+    @property
+    def _fast_crop(self) -> bool:
+        """True when the dataset handles cropping in __getitem__."""
+        return self.patch_size is not None and not self.slice_mode
+
     def _get_dataset_kwargs(self) -> dict:
-        kwargs: dict = {"slice_mode": self.slice_mode}
+        kwargs: dict = {
+            "slice_mode": self.slice_mode,
+            "patch_size": self.patch_size if self._fast_crop else None,
+        }
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
         return kwargs
@@ -89,17 +97,23 @@ class SNEMI3DDataModule(CircuitDataModule):
     def get_train_transforms(self) -> Compose:
         keys = ["image", "label"]
         spatial_dims = 2 if self.slice_mode else 3
-        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
+        transforms: list = []
 
-        if self.patch_size is not None:
+        if self._fast_crop:
+            # Crop + channel dim already done in dataset.__getitem__
+            transforms.extend(self._label_post_crop(spatial_dims))
+        elif self.patch_size is not None:
             transforms.extend([
+                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
                 Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
-        elif self.image_size is not None:
-            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
+        else:
+            transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
+            if self.image_size is not None:
+                transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
         rot_axes = (0, 1) if self.slice_mode else (1, 2)
         transforms.extend([
@@ -116,17 +130,22 @@ class SNEMI3DDataModule(CircuitDataModule):
     def get_val_transforms(self) -> Compose:
         keys = ["image", "label"]
         spatial_dims = 2 if self.slice_mode else 3
-        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
+        transforms: list = []
 
-        if self.patch_size is not None:
+        if self._fast_crop:
+            transforms.extend(self._label_post_crop(spatial_dims))
+        elif self.patch_size is not None:
             transforms.extend([
+                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
                 Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
-        elif self.image_size is not None:
-            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
+        else:
+            transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
+            if self.image_size is not None:
+                transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
         transforms.append(ToTensord(keys=keys))
         return Compose(transforms)

@@ -56,6 +56,7 @@ class CREMI3DDataset(CircuitDataset):
         include_clefts: bool = True,
         include_mito: bool = False,
         num_samples: Optional[int] = None,
+        patch_size: Optional[Tuple[int, ...]] = None,
         **kwargs: Any,
     ) -> None:
         self.include_clefts = include_clefts
@@ -69,6 +70,7 @@ class CREMI3DDataset(CircuitDataset):
             transform=transform,
             cache_rate=cache_rate,
             num_workers=num_workers,
+            patch_size=patch_size,
         )
 
     @property

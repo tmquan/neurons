@@ -72,6 +72,10 @@ class CREMI3DDataModule(CircuitDataModule):
             persistent_workers=persistent_workers,
         )
 
+    @property
+    def _fast_crop(self) -> bool:
+        return self.patch_size is not None
+
     def _get_dataset_kwargs(self) -> dict:
         kwargs: dict = {
             "include_clefts": self.include_clefts,
@@ -79,6 +83,8 @@ class CREMI3DDataModule(CircuitDataModule):
         }
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
+        if self._fast_crop:
+            kwargs["patch_size"] = self.patch_size
         return kwargs
 
     def _label_post_crop(self) -> list:
@@ -91,17 +97,22 @@ class CREMI3DDataModule(CircuitDataModule):
 
     def get_train_transforms(self) -> Compose:
         keys = ["image", "label"]
-        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
+        transforms: list = []
 
-        if self.patch_size is not None:
+        if self._fast_crop:
+            transforms.extend(self._label_post_crop())
+        elif self.patch_size is not None:
             transforms.extend([
+                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
                 Cloned(keys=keys),
                 *self._label_post_crop(),
             ])
-        elif self.image_size is not None:
-            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
+        else:
+            transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
+            if self.image_size is not None:
+                transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
         transforms.extend([
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
@@ -116,17 +127,22 @@ class CREMI3DDataModule(CircuitDataModule):
 
     def get_val_transforms(self) -> Compose:
         keys = ["image", "label"]
-        transforms = [EnsureChannelFirstd(keys=keys, channel_dim="no_channel")]
+        transforms: list = []
 
-        if self.patch_size is not None:
+        if self._fast_crop:
+            transforms.extend(self._label_post_crop())
+        elif self.patch_size is not None:
             transforms.extend([
+                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
                 Cloned(keys=keys),
                 *self._label_post_crop(),
             ])
-        elif self.image_size is not None:
-            transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
+        else:
+            transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
+            if self.image_size is not None:
+                transforms.append(Resized(keys=keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]))
 
         transforms.append(ToTensord(keys=keys))
         return Compose(transforms)

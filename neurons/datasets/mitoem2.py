@@ -55,6 +55,7 @@ class MitoEM2Dataset(CircuitDataset):
         slice_mode: bool = True,
         slice_axis: int = 0,
         num_samples: Optional[int] = None,
+        patch_size: Optional[Tuple[int, ...]] = None,
     ) -> None:
         self.slice_mode = slice_mode
         self.slice_axis = slice_axis
@@ -67,6 +68,7 @@ class MitoEM2Dataset(CircuitDataset):
             transform=transform,
             cache_rate=cache_rate,
             num_workers=num_workers,
+            patch_size=patch_size if not slice_mode else None,
         )
 
     @property
