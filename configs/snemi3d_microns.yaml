@@ -42,7 +42,7 @@ model:
   num_classes: 16
   emb_dim: 16
   feature_size: 48
-  dropout: 0.0
+  dropout: 0.2
 
 optimizer:
   type: adamw
