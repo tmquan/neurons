@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets.mitoem2 import MitoEM2Dataset
-from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
+from neurons.transforms import Cloned, RelabelAfterCropd, RandFindBoundariesd
 
 
 class MitoEM2DataModule(CircuitDataModule):
@@ -92,6 +92,7 @@ class MitoEM2DataModule(CircuitDataModule):
             transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
         elif self.image_size is not None:
@@ -117,6 +118,7 @@ class MitoEM2DataModule(CircuitDataModule):
             transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
         elif self.image_size is not None:
