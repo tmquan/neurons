@@ -137,7 +137,3 @@ callbacks:
     every_n_epochs: 5
     max_images: 4
 
-  performance_logger:
-    enabled: true
-    log_every_n_steps: 50
-    warmup_steps: 10

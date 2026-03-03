@@ -107,7 +107,12 @@ class CREMI3DDataModule(CircuitDataModule):
         if self.patch_size is not None:
             transforms.extend([
                 EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-                RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                RandSpatialCropd(
+                    keys=keys,
+                    roi_size=self.patch_size,
+                    random_size=False,
+                    random_center=False,
+                ),
                 *self._label_post_crop(),
             ])
         else:

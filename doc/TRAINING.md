@@ -483,12 +483,10 @@ python scripts/train.py --config-name multi_gpu_fast \
   training.compile.mode=default
 ```
 
-### Runtime perf metrics in TensorBoard
+### Runtime perf checks
 
-The `PerformanceLogger` callback logs:
+Use Lightning logs together with `nvidia-smi`/`nvtop` for A/B comparisons:
 
-- `perf/step_time_sec`
-- `perf/samples_per_sec`
-- `perf/max_memory_gb` (CUDA only)
-
-Use these for direct A/B comparisons across config changes.
+- `train/loss` trend and steps/sec from progress output
+- GPU utilization and memory saturation
+- epoch/validation wall-clock time

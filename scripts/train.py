@@ -25,7 +25,6 @@ import multiprocessing
 # DataLoader workers fork from it — no inherited locks, no deadlock.
 multiprocessing.set_start_method("forkserver", force=True)
 
-import sys
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
