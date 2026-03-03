@@ -13,13 +13,12 @@ from monai.transforms import (
     RandRotate90d,
     RandSpatialCropd,
     Resized,
-    SpatialPadd,
     ToTensord,
 )
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import SNEMI3DDataset
-from neurons.transforms import Cloned, RelabelAfterCropd, RandFindBoundariesd
+from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
 
 
 class SNEMI3DDataModule(CircuitDataModule):
@@ -43,51 +42,57 @@ class SNEMI3DDataModule(CircuitDataModule):
         data_root: str,
         batch_size: int = 4,
         num_workers: int = 4,
+        val_num_workers: Optional[int] = None,
+        test_num_workers: Optional[int] = None,
         cache_rate: float = 0.5,
+        cache_num_workers: Optional[int] = None,
         pin_memory: bool = True,
         image_size: Optional[Tuple[int, ...]] = None,
         patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
         slice_mode: bool = False,
         num_samples: Optional[int] = None,
         find_boundaries: float = 0.0,
+        relabel_after_crop: bool = True,
         train_volumes: Optional[List[Dict[str, str]]] = None,
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
-        persistent_workers: bool = True,
+        prefetch_factor: int = 4,
+        persistent_workers: Optional[bool] = None,
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
         self.find_boundaries = find_boundaries
+        self.relabel_after_crop = relabel_after_crop
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
             num_workers=num_workers,
+            val_num_workers=val_num_workers,
+            test_num_workers=test_num_workers,
             cache_rate=cache_rate,
+            cache_num_workers=cache_num_workers,
             pin_memory=pin_memory,
             image_size=image_size,
             train_volumes=train_volumes,
             val_volumes=val_volumes,
             test_volumes=test_volumes,
+            prefetch_factor=prefetch_factor,
             persistent_workers=persistent_workers,
         )
-
-    @property
-    def _fast_crop(self) -> bool:
-        """True when the dataset handles cropping in __getitem__."""
-        return self.patch_size is not None and not self.slice_mode
 
     def _get_dataset_kwargs(self) -> dict:
         kwargs: dict = {
             "slice_mode": self.slice_mode,
-            "patch_size": self.patch_size if self._fast_crop else None,
         }
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
         return kwargs
 
     def _label_post_crop(self, spatial_dims: int) -> list:
-        steps = [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
+        steps = []
+        if self.relabel_after_crop:
+            steps.append(RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims))
         if self.find_boundaries > 0:
             steps.append(RandFindBoundariesd(
                 keys=["label"], prob=self.find_boundaries,
@@ -99,15 +104,10 @@ class SNEMI3DDataModule(CircuitDataModule):
         spatial_dims = 2 if self.slice_mode else 3
         transforms: list = []
 
-        if self._fast_crop:
-            # Crop + channel dim already done in dataset.__getitem__
-            transforms.extend(self._label_post_crop(spatial_dims))
-        elif self.patch_size is not None:
+        if self.patch_size is not None:
             transforms.extend([
                 EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-                SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
         else:
@@ -132,14 +132,10 @@ class SNEMI3DDataModule(CircuitDataModule):
         spatial_dims = 2 if self.slice_mode else 3
         transforms: list = []
 
-        if self._fast_crop:
-            transforms.extend(self._label_post_crop(spatial_dims))
-        elif self.patch_size is not None:
+        if self.patch_size is not None:
             transforms.extend([
                 EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-                SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
         else:

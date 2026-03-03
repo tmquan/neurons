@@ -12,6 +12,8 @@ data:
   data_root: data/SNEMI3D
   batch_size: 8
   num_workers: 8
+  val_num_workers: 4
+  test_num_workers: 4
   cache_rate: 0.0
   slice_mode: false
   train_volumes:
@@ -41,6 +43,7 @@ optimizer:
     eta_min: 1.0e-6
 
 loss:
+  throughput_mode: true
   semantic_mode: sigmoid     # sigmoid (multi-label: mito inside neuron) or softmax (mutually exclusive)
   weight_semantic: 1.0
   weight_ce: 1.0
@@ -57,7 +60,7 @@ loss:
   weight_geometry: 1.0
   dir_target: centroid         # skeleton (geometry-aware) or centroid
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0
   weight_raw: 1.0
   loss_dir: smooth_l1          # smooth_l1 (robust offsets), mse, or l1
   loss_cov: mse                # mse (Frobenius-norm), l1, or smooth_l1
@@ -69,12 +72,12 @@ training:
   accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: auto
   strategy: ddp  # Explicit DDP for even GPU memory distribution
-  precision: 32-true  # Options: 32-true, 16-mixed, bf16-mixed
+  precision: 16-mixed  # Options: 32-true, 16-mixed, bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
-  limit_val_batches: 100
-  check_val_every_n_epoch: 1
+  limit_val_batches: 40
+  check_val_every_n_epoch: 2
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   enable_progress_bar: true

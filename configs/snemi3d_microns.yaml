@@ -12,12 +12,18 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 8
-  cache_rate: 1.0
+  num_workers: 12
+  val_num_workers: 6
+  test_num_workers: 6
+  cache_rate: 0.0
+  cache_num_workers: 8
+  prefetch_factor: 4
+  persistent_workers: true
   slice_mode: false
-  find_boundaries: 1.0   # default for the transform; overridden per-volume below
+  find_boundaries: 0.0
+  relabel_after_crop: false
   num_samples: 16000
-  patch_size: [48, 256, 256]
+  patch_size: [32, 160, 160]
 
   # Merged train: SNEMI3D AC4 + MICRONS train crop
   # find_boundaries is per-volume: 1.0 for SNEMI3D, 0 for MICRONS
@@ -48,11 +54,12 @@ optimizer:
     eta_min: 1.0e-7
 
 loss:
+  throughput_mode: true
   semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
-  weight_iou: 1.0
-  weight_dice: 1.0
+  weight_iou: 0.0
+  weight_dice: 0.0
   weight_instance: 1.0
   weight_pull: 1.0
   weight_push: 1.0
@@ -75,13 +82,14 @@ training:
   max_epochs: 200
   accelerator: auto
   devices: auto
-  strategy: ddp_find_unused_parameters_true
+  strategy: ddp
   precision: bf16-mixed
   accumulate_grad_batches: 2   # effective global batch = batch_size * accum * num_gpus (e.g. 4*2*8=64)
   gradient_clip_val: 1.0
-  limit_val_batches: 100
-  num_sanity_val_steps: 2
+  num_sanity_val_steps: 0
   log_every_n_steps: 50
-  benchmark: false
+  benchmark: true
+  check_val_every_n_epoch: 2
+  limit_val_batches: 40
   training_modes:
     - automatic

@@ -233,10 +233,14 @@ class CombineDataModule(pl.LightningDataModule):
         datamodules: Optional[Dict[str, tuple]] = None,
         batch_size: Optional[int] = None,
         num_workers: Optional[int] = None,
+        val_num_workers: Optional[int] = None,
+        test_num_workers: Optional[int] = None,
         pin_memory: bool = True,
         use_weighted_sampling: bool = True,
         train_expansion_factor: int = 100,
         val_expansion_factor: int = 10,
+        prefetch_factor: int = 4,
+        persistent_workers: Optional[bool] = None,
         ignore_classes: Optional[set] = None,
         # Legacy kwargs for backward compat
         snemi3d_datamodule: Optional[Any] = None,
@@ -261,11 +265,15 @@ class CombineDataModule(pl.LightningDataModule):
         first_dm = next((dm for dm, _ in self._dm_entries.values()), None)
         self.batch_size = batch_size or (getattr(first_dm, "batch_size", 4) if first_dm else 4)
         self.num_workers = num_workers or (getattr(first_dm, "num_workers", 4) if first_dm else 4)
+        self.val_num_workers = self.num_workers if val_num_workers is None else val_num_workers
+        self.test_num_workers = self.val_num_workers if test_num_workers is None else test_num_workers
 
         self.pin_memory = pin_memory
         self.use_weighted_sampling = use_weighted_sampling
         self.train_expansion_factor = train_expansion_factor
         self.val_expansion_factor = val_expansion_factor
+        self.prefetch_factor = prefetch_factor
+        self.persistent_workers = (self.num_workers > 0) if persistent_workers is None else persistent_workers
 
         self.train_dataset: Optional[ConcatDataset] = None
         self.val_dataset: Optional[ConcatDataset] = None
@@ -313,6 +321,7 @@ class CombineDataModule(pl.LightningDataModule):
         """Create training DataLoader."""
         if self.train_dataset is None:
             return None
+        prefetch = self.prefetch_factor if self.num_workers > 0 else None
         return torch.utils.data.DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -320,6 +329,8 @@ class CombineDataModule(pl.LightningDataModule):
             shuffle=not self.use_weighted_sampling,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers and self.num_workers > 0,
+            prefetch_factor=prefetch,
             drop_last=True,
         )
 
@@ -327,10 +338,13 @@ class CombineDataModule(pl.LightningDataModule):
         """Create validation DataLoader."""
         if self.val_dataset is None:
             return None
+        prefetch = self.prefetch_factor if self.val_num_workers > 0 else None
         return torch.utils.data.DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
-            num_workers=self.num_workers,
+            num_workers=self.val_num_workers,
             pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers and self.val_num_workers > 0,
+            prefetch_factor=prefetch,
         )

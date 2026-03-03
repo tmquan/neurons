@@ -15,6 +15,8 @@ data:
   data_root: data/CREMI3D
   batch_size: 4
   num_workers: 8
+  val_num_workers: 4
+  test_num_workers: 4
   cache_rate: 0.0
   slice_mode: false
   num_samples: 4000
@@ -47,6 +49,7 @@ optimizer:
     eta_min: 1.0e-7
 
 loss:
+  throughput_mode: true
   semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
@@ -78,6 +81,7 @@ training:
   precision: 16-mixed
   gradient_clip_val: 1.0
   limit_val_batches: 20
+  check_val_every_n_epoch: 2
   log_every_n_steps: 50
   benchmark: true
   training_modes:

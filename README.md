@@ -163,6 +163,7 @@ All behavior is driven by YAML configs in `configs/`:
 | `microns.yaml` | MICRONS large-scale connectomics |
 | `combine.yaml` | Multi-dataset Vista3D training |
 | `snemi3d_microns.yaml` | Combined SNEMI3D + MICRONS training |
+| `multi_gpu_fast.yaml` | Throughput-optimized multi-GPU preset |
 | `foundation.yaml` | Foundation model (all datasets) |
 | `profiler.yaml` | Profiling configuration |
 

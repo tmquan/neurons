@@ -423,7 +423,7 @@ are invalid after fork).
   scipy-based transforms in each worker.
 - **`persistent_workers: true`** (default) keeps worker processes alive
   between epochs, avoiding re-fork overhead.
-- **`prefetch_factor: 2`** (default) ensures the next batch is ready
+- **`prefetch_factor: 4`** (default) ensures the next batch is ready
   while the current batch trains.
 
 ### Validation budget
@@ -445,3 +445,50 @@ gradients.  The training script automatically sets
 `find_unused_parameters=True` and `static_graph=False` for this case.
 When both `automatic` and `proofread` modes are enabled, all parameters
 are used and `static_graph=True` is set for better DDP performance.
+
+---
+
+## 9. Fast Multi-GPU Recipe
+
+Use the optimized preset:
+
+```bash
+env CUDA_VISIBLE_DEVICES='0,1,2,3' PYTHONPATH=$(pwd) \
+python scripts/train.py --config-name multi_gpu_fast
+```
+
+Key speed knobs now available in config:
+
+- `data.val_num_workers` and `data.test_num_workers` (avoid eval input stalls)
+- `data.cache_num_workers` (dataset cache precompute parallelism)
+- `data.prefetch_factor` and `data.persistent_workers` (loader pipeline depth)
+- `loss.throughput_mode=true` (forces `loss.weight_cov=0.0`)
+- `training.check_val_every_n_epoch` and `training.limit_val_batches`
+
+### Resume a crashed run
+
+```bash
+env CUDA_VISIBLE_DEVICES='0,1,2,3' PYTHONPATH=$(pwd) \
+python scripts/train.py --config-name multi_gpu_fast \
+  training.ckpt_path=outputs/checkpoints/last.ckpt
+```
+
+### Optional torch.compile
+
+Enable only after a stable run is confirmed:
+
+```bash
+python scripts/train.py --config-name multi_gpu_fast \
+  training.compile.enabled=true \
+  training.compile.mode=default
+```
+
+### Runtime perf metrics in TensorBoard
+
+The `PerformanceLogger` callback logs:
+
+- `perf/step_time_sec`
+- `perf/samples_per_sec`
+- `perf/max_memory_gb` (CUDA only)
+
+Use these for direct A/B comparisons across config changes.

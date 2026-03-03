@@ -79,7 +79,12 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         "data_root": data_cfg.get("data_root", "data"),
         "batch_size": data_cfg.get("batch_size", 4),
         "num_workers": data_cfg.get("num_workers", 4),
+        "val_num_workers": data_cfg.get("val_num_workers"),
+        "test_num_workers": data_cfg.get("test_num_workers"),
         "cache_rate": data_cfg.get("cache_rate", 0.5),
+        "cache_num_workers": data_cfg.get("cache_num_workers"),
+        "prefetch_factor": data_cfg.get("prefetch_factor", 4),
+        "persistent_workers": data_cfg.get("persistent_workers"),
         "pin_memory": data_cfg.get("pin_memory", True),
         "train_volumes": train_volumes,
         "val_volumes": val_volumes,
@@ -91,6 +96,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         common_args["image_size"] = tuple(image_size) if isinstance(image_size, list) else image_size
 
     find_boundaries = float(data_cfg.get("find_boundaries", 0.0))
+    relabel_after_crop = bool(data_cfg.get("relabel_after_crop", True))
 
     if dataset_type == "snemi3d":
         patch_size = data_cfg.get("patch_size")
@@ -99,6 +105,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             find_boundaries=find_boundaries,
+            relabel_after_crop=relabel_after_crop,
             **common_args,
         )
 
@@ -110,6 +117,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             find_boundaries=find_boundaries,
+            relabel_after_crop=relabel_after_crop,
             **common_args,
         )
 
@@ -120,6 +128,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             find_boundaries=find_boundaries,
+            relabel_after_crop=relabel_after_crop,
             **common_args,
         )
 
@@ -130,6 +139,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
             find_boundaries=find_boundaries,
+            relabel_after_crop=relabel_after_crop,
             **common_args,
         )
 
@@ -153,9 +163,17 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         data_root=snemi3d_root,
                         batch_size=data_cfg.get("batch_size", 4),
                         num_workers=data_cfg.get("num_workers", 4),
+                        val_num_workers=data_cfg.get("val_num_workers"),
+                        test_num_workers=data_cfg.get("test_num_workers"),
                         cache_rate=data_cfg.get("cache_rate", 0.5),
+                        cache_num_workers=data_cfg.get("cache_num_workers"),
+                        prefetch_factor=data_cfg.get("prefetch_factor", 4),
+                        persistent_workers=data_cfg.get("persistent_workers"),
+                        pin_memory=data_cfg.get("pin_memory", True),
                         patch_size=patch_size,
                         slice_mode=False,
+                        find_boundaries=find_boundaries,
+                        relabel_after_crop=relabel_after_crop,
                         train_volumes=_to_vol_list(snemi3d_cfg.get("train_volumes")),
                         test_volumes=_to_vol_list(snemi3d_cfg.get("test_volumes")),
                     ),
@@ -170,8 +188,16 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         data_root=cremi3d_root,
                         batch_size=data_cfg.get("batch_size", 4),
                         num_workers=data_cfg.get("num_workers", 4),
+                        val_num_workers=data_cfg.get("val_num_workers"),
+                        test_num_workers=data_cfg.get("test_num_workers"),
                         cache_rate=data_cfg.get("cache_rate", 0.5),
+                        cache_num_workers=data_cfg.get("cache_num_workers"),
+                        prefetch_factor=data_cfg.get("prefetch_factor", 4),
+                        persistent_workers=data_cfg.get("persistent_workers"),
+                        pin_memory=data_cfg.get("pin_memory", True),
                         patch_size=patch_size,
+                        find_boundaries=find_boundaries,
+                        relabel_after_crop=relabel_after_crop,
                         train_volumes=_to_vol_list(cremi3d_cfg.get("train_volumes")),
                         test_volumes=_to_vol_list(cremi3d_cfg.get("test_volumes")),
                         include_clefts=cremi3d_cfg.get("include_clefts", True),
@@ -188,10 +214,18 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         data_root=mito_root,
                         batch_size=data_cfg.get("batch_size", 4),
                         num_workers=data_cfg.get("num_workers", 4),
+                        val_num_workers=data_cfg.get("val_num_workers"),
+                        test_num_workers=data_cfg.get("test_num_workers"),
                         cache_rate=data_cfg.get("cache_rate", 0.5),
+                        cache_num_workers=data_cfg.get("cache_num_workers"),
+                        prefetch_factor=data_cfg.get("prefetch_factor", 4),
+                        persistent_workers=data_cfg.get("persistent_workers"),
+                        pin_memory=data_cfg.get("pin_memory", True),
                         train_volumes=_to_vol_list(mitoem2_cfg.get("train_volumes")),
                         test_volumes=_to_vol_list(mitoem2_cfg.get("test_volumes")),
                         slice_mode=False,
+                        find_boundaries=find_boundaries,
+                        relabel_after_crop=relabel_after_crop,
                     ),
                     mitoem2_cfg.get("weight", 1.5),
                 )
@@ -200,6 +234,11 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             datamodules=dm_entries if dm_entries else None,
             batch_size=data_cfg.get("batch_size", 4),
             num_workers=data_cfg.get("num_workers", 4),
+            val_num_workers=data_cfg.get("val_num_workers"),
+            test_num_workers=data_cfg.get("test_num_workers"),
+            prefetch_factor=data_cfg.get("prefetch_factor", 4),
+            persistent_workers=data_cfg.get("persistent_workers"),
+            pin_memory=data_cfg.get("pin_memory", True),
             use_weighted_sampling=True,
         )
 
@@ -215,6 +254,9 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
     optimizer_cfg = dict(cfg.get("optimizer", {}))
     loss_cfg = dict(cfg.get("loss", {}))
     training_cfg = dict(cfg.get("training", {}))
+
+    if loss_cfg.get("throughput_mode", False):
+        loss_cfg["weight_cov"] = 0.0
 
     model_type = model_cfg.pop("type", "vista3d").lower()
 
@@ -280,6 +322,16 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
                 every_n_epochs=img_cfg.get("every_n_epochs", 1),
                 max_images=img_cfg.get("max_images", 4),
                 spatial_dims=3 if "3d" in spatial else 2,
+            )
+        )
+
+    perf_cfg = callback_cfg.get("performance_logger", {})
+    if perf_cfg.get("enabled", True):
+        from neurons.callbacks.performance import PerformanceLogger
+        callbacks.append(
+            PerformanceLogger(
+                log_every_n_steps=perf_cfg.get("log_every_n_steps", 50),
+                warmup_steps=perf_cfg.get("warmup_steps", 10),
             )
         )
 
@@ -358,6 +410,14 @@ def main(cfg: DictConfig) -> None:
     print(f"  Batch size: {cfg.data.get('batch_size', 4)}")
 
     module = get_module(cfg)
+    compile_cfg = cfg.get("training", {}).get("compile", {})
+    if compile_cfg.get("enabled", False):
+        module.model = torch.compile(
+            module.model,
+            mode=compile_cfg.get("mode", "default"),
+            fullgraph=compile_cfg.get("fullgraph", False),
+            dynamic=compile_cfg.get("dynamic", False),
+        )
     print(f"\nModule: {module.__class__.__name__}")
 
     callbacks = setup_callbacks(cfg)
@@ -375,6 +435,10 @@ def main(cfg: DictConfig) -> None:
     if strategy_name == "ddp":
         training_modes = list(training_cfg.get("training_modes", ["automatic"]))
         has_unused_params = "proofread" not in training_modes
+        if has_unused_params:
+            print("DDP optimization: find_unused_parameters=True, static_graph=False")
+        else:
+            print("DDP optimization: find_unused_parameters=False, static_graph=True")
         strategy = DDPStrategy(
             find_unused_parameters=has_unused_params,
             static_graph=not has_unused_params,
@@ -421,8 +485,9 @@ def main(cfg: DictConfig) -> None:
     print("=" * 60 + "\n")
 
     interrupted = False
+    ckpt_path = training_cfg.get("ckpt_path")
     try:
-        trainer.fit(module, datamodule)
+        trainer.fit(module, datamodule, ckpt_path=ckpt_path)
     except KeyboardInterrupt:
         print("\n\nTraining interrupted by user")
         interrupted = True
