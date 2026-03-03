@@ -12,15 +12,15 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 16 
+  num_workers: 24 
   val_num_workers: 8
   test_num_workers: 8
-  cache_rate: 1.0
+  cache_rate: 0.0
   cache_num_workers: 8
-  prefetch_factor: 4
+  prefetch_factor: 32
   persistent_workers: true
   slice_mode: false
-  find_boundaries: 1.0
+  find_boundaries: 0.0
   relabel_after_crop: false
   num_samples: 16000
   patch_size: [48, 256, 256]
@@ -86,7 +86,7 @@ training:
   precision: bf16-mixed
   # accumulate_grad_batches: 2   # effective global batch = batch_size * accum * num_gpus (e.g. 4*2*8=64)
   gradient_clip_val: 1.0
-  num_sanity_val_steps: 0
+  num_sanity_val_steps: 2
   log_every_n_steps: 50
   benchmark: true
   check_val_every_n_epoch: 2

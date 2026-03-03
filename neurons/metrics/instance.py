@@ -44,13 +44,26 @@ def _contingency_table(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build contingency matrix and marginals.
 
+    Remaps labels to contiguous 0..K-1 to avoid huge sparse matrices when
+    instance IDs are large (e.g. CREMI offsets 1e6, 2e6).
+
     Returns (contingency, pred_counts, true_counts).
     """
     from scipy.sparse import coo_matrix
 
     n = len(pred)
+    true_unique, true_inv = np.unique(true, return_inverse=True)
+    pred_unique, pred_inv = np.unique(pred, return_inverse=True)
+    n_true, n_pred = len(true_unique), len(pred_unique)
+
+    # Skip if contingency would exceed ~500M elements (e.g. 22k x 22k)
+    max_elements = 500_000_000
+    if n_true * n_pred > max_elements:
+        return np.zeros((0, 0)), np.array([]), np.array([])
+
     cont = coo_matrix(
-        (np.ones(n, dtype=np.float64), (true.astype(np.int64), pred.astype(np.int64))),
+        (np.ones(n, dtype=np.float64), (true_inv.astype(np.int64), pred_inv.astype(np.int64))),
+        shape=(n_true, n_pred),
     ).toarray()
     true_counts = cont.sum(axis=1)
     pred_counts = cont.sum(axis=0)
@@ -206,6 +219,8 @@ def compute_per_point_voi(
         return VOIResult(0.0, 0.0, 0.0)
 
     cont, pred_counts, true_counts = _contingency_table(pred_flat, true_flat)
+    if cont.size == 0:
+        return VOIResult(0.0, 0.0, 0.0)
     n = float(len(pred_flat))
 
     # H(true|pred) -- split error
@@ -284,6 +299,8 @@ def compute_per_point_ted(
         return 0.0
 
     cont, _, _ = _contingency_table(pred_flat, true_flat)
+    if cont.size == 0:
+        return 0.0
 
     n_splits = 0
     for i in range(cont.shape[0]):

@@ -11,7 +11,6 @@ from monai.transforms import (
     RandFlipd,
     RandGaussianNoised,
     RandRotate90d,
-    RandSpatialCropd,
     Resized,
     ToTensord,
 )
@@ -88,6 +87,8 @@ class CREMI3DDataModule(CircuitDataModule):
         }
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
+        if self.patch_size is not None:
+            kwargs["patch_size"] = self.patch_size
         return kwargs
 
     def _label_post_crop(self) -> list:
@@ -105,16 +106,9 @@ class CREMI3DDataModule(CircuitDataModule):
         transforms: list = []
 
         if self.patch_size is not None:
-            transforms.extend([
-                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-                RandSpatialCropd(
-                    keys=keys,
-                    roi_size=self.patch_size,
-                    random_size=False,
-                    random_center=False,
-                ),
-                *self._label_post_crop(),
-            ])
+            # CREMI3D always uses _fast_crop when patch_size is set (no slice_mode)
+            # Skip EnsureChannelFirstd - _fast_crop already outputs (1, D, H, W)
+            transforms.extend(self._label_post_crop())
         else:
             transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
             if self.image_size is not None:
@@ -136,11 +130,8 @@ class CREMI3DDataModule(CircuitDataModule):
         transforms: list = []
 
         if self.patch_size is not None:
-            transforms.extend([
-                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-                RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                *self._label_post_crop(),
-            ])
+            # CREMI3D always uses _fast_crop when patch_size is set
+            transforms.extend(self._label_post_crop())
         else:
             transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
             if self.image_size is not None:

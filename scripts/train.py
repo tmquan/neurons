@@ -68,7 +68,10 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         """Convert config value to list of dicts or None."""
         if val is None:
             return None
-        return [dict(v) if hasattr(v, "keys") else v for v in val]
+        try:
+            return [dict(v) if hasattr(v, "keys") else v for v in val]
+        except TypeError:
+            return None
 
     train_volumes = _to_vol_list(data_cfg.get("train_volumes"))
     val_volumes = _to_vol_list(data_cfg.get("val_volumes"))
@@ -153,6 +156,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             patch_size = tuple(patch_size)
 
         dm_entries: Dict[str, tuple] = {}
+        microns_cfg = datasets_cfg.get("microns", {})
 
         if snemi3d_cfg.get("enabled", True):
             snemi3d_root = snemi3d_cfg.get("data_root", "data/snemi3d")
@@ -177,6 +181,31 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                         test_volumes=_to_vol_list(snemi3d_cfg.get("test_volumes")),
                     ),
                     snemi3d_cfg.get("weight", 1.0),
+                )
+
+        if microns_cfg.get("enabled", False):
+            microns_root = microns_cfg.get("data_root", "data/microns")
+            if Path(microns_root).exists():
+                dm_entries["microns"] = (
+                    MICRONSDataModule(
+                        data_root=microns_root,
+                        batch_size=data_cfg.get("batch_size", 4),
+                        num_workers=data_cfg.get("num_workers", 4),
+                        val_num_workers=data_cfg.get("val_num_workers"),
+                        test_num_workers=data_cfg.get("test_num_workers"),
+                        cache_rate=data_cfg.get("cache_rate", 0.5),
+                        cache_num_workers=data_cfg.get("cache_num_workers"),
+                        prefetch_factor=data_cfg.get("prefetch_factor", 4),
+                        persistent_workers=data_cfg.get("persistent_workers"),
+                        pin_memory=data_cfg.get("pin_memory", True),
+                        patch_size=patch_size,
+                        slice_mode=microns_cfg.get("slice_mode", False),
+                        find_boundaries=find_boundaries,
+                        relabel_after_crop=relabel_after_crop,
+                        train_volumes=_to_vol_list(microns_cfg.get("train_volumes")),
+                        test_volumes=_to_vol_list(microns_cfg.get("test_volumes")),
+                    ),
+                    microns_cfg.get("weight", 1.0),
                 )
 
         if cremi3d_cfg.get("enabled", True):
@@ -229,8 +258,14 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
                     mitoem2_cfg.get("weight", 1.5),
                 )
 
+        if not dm_entries:
+            raise ValueError(
+                "dataset: combine requires at least one enabled dataset with an existing data root. "
+                "Check that data.datasets.{snemi3d,cremi3d,microns,mitoem2}.data_root exists."
+            )
+
         return CombineDataModule(
-            datamodules=dm_entries if dm_entries else None,
+            datamodules=dm_entries,
             batch_size=data_cfg.get("batch_size", 4),
             num_workers=data_cfg.get("num_workers", 4),
             val_num_workers=data_cfg.get("val_num_workers"),

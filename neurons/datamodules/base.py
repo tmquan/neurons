@@ -161,6 +161,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
 
     def train_dataloader(self) -> torch.utils.data.DataLoader:
         prefetch = self.prefetch_factor if self.num_workers > 0 else None
+        ctx = "forkserver" if self.num_workers > 0 else None
         return torch.utils.data.DataLoader(
             self.train_dataset,  # type: ignore[arg-type]
             batch_size=self.batch_size,
@@ -169,11 +170,13 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers and self.num_workers > 0,
             prefetch_factor=prefetch,
+            multiprocessing_context=ctx,
             drop_last=True,
         )
 
     def val_dataloader(self) -> torch.utils.data.DataLoader:
         prefetch = self.prefetch_factor if self.val_num_workers > 0 else None
+        ctx = "forkserver" if self.val_num_workers > 0 else None
         return torch.utils.data.DataLoader(
             self.val_dataset,  # type: ignore[arg-type]
             batch_size=self.batch_size,
@@ -182,10 +185,12 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers and self.val_num_workers > 0,
             prefetch_factor=prefetch,
+            multiprocessing_context=ctx,
         )
 
     def test_dataloader(self) -> torch.utils.data.DataLoader:
         prefetch = self.prefetch_factor if self.test_num_workers > 0 else None
+        ctx = "forkserver" if self.test_num_workers > 0 else None
         return torch.utils.data.DataLoader(
             self.test_dataset,  # type: ignore[arg-type]
             batch_size=self.batch_size,
@@ -194,6 +199,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers and self.test_num_workers > 0,
             prefetch_factor=prefetch,
+            multiprocessing_context=ctx,
         )
 
     def predict_dataloader(self) -> torch.utils.data.DataLoader:

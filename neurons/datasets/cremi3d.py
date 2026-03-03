@@ -7,6 +7,7 @@ CREMI (Circuit Reconstruction from Electron Microscopy Images) Challenge:
 - Annotations: neurons, synaptic clefts, (optionally mitochondria)
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -14,6 +15,8 @@ import numpy as np
 import torch
 
 from neurons.datasets.base import CircuitDataset
+
+logger = logging.getLogger(__name__)
 
 
 class CREMI3DDataset(CircuitDataset):
@@ -200,7 +203,8 @@ class CREMI3DDataset(CircuitDataset):
 
                 return image.astype(np.float32), label
 
-        except Exception:
+        except (OSError, KeyError, ValueError) as e:
+            logger.warning("CREMI3D: skipping volume %s: %s", h5_path, e)
             return None, None
 
     def _load_volume_separate_files(

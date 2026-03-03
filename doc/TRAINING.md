@@ -311,6 +311,51 @@ training:
   point_sample_mode: instance  # "class" or "instance"
 ```
 
+### Multi-dataset training: two workflows
+
+The codebase supports two distinct ways to train on multiple datasets:
+
+**A. Multi-root SNEMI3D** (`dataset: snemi3d` with `train_volumes`)
+
+Use a single dataset class (SNEMI3D) with volumes that each specify their own `root` directory. This supports mixing SNEMI3D + MICRONS (or other compatible formats) in one training run:
+
+```yaml
+data:
+  dataset: snemi3d
+  train_volumes:
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
+    - {vol: minnie65_..., seg: minnie65_..., root: /scratch/MICRONS}
+```
+
+Configs: `snemi3d_microns.yaml`, `combine.yaml`. All volumes must follow the SNEMI3D volume/seg convention.
+
+**B. CombineDataModule** (`dataset: combine`)
+
+Uses separate datamodules (SNEMI3D, CREMI3D, MICRONS, MitoEM2) with a unified semantic label space. Each dataset's labels are mapped via `CreateClassIds`. Enable datasets under `data.datasets.*`:
+
+```yaml
+data:
+  dataset: combine
+  datasets:
+    snemi3d:
+      enabled: true
+      data_root: data/snemi3d
+      weight: 1.0
+    cremi3d:
+      enabled: true
+      data_root: data/cremi3d
+      weight: 1.0
+    microns:
+      enabled: false
+      data_root: data/microns
+    mitoem2:
+      enabled: false
+      data_root: data/mitoem2
+      weight: 1.5
+```
+
+At least one enabled dataset must have an existing `data_root`, or training will raise a clear error.
+
 ---
 
 ## 6. TensorBoard Logged Scalars

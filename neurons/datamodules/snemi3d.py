@@ -13,6 +13,7 @@ from monai.transforms import (
     RandRotate90d,
     RandSpatialCropd,
     Resized,
+    SpatialPadd,
     ToTensord,
 )
 
@@ -87,7 +88,16 @@ class SNEMI3DDataModule(CircuitDataModule):
         }
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
+        if self.patch_size is not None and not self.slice_mode:
+            kwargs["patch_size"] = self.patch_size
         return kwargs
+
+    def _crop_roi_size(self, spatial_dims: int) -> tuple:
+        """Return roi_size matching spatial_dims; use last N elements if patch_size is 3D."""
+        ps = self.patch_size
+        if len(ps) > spatial_dims:
+            return tuple(ps[-spatial_dims:])
+        return tuple(ps)
 
     def _label_post_crop(self, spatial_dims: int) -> list:
         steps = []
@@ -104,17 +114,21 @@ class SNEMI3DDataModule(CircuitDataModule):
         spatial_dims = 2 if self.slice_mode else 3
         transforms: list = []
 
+        use_fast_crop = self.patch_size is not None and not self.slice_mode
         if self.patch_size is not None:
-            transforms.extend([
-                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-                RandSpatialCropd(
-                    keys=keys,
-                    roi_size=self.patch_size,
-                    random_size=False,
-                    random_center=False,
-                ),
-                *self._label_post_crop(spatial_dims),
-            ])
+            roi_size = self._crop_roi_size(spatial_dims)
+            if not use_fast_crop:
+                transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
+                transforms.extend([
+                    SpatialPadd(keys=keys, spatial_size=roi_size),
+                    RandSpatialCropd(
+                        keys=keys,
+                        roi_size=roi_size,
+                        random_size=False,
+                        random_center=True,
+                    ),
+                ])
+            transforms.extend(self._label_post_crop(spatial_dims))
         else:
             transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
             if self.image_size is not None:
@@ -137,12 +151,21 @@ class SNEMI3DDataModule(CircuitDataModule):
         spatial_dims = 2 if self.slice_mode else 3
         transforms: list = []
 
+        use_fast_crop = self.patch_size is not None and not self.slice_mode
         if self.patch_size is not None:
-            transforms.extend([
-                EnsureChannelFirstd(keys=keys, channel_dim="no_channel"),
-                RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
-                *self._label_post_crop(spatial_dims),
-            ])
+            roi_size = self._crop_roi_size(spatial_dims)
+            if not use_fast_crop:
+                transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
+                transforms.extend([
+                    SpatialPadd(keys=keys, spatial_size=roi_size),
+                    RandSpatialCropd(
+                        keys=keys,
+                        roi_size=roi_size,
+                        random_size=False,
+                        random_center=False,
+                    ),
+                ])
+            transforms.extend(self._label_post_crop(spatial_dims))
         else:
             transforms.append(EnsureChannelFirstd(keys=keys, channel_dim="no_channel"))
             if self.image_size is not None:

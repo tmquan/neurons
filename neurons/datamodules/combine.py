@@ -322,6 +322,7 @@ class CombineDataModule(pl.LightningDataModule):
         if self.train_dataset is None:
             return None
         prefetch = self.prefetch_factor if self.num_workers > 0 else None
+        ctx = "forkserver" if self.num_workers > 0 else None
         return torch.utils.data.DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -331,6 +332,7 @@ class CombineDataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers and self.num_workers > 0,
             prefetch_factor=prefetch,
+            multiprocessing_context=ctx,
             drop_last=True,
         )
 
@@ -339,6 +341,7 @@ class CombineDataModule(pl.LightningDataModule):
         if self.val_dataset is None:
             return None
         prefetch = self.prefetch_factor if self.val_num_workers > 0 else None
+        ctx = "forkserver" if self.val_num_workers > 0 else None
         return torch.utils.data.DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
@@ -347,4 +350,5 @@ class CombineDataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers and self.val_num_workers > 0,
             prefetch_factor=prefetch,
+            multiprocessing_context=ctx,
         )
