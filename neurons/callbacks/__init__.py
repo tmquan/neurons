@@ -6,9 +6,7 @@ Includes:
 """
 
 from neurons.callbacks.tensorboard import ImageLogger
-from neurons.callbacks.performance import PerformanceLogger
 
 __all__ = [
     "ImageLogger",
-    "PerformanceLogger",
 ]

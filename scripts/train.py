@@ -325,16 +325,6 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
             )
         )
 
-    perf_cfg = callback_cfg.get("performance_logger", {})
-    if perf_cfg.get("enabled", True):
-        from neurons.callbacks.performance import PerformanceLogger
-        callbacks.append(
-            PerformanceLogger(
-                log_every_n_steps=perf_cfg.get("log_every_n_steps", 50),
-                warmup_steps=perf_cfg.get("warmup_steps", 10),
-            )
-        )
-
     callbacks.append(RichProgressBar())
     callbacks.append(ModelSummary(max_depth=2))
 
