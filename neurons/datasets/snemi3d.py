@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
+import torch
 
 from neurons.datasets.base import CircuitDataset
 from neurons.preprocessors import HDF5Preprocessor, TIFFPreprocessor
@@ -112,7 +113,8 @@ class SNEMI3DDataset(CircuitDataset):
 
             labels: Optional[np.ndarray] = None
             try:
-                labels = self._load_volume(vol_spec["seg"], root_dir=vol_root).astype(np.int64)
+                labels_np = self._load_volume(vol_spec["seg"], root_dir=vol_root).astype(np.int64)
+                labels = labels_np
             except FileNotFoundError:
                 labels = None
 
@@ -123,18 +125,22 @@ class SNEMI3DDataset(CircuitDataset):
             if self.slice_mode:
                 for si in range(n_slices):
                     entry: Dict[str, Any] = {
-                        "image": inputs[si], "slice_idx": si,
+                        "image": self._to_shared(inputs[si]),
+                        "slice_idx": si,
                         "volume": vol_name, "idx": len(data_list),
                     }
                     if labels is not None:
-                        entry["label"] = labels[si]
+                        entry["label"] = self._to_shared(labels[si])
                     if fb_prob >= 0:
                         entry["_find_boundaries"] = fb_prob
                     data_list.append(entry)
             else:
-                entry = {"image": inputs, "volume": vol_name, "idx": len(data_list)}
+                inputs_shm = self._to_shared(inputs)
+                entry: Dict[str, Any] = {
+                    "image": inputs_shm, "volume": vol_name, "idx": len(data_list),
+                }
                 if labels is not None:
-                    entry["label"] = labels
+                    entry["label"] = self._to_shared(labels)
                 if fb_prob >= 0:
                     entry["_find_boundaries"] = fb_prob
                 data_list.append(entry)

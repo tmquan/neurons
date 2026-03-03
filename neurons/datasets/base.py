@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import torch
 from monai.data import CacheDataset
 from monai.transforms import Randomizable
 
@@ -21,12 +22,6 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
     ``vol`` and ``seg`` keys (basenames or paths).  The dataset loads
     everything in the list without any splitting logic.  The datamodule
     is responsible for choosing which volumes go to train / val / test.
-
-    All connectomics datasets must implement the following properties:
-    - paper: Reference or citation metadata (string)
-    - resolution: Voxel/spatial resolution specification (dict)
-    - labels: List of segmentation class labels (list)
-    - data_files: Dictionary with 'vol' and 'seg' keys for data paths/arrays
 
     Args:
         root_dir: Root directory containing the dataset files.
@@ -88,6 +83,17 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
     def _default_volumes(self) -> List[Dict[str, str]]:
         """Override in subclasses to provide default volumes when none specified."""
         return []
+
+    @staticmethod
+    def _to_shared(arr: np.ndarray) -> torch.Tensor:
+        """Move a numpy array into POSIX shared memory (/dev/shm).
+
+        Shared-memory tensors pickle as tiny handles (not the full data),
+        so forkserver DataLoader workers get instant access.
+        """
+        t = torch.from_numpy(np.ascontiguousarray(arr))
+        t.share_memory_()
+        return t
 
     @property
     @abstractmethod

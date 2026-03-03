@@ -20,6 +20,11 @@ Usage:
     python scripts/train.py training.fast_dev_run=true
 """
 
+import multiprocessing
+# forkserver creates a clean process before CUDA/NCCL threads exist.
+# DataLoader workers fork from it — no inherited locks, no deadlock.
+multiprocessing.set_start_method("forkserver", force=True)
+
 import sys
 import warnings
 from pathlib import Path

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import torch
 
 from neurons.datasets.base import CircuitDataset
 from neurons.preprocessors import HDF5Preprocessor, NRRDPreprocessor, TIFFPreprocessor
@@ -196,11 +197,12 @@ class MICRONSDataset(CircuitDataset):
             if self.slice_mode:
                 for si in range(n_slices):
                     entry: Dict[str, Any] = {
-                        "image": inputs[si], "slice_idx": si,
+                        "image": self._to_shared(inputs[si]),
+                        "slice_idx": si,
                         "volume": vol_name, "idx": len(data_list),
                     }
                     if labels is not None:
-                        entry["label"] = labels[si]
+                        entry["label"] = self._to_shared(labels[si])
                     data_list.append(entry)
 
             elif self.patch_size is not None:
@@ -209,18 +211,21 @@ class MICRONSDataset(CircuitDataset):
                 )
                 for pidx, (z_sl, y_sl, x_sl) in enumerate(patch_indices):
                     entry = {
-                        "image": inputs[z_sl, y_sl, x_sl],
+                        "image": self._to_shared(inputs[z_sl, y_sl, x_sl]),
                         "patch_idx": pidx, "volume": vol_name,
                         "idx": len(data_list),
                     }
                     if labels is not None:
-                        entry["label"] = labels[z_sl, y_sl, x_sl]
+                        entry["label"] = self._to_shared(labels[z_sl, y_sl, x_sl])
                     data_list.append(entry)
 
             else:
-                entry = {"image": inputs, "volume": vol_name, "idx": len(data_list)}
+                entry: Dict[str, Any] = {
+                    "image": self._to_shared(inputs),
+                    "volume": vol_name, "idx": len(data_list),
+                }
                 if labels is not None:
-                    entry["label"] = labels
+                    entry["label"] = self._to_shared(labels)
                 data_list.append(entry)
 
             total_slices += n_slices

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import torch
 
 from neurons.datasets.base import CircuitDataset
 from neurons.preprocessors.nfty import NFTYPreprocessor
@@ -151,7 +152,7 @@ class MitoEM2Dataset(CircuitDataset):
                     for z in range(z_dim):
                         sl_img = np.take(image, z, axis=ax)
                         entry: Dict[str, Any] = {
-                            "image": sl_img,
+                            "image": self._to_shared(sl_img),
                             "dataset": ds_dir.name,
                             "volume_idx": vol_idx,
                             "slice_idx": z,
@@ -159,17 +160,17 @@ class MitoEM2Dataset(CircuitDataset):
                         }
                         if label is not None:
                             sl_lbl = np.take(label, z, axis=ax)
-                            entry["label"] = sl_lbl
+                            entry["label"] = self._to_shared(sl_lbl)
                         data_list.append(entry)
                 else:
-                    entry = {
-                        "image": image,
+                    entry: Dict[str, Any] = {
+                        "image": self._to_shared(image),
                         "dataset": ds_dir.name,
                         "volume_idx": vol_idx,
                         "idx": len(data_list),
                     }
                     if label is not None:
-                        entry["label"] = label
+                        entry["label"] = self._to_shared(label)
                     data_list.append(entry)
 
         if self._num_samples is not None and len(data_list) > 0:

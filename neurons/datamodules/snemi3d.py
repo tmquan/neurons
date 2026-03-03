@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import SNEMI3DDataset
-from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
+from neurons.transforms import Cloned, RelabelAfterCropd, RandFindBoundariesd
 
 
 class SNEMI3DDataModule(CircuitDataModule):
@@ -95,6 +95,7 @@ class SNEMI3DDataModule(CircuitDataModule):
             transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
         elif self.image_size is not None:
@@ -121,6 +122,7 @@ class SNEMI3DDataModule(CircuitDataModule):
             transforms.extend([
                 SpatialPadd(keys=keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=keys, roi_size=self.patch_size, random_size=False),
+                Cloned(keys=keys),
                 *self._label_post_crop(spatial_dims),
             ])
         elif self.image_size is not None:

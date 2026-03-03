@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import torch
 
 from neurons.datasets.base import CircuitDataset
 
@@ -113,8 +114,8 @@ class CREMI3DDataset(CircuitDataset):
             label = label.astype(np.int64)
 
             data_dict = {
-                "image": image,
-                "label": label,
+                "image": self._to_shared(image),
+                "label": self._to_shared(label),
                 "volume": f"CREMI_{vol_letter}",
                 "idx": len(data_list),
             }
