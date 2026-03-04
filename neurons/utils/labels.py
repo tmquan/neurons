@@ -21,6 +21,7 @@ def find_boundaries(
     connectivity: int = 1,
     mode: str = "inner",
     background: int = 0,
+    instance_only: bool = True,
 ) -> torch.Tensor:
     """Return bool tensor where boundaries between labeled regions are True.
 
@@ -36,6 +37,10 @@ def find_boundaries(
             ``"outer"`` -- boundary pixels in background around objects;
             also marks where two objects touch.
         background: Label value treated as background (default 0).
+        instance_only: If True (default), mark only instance-background
+            boundaries (to be erased). Instance-instance boundaries are left
+            unmarked (kept)—only pixels at the foreground-background interface
+            are marked.
 
     Returns:
         Bool tensor same shape as labels.
@@ -96,6 +101,11 @@ def find_boundaries(
 
     if mode == "inner":
         boundaries = boundaries & (labels != background)
+        if instance_only:
+            # Only mark instance-background boundaries (erase those).
+            # Instance-instance boundaries: leave unmarked (keep those).
+            # eroded==background means neighborhood touches background.
+            boundaries = boundaries & (eroded == background)
     elif mode == "outer":
         is_bg = labels == background
         padded_full = F.pad(lbl, pad, mode="replicate")
@@ -412,7 +422,12 @@ def cluster_embeddings_meanshift(
     labels_full = torch.zeros(emb_flat.shape[0], device=device, dtype=torch.long)
     labels_full[fg_indices] = labels_fg
 
-    labels_out = labels_full.view(spatial_shape)
+    if is_3d:
+        d, h, w = spatial_shape
+        labels_out = rearrange(labels_full, "(d h w) -> d h w", d=d, h=h, w=w)
+    else:
+        h, w = spatial_shape
+        labels_out = rearrange(labels_full, "(h w) -> h w", h=h, w=w)
     return labels_out
 
 

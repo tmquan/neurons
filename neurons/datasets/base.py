@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from einops import rearrange
 from monai.data import CacheDataset
 from monai.transforms import Randomizable
 
@@ -101,7 +102,7 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
 
             ndim = arr.ndim
             if ndim < len(ps):
-                d[key] = arr.clone().unsqueeze(0)
+                d[key] = rearrange(arr.clone(), "... -> 1 ...")
                 continue
 
             slices = []
@@ -120,7 +121,7 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
                     pad_args.extend([0, max(0, p)])
                 crop = torch.nn.functional.pad(crop, pad_args)
 
-            d[key] = crop.unsqueeze(0)
+            d[key] = rearrange(crop, "... -> 1 ...")
 
         if self.transform is not None:
             d = self.transform(d)

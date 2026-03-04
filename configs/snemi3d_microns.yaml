@@ -11,18 +11,18 @@ project_name: neurons-combined
 data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
-  batch_size: 4
-  num_workers: 24 
-  val_num_workers: 8
-  test_num_workers: 8
+  batch_size: 2
+  num_workers: 16 
+  val_num_workers: 4
+  test_num_workers: 4
   cache_rate: 0.0
-  cache_num_workers: 8
-  prefetch_factor: 32
+  cache_num_workers: 4
+  prefetch_factor: 4
   persistent_workers: true
   slice_mode: false
-  find_boundaries: 0.0
+  find_boundaries: 1.0
   relabel_after_crop: false
-  num_samples: 16000
+  num_samples: 8000
   patch_size: [48, 256, 256]
 
   # Merged train: SNEMI3D AC4 + MICRONS train crop
