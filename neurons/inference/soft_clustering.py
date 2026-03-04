@@ -155,7 +155,7 @@ class SoftMeanShift(nn.Module):
             all_soft.append(soft)
             all_centers.append(modes)
 
-        labels = torch.stack(all_labels).view(B, *spatial_shape)
+        labels = torch.stack(all_labels).reshape(B, *spatial_shape)
 
         max_K = max(s.shape[0] for s in all_soft)
         padded_soft = []
@@ -168,7 +168,7 @@ class SoftMeanShift(nn.Module):
             padded_soft.append(s)
             padded_centers.append(c)
 
-        soft_assign = torch.stack(padded_soft).view(B, max_K, *spatial_shape)
+        soft_assign = torch.stack(padded_soft).reshape(B, max_K, *spatial_shape)
         centers = torch.stack(padded_centers)
 
         return labels, soft_assign, centers
@@ -288,23 +288,18 @@ class HoughVoting(nn.Module):
             acc_shape = tuple(bin_max.tolist())
             accumulator = torch.zeros(acc_shape, device=device, dtype=torch.float32)
 
-            if S == 2:
-                accumulator[bins_shifted[0], bins_shifted[1]] += 1.0
-            elif S == 3:
-                accumulator[bins_shifted[0], bins_shifted[1], bins_shifted[2]] += 1.0
+            # Accumulate votes — works for both 2D and 3D via tuple indexing
+            idx = tuple(bins_shifted[s] for s in range(S))
+            accumulator[idx] += 1.0
 
+            # Optional box-filter smoothing (unified 2D / 3D)
             if self.sigma > 0:
                 k = int(3 * self.sigma) * 2 + 1
-                if S == 2:
-                    acc_4d = rearrange(accumulator, "h w -> 1 1 h w")
-                    kernel = torch.ones(1, 1, k, k, device=device) / (k * k)
-                    smoothed = F.conv2d(acc_4d, kernel, padding=k // 2)
-                    accumulator = rearrange(smoothed, "1 1 h w -> h w")
-                elif S == 3:
-                    acc_5d = rearrange(accumulator, "d h w -> 1 1 d h w")
-                    kernel = torch.ones(1, 1, k, k, k, device=device) / (k ** 3)
-                    smoothed = F.conv3d(acc_5d, kernel, padding=k // 2)
-                    accumulator = rearrange(smoothed, "1 1 d h w -> d h w")
+                conv_fn = F.conv3d if S == 3 else F.conv2d
+                kernel = torch.ones((1, 1) + (k,) * S, device=device) / (k ** S)
+                acc_nd = rearrange(accumulator, "... -> 1 1 ...")
+                smoothed = conv_fn(acc_nd, kernel, padding=k // 2)
+                accumulator = rearrange(smoothed, "1 1 ... -> ...")
 
             peak_threshold = accumulator.max() * self.threshold
             peaks_mask = accumulator >= max(peak_threshold, self.min_votes)
@@ -323,6 +318,6 @@ class HoughVoting(nn.Module):
 
             label_flat = torch.zeros(fg.numel(), device=device, dtype=torch.long)
             label_flat[fg_indices] = nearest
-            all_labels.append(label_flat.view(spatial_shape))
+            all_labels.append(label_flat.reshape(spatial_shape))
 
         return torch.stack(all_labels)

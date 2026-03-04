@@ -14,9 +14,6 @@ class RandFindBoundariesd(MapTransform, Randomizable):
     Uses ``find_boundaries`` (torch reimplementation of skimage's
     ``find_boundaries``) to detect boundary pixels, then sets them to 0.
 
-    By default (instance_only=True), only instance-background boundaries
-    are erased; instance-instance boundaries are kept.
-
     Follows MONAI's ``Randomizable`` protocol: ``randomize()`` flips a
     coin per sample; the erosion is skipped when the coin says no.
 
@@ -27,8 +24,6 @@ class RandFindBoundariesd(MapTransform, Randomizable):
             ``ndim`` = include corners (thick).
         mode: ``"inner"`` (default), ``"thick"``, or ``"outer"``.
             See ``find_boundaries`` for details.
-        instance_only: If True (default), only erase instance-background
-            boundaries; keep instance-instance boundaries unchanged.
     """
 
     def __init__(
@@ -38,14 +33,12 @@ class RandFindBoundariesd(MapTransform, Randomizable):
         connectivity: int = 1,
         mode: str = "inner",
         prob_key: str = "_find_boundaries",
-        instance_only: bool = True,
     ) -> None:
         super().__init__(keys)
         self.prob = prob
         self.connectivity = connectivity
         self.mode = mode
         self.prob_key = prob_key
-        self.instance_only = instance_only
         self._do_transform = True
 
     def randomize(self, data: Optional[Dict] = None) -> None:  # type: ignore[override]
@@ -62,12 +55,7 @@ class RandFindBoundariesd(MapTransform, Randomizable):
         d = dict(data)
         for key in self.key_iterator(d):
             lbl = d[key]
-            boundary = find_boundaries(
-                lbl,
-                connectivity=self.connectivity,
-                mode=self.mode,
-                instance_only=self.instance_only,
-            )
+            boundary = find_boundaries(lbl, connectivity=self.connectivity, mode=self.mode)
             out = lbl.clone()
             out[boundary] = 0
             d[key] = out

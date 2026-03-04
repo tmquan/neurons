@@ -195,8 +195,9 @@ class InstanceLoss(nn.Module):
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
         """Per-instance EDT skeleton weight.
 
-        GPU path:  DLPack zero-copy torch→cupy, all EDTs in cupy, zero-copy back.
-        CPU path:  all instances via pmap (always parallel).
+        GPU path (cupy):  DLPack zero-copy torch→cupy, exact L2 EDT.
+        GPU path (torch): approximate L-inf EDT via morphological erosion.
+        CPU path:  all instances across batch via single pmap call.
         """
         from neurons.utils.gpu_ndimage import _use_gpu as _cupy_ok
 
@@ -207,7 +208,7 @@ class InstanceLoss(nn.Module):
             from cupyx.scipy.ndimage import distance_transform_edt as cp_edt
             from neurons.utils.gpu_ndimage import torch_to_cupy, cupy_to_torch
 
-            label_cp = torch_to_cupy(label)                        # zero-copy GPU
+            label_cp = torch_to_cupy(label)
             weight_cp = cp.ones(label_cp.shape, dtype=cp.float32)
 
             for b in range(B):
@@ -223,18 +224,81 @@ class InstanceLoss(nn.Module):
 
             return cupy_to_torch(weight_cp, device=label.device).float()
 
-        # CPU fallback — parallel via pmap
-        label_np = label.cpu().numpy()
-        weight_np = np.ones_like(label_np, dtype=np.float32)
+        if label.is_cuda:
+            return self._skeleton_weight_torch(label)
+
+        return self._skeleton_weight_cpu(label)
+
+    @torch.no_grad()
+    def _skeleton_weight_torch(self, label: torch.Tensor) -> torch.Tensor:
+        """Approximate skeleton weight via iterative morphological erosion on GPU.
+
+        Computes per-instance L-inf (Chebyshev) distance from the instance
+        boundary using repeated min-pool.  After per-instance normalization
+        to [0, 1] the relative weighting is nearly identical to the exact
+        Euclidean DT, but runs entirely on GPU without cupy.
+        """
+        B = label.shape[0]
+        weight = torch.ones_like(label, dtype=torch.float32)
+        _CHUNK = 16
+        max_iter = min(label.shape[-3:]) // 2 + 1
+
         for b in range(B):
-            fg_ids = np.unique(label_np[b])
+            fg_ids = torch.unique(label[b])
             fg_ids = fg_ids[fg_ids > 0]
             if len(fg_ids) == 0:
                 continue
-            results = pmap(_edt_worker, [(label_np[b], int(u)) for u in fg_ids])
-            for uid, dt in results:
-                m = label_np[b] == uid
-                weight_np[b][m] = 1.0 + dt[m] * (self.weight_bone - 1.0)
+
+            K = len(fg_ids)
+            for start in range(0, K, _CHUNK):
+                chunk_ids = fg_ids[start:start + _CHUNK]
+                masks = rearrange(
+                    torch.stack([(label[b] == uid).float() for uid in chunk_ids]),
+                    "k ... -> k 1 ...",                       # [K, 1, D, H, W]
+                )
+
+                remaining = masks.clone()
+                dt = torch.zeros_like(masks)
+                for layer_idx in range(1, max_iter + 1):
+                    eroded = -_POOL_FN(-remaining, 3, stride=1, padding=1)
+                    removed = (remaining > 0.5) & (eroded < 0.5)
+                    dt[removed] = float(layer_idx)
+                    remaining = eroded * (eroded > 0.5).float()
+                    if not remaining.any():
+                        break
+
+                max_d = dt.flatten(2).amax(dim=2).clamp(min=1.0)
+                dt = dt / rearrange(max_d, "k c -> k c 1 1 1")
+
+                for i, uid in enumerate(chunk_ids):
+                    m = label[b] == uid
+                    weight[b][m] = 1.0 + dt[i, 0][m] * (self.weight_bone - 1.0)
+
+        return weight
+
+    @torch.no_grad()
+    def _skeleton_weight_cpu(self, label: torch.Tensor) -> torch.Tensor:
+        """Skeleton weight via scipy EDT on CPU with batched pmap."""
+        B = label.shape[0]
+        label_np = label.cpu().numpy()
+        weight_np = np.ones_like(label_np, dtype=np.float32)
+
+        all_args = []
+        all_meta = []
+        for b in range(B):
+            fg_ids = np.unique(label_np[b])
+            fg_ids = fg_ids[fg_ids > 0]
+            for uid in fg_ids:
+                all_args.append((label_np[b], int(uid)))
+                all_meta.append(b)
+
+        if len(all_args) == 0:
+            return torch.from_numpy(weight_np).to(label.device)
+
+        results = pmap(_edt_worker, all_args)
+        for batch_idx, (uid, dt) in zip(all_meta, results):
+            m = label_np[batch_idx] == uid
+            weight_np[batch_idx][m] = 1.0 + dt[m] * (self.weight_bone - 1.0)
 
         return torch.from_numpy(weight_np).to(label.device)
 

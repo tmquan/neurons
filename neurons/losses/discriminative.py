@@ -44,20 +44,17 @@ def _flatten_spatial(
     embedding: torch.Tensor,
     ins_label: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, bool]:
-    """Flatten spatial dims → (embed_flat [B,E,N], label_flat [B,N], is_3d)."""
+    """Flatten spatial dims → ``(embed_flat [B,E,N], label_flat [B,N], is_3d)``.
+
+    Works identically for 2-D (``[B,E,H,W]``) and 3-D (``[B,E,D,H,W]``)
+    embeddings.  ``ins_label`` may carry an optional unit channel dim.
+    """
     is_3d = embedding.dim() == 5
-    if is_3d:
-        embed_flat = rearrange(embedding, "b e d h w -> b e (d h w)")
-        if ins_label.dim() == 5:
-            label_flat = rearrange(ins_label, "b 1 d h w -> b (d h w)")
-        else:
-            label_flat = rearrange(ins_label, "b d h w -> b (d h w)")
+    embed_flat = rearrange(embedding, "b e ... -> b e (...)")         # [B, E, N]
+    if ins_label.dim() == embedding.dim():
+        label_flat = rearrange(ins_label, "b 1 ... -> b (...)")      # strip channel
     else:
-        embed_flat = rearrange(embedding, "b e h w -> b e (h w)")
-        if ins_label.dim() == 4:
-            label_flat = rearrange(ins_label, "b 1 h w -> b (h w)")
-        else:
-            label_flat = rearrange(ins_label, "b h w -> b (h w)")
+        label_flat = rearrange(ins_label, "b ... -> b (...)")        # no channel
     return embed_flat, label_flat, is_3d
 
 
@@ -228,7 +225,7 @@ def _compute_skeleton_offsets(
     N = coords.shape[1]
     device = coords.device
 
-    labels = lbl_flat.view(spatial_shape)                           # [*spatial]
+    labels = lbl_flat.reshape(spatial_shape)                         # [*spatial]
     offsets = torch.zeros(S, N, device=device, dtype=torch.float32)
 
     uids = torch.unique(labels)
@@ -701,17 +698,15 @@ class SkeletonEmbeddingLoss(nn.Module):
         cos_sim = (norm_off * norm_grad).sum(dim=1)
         l_penalty = ((1.0 - cos_sim) * fg_flat.float()).sum() / N_fg
 
-        if is_3d:
-            D, H, W = spatial
-            grid_x = (embeddings[:, 0] / max(W - 1, 1)) * 2.0 - 1.0
-            grid_y = (embeddings[:, 1] / max(H - 1, 1)) * 2.0 - 1.0
-            grid_z = (embeddings[:, 2] / max(D - 1, 1)) * 2.0 - 1.0
-            sample_grid = torch.stack([grid_x, grid_y, grid_z], dim=-1)
-        else:
-            H, W = spatial
-            grid_x = (embeddings[:, 0] / max(W - 1, 1)) * 2.0 - 1.0
-            grid_y = (embeddings[:, 1] / max(H - 1, 1)) * 2.0 - 1.0
-            sample_grid = torch.stack([grid_x, grid_y], dim=-1)
+        # Build normalised grid for F.grid_sample (works for both 2D and 3D).
+        # grid_sample expects coords in (x, y[, z]) order, each in [-1, 1].
+        # `spatial` is (D, H, W) for 3D or (H, W) for 2D — reversed so
+        # spatial[-1] = W, spatial[-2] = H, etc.
+        grid_coords = []
+        for s_idx in range(S):
+            extent = max(spatial[-(s_idx + 1)] - 1, 1)
+            grid_coords.append(embeddings[:, s_idx] / extent * 2.0 - 1.0)
+        sample_grid = torch.stack(grid_coords, dim=-1)
 
         sampled_dt = F.grid_sample(
             gt_dt_norm, sample_grid,

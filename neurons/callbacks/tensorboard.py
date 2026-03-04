@@ -54,9 +54,6 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     Background (0) is black.  Each non-zero label gets a random but
     reproducible colour via a seeded palette.
 
-    Remaps labels to contiguous 0..K-1 so large instance IDs (e.g. CREMI
-    offsets 1e6, 2e6) do not cause memory overflow.
-
     Args:
         labels: [B, H, W] long tensor.
 
@@ -65,14 +62,11 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     """
     B, H, W = labels.shape
     flat = rearrange(labels, "b h w -> (b h w)").long()
-    unique, inv = torch.unique(flat, return_inverse=True)
-    K = len(unique)
     gen = torch.Generator(device=labels.device).manual_seed(0)
-    palette = torch.rand(K, 3, device=labels.device, generator=gen)
-    bg_idx = (unique == 0).nonzero(as_tuple=True)[0]
-    if bg_idx.numel() > 0:
-        palette[bg_idx[0]] = 0.0
-    rgb = palette[inv]
+    palette = torch.rand(flat.max().item() + 1, 3,
+                         device=labels.device, generator=gen)
+    palette[0] = 0.0                                               # background → black
+    rgb = palette[flat]
     return rearrange(rgb, "(b h w) c -> b c h w", b=B, h=H, w=W)
 
 

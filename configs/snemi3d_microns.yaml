@@ -11,30 +11,24 @@ project_name: neurons-combined
 data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
-  batch_size: 2
-  num_workers: 16 
-  val_num_workers: 4
-  test_num_workers: 4
+  batch_size: 4
+  num_workers: 8
   cache_rate: 0.0
-  cache_num_workers: 4
-  prefetch_factor: 4
-  persistent_workers: true
   slice_mode: false
-  find_boundaries: 1.0
-  relabel_after_crop: false
-  num_samples: 8000
+  find_boundaries: 1.0   # default for the transform; overridden per-volume below
+  num_samples: 16000
   patch_size: [48, 256, 256]
 
   # Merged train: SNEMI3D AC4 + MICRONS train crop
   # find_boundaries is per-volume: 1.0 for SNEMI3D, 0 for MICRONS
   train_volumes:
     - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D, find_boundaries: 1.0}
-    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 1.0}
 
   # Merged test: SNEMI3D AC3 + MICRONS test crop
   test_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 1.0}
-    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: /scratch/MICRONS, find_boundaries: 1.0}
 
 model:
   type: vista3d
@@ -42,7 +36,7 @@ model:
   num_classes: 16
   emb_dim: 16
   feature_size: 48
-  dropout: 0.2
+  dropout: 0.0
 
 optimizer:
   type: adamw
@@ -54,7 +48,6 @@ optimizer:
     eta_min: 1.0e-7
 
 loss:
-  throughput_mode: true
   semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
@@ -71,7 +64,7 @@ loss:
   weight_geometry: 1.0
   dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0
   weight_raw: 1.0
   loss_dir: l1
   loss_cov: l1
@@ -84,12 +77,10 @@ training:
   devices: auto
   strategy: ddp
   precision: bf16-mixed
-  # accumulate_grad_batches: 2   # effective global batch = batch_size * accum * num_gpus (e.g. 4*2*8=64)
   gradient_clip_val: 1.0
+  limit_val_batches: 100
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   benchmark: true
-  check_val_every_n_epoch: 2
-  limit_val_batches: 100
   training_modes:
     - automatic

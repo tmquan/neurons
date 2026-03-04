@@ -29,8 +29,7 @@ def compute_per_point_dice(
     Args:
         pred: Predicted class labels [H, W] or [D, H, W] (int/long).
         target: Ground truth class labels, same shape.
-        num_classes: Number of classes (incl. background 0). Pass model's
-            num_classes (e.g. 16 for Vista3D) when evaluating semantic head.
+        num_classes: Number of classes.
         ignore_index: Label value to ignore (default -100).
         eps: Smoothing to avoid division by zero.
 
@@ -90,8 +89,7 @@ def compute_per_point_iou(
     Args:
         pred: Predicted class labels [H, W] or [D, H, W] (int/long).
         target: Ground truth class labels, same shape.
-        num_classes: Number of classes (incl. background 0). Pass model's
-            num_classes when evaluating semantic head.
+        num_classes: Number of classes.
         ignore_index: Label value to ignore (default -100).
         eps: Smoothing to avoid division by zero.
 

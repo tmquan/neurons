@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import torch
 
 from neurons.datasets.base import CircuitDataset
 from neurons.preprocessors import HDF5Preprocessor, NRRDPreprocessor, TIFFPreprocessor
@@ -68,7 +67,6 @@ class MICRONSDataset(CircuitDataset):
             transform=transform,
             cache_rate=cache_rate,
             num_workers=num_workers,
-            patch_size=patch_size if not slice_mode else None,
         )
 
     @property
@@ -198,36 +196,31 @@ class MICRONSDataset(CircuitDataset):
             if self.slice_mode:
                 for si in range(n_slices):
                     entry: Dict[str, Any] = {
-                        "image": self._to_shared(inputs[si]),
-                        "slice_idx": si,
+                        "image": inputs[si], "slice_idx": si,
                         "volume": vol_name, "idx": len(data_list),
                     }
                     if labels is not None:
-                        entry["label"] = self._to_shared(labels[si])
+                        entry["label"] = labels[si]
                     data_list.append(entry)
 
-            elif self.patch_size is not None and self._patch_size is None:
-                # Pre-extract patches only when base class fast crop is NOT active
+            elif self.patch_size is not None:
                 patch_indices = self._generate_patch_indices(
                     inputs.shape, self.patch_size, self.patch_overlap
                 )
                 for pidx, (z_sl, y_sl, x_sl) in enumerate(patch_indices):
                     entry = {
-                        "image": self._to_shared(inputs[z_sl, y_sl, x_sl]),
+                        "image": inputs[z_sl, y_sl, x_sl],
                         "patch_idx": pidx, "volume": vol_name,
                         "idx": len(data_list),
                     }
                     if labels is not None:
-                        entry["label"] = self._to_shared(labels[z_sl, y_sl, x_sl])
+                        entry["label"] = labels[z_sl, y_sl, x_sl]
                     data_list.append(entry)
 
             else:
-                entry: Dict[str, Any] = {
-                    "image": self._to_shared(inputs),
-                    "volume": vol_name, "idx": len(data_list),
-                }
+                entry = {"image": inputs, "volume": vol_name, "idx": len(data_list)}
                 if labels is not None:
-                    entry["label"] = self._to_shared(labels)
+                    entry["label"] = labels
                 data_list.append(entry)
 
             total_slices += n_slices

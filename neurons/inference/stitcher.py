@@ -17,7 +17,7 @@ import torch
 from einops import rearrange
 
 from neurons.utils.labels import (
-    relabel_connected_components_3d,
+    relabel_connected_components,
     relabel_sequential,
 )
 
@@ -136,16 +136,12 @@ class EmbeddingStitcher:
             label_map[old_id] = uf.find(old_id)
         merged = label_map[labels.long()]
 
-        if self.spatial_dims == 3 and merged.dim() == 3:
+        if merged.dim() == self.spatial_dims:
+            # Add batch dim → relabel → strip batch dim (unified 2D / 3D)
+            batched = rearrange(merged, "... -> 1 ...")
             split = rearrange(
-                relabel_connected_components_3d(rearrange(merged, "d h w -> 1 d h w")),
-                "1 d h w -> d h w",
-            )
-        elif self.spatial_dims == 2 and merged.dim() == 2:
-            from neurons.utils.labels import relabel_connected_components_2d
-            split = rearrange(
-                relabel_connected_components_2d(rearrange(merged, "h w -> 1 h w")),
-                "1 h w -> h w",
+                relabel_connected_components(batched, self.spatial_dims),
+                "1 ... -> ...",
             )
         else:
             split = merged

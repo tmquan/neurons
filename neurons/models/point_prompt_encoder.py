@@ -100,29 +100,23 @@ class PointPromptEncoder(nn.Module):
             ins_max = ins_id.abs().clamp(min=1.0)
             norm_iid = ins_id / ins_max
 
+            # Unified 2D / 3D indexing: convert [N, S] coords to a tuple
+            # of 1-D index tensors for advanced indexing.
+            def _scatter(channel, idx, value):
+                """Write *value* at spatial positions *idx* into vol[b, channel]."""
+                coords = tuple(idx[:, d] for d in range(self.spatial_dims))
+                vol[(b, channel) + coords] = value
+
             if pts_pos.numel() > 0:
                 idx = pts_pos.long()
-                if self.spatial_dims == 3:
-                    z, y, x = idx[:, 0], idx[:, 1], idx[:, 2]
-                    vol[b, 0, z, y, x] = 1.0                          # pos_map
-                    vol[b, 2 + sem_id, z, y, x] = 1.0                 # semantic_map
-                    vol[b, -1, z, y, x] = norm_iid                    # instance_map
-                else:
-                    y, x = idx[:, 0], idx[:, 1]
-                    vol[b, 0, y, x] = 1.0
-                    vol[b, 2 + sem_id, y, x] = 1.0
-                    vol[b, -1, y, x] = norm_iid
+                _scatter(0, idx, 1.0)                                  # pos_map
+                _scatter(2 + sem_id, idx, 1.0)                         # semantic_map
+                _scatter(-1, idx, norm_iid)                            # instance_map
 
             if pts_neg.numel() > 0:
                 idx = pts_neg.long()
-                if self.spatial_dims == 3:
-                    z, y, x = idx[:, 0], idx[:, 1], idx[:, 2]
-                    vol[b, 1, z, y, x] = 1.0                          # neg_map
-                    vol[b, 2 + sem_id, z, y, x] = 1.0                 # semantic_map
-                else:
-                    y, x = idx[:, 0], idx[:, 1]
-                    vol[b, 1, y, x] = 1.0
-                    vol[b, 2 + sem_id, y, x] = 1.0
+                _scatter(1, idx, 1.0)                                  # neg_map
+                _scatter(2 + sem_id, idx, 1.0)                         # semantic_map
 
         return vol
 

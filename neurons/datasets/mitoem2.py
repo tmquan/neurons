@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import torch
 
 from neurons.datasets.base import CircuitDataset
 from neurons.preprocessors.nfty import NFTYPreprocessor
@@ -55,7 +54,6 @@ class MitoEM2Dataset(CircuitDataset):
         slice_mode: bool = True,
         slice_axis: int = 0,
         num_samples: Optional[int] = None,
-        patch_size: Optional[Tuple[int, ...]] = None,
     ) -> None:
         self.slice_mode = slice_mode
         self.slice_axis = slice_axis
@@ -68,7 +66,6 @@ class MitoEM2Dataset(CircuitDataset):
             transform=transform,
             cache_rate=cache_rate,
             num_workers=num_workers,
-            patch_size=patch_size if not slice_mode else None,
         )
 
     @property
@@ -139,13 +136,13 @@ class MitoEM2Dataset(CircuitDataset):
                 pairs.append((img_f, lbl_f))
 
             for vol_idx, (img_path, lbl_path) in enumerate(pairs):
-                if lbl_path is None:
-                    continue  # skip image-only samples; training requires labels
                 image = self._nfty.load(str(img_path)).astype(np.float32)
                 vmin, vmax = float(image.min()), float(image.max())
                 if vmax > vmin:
                     image = (image - vmin) / (vmax - vmin)
-                label = self._nfty.load(str(lbl_path)).astype(np.int64)
+                label = self._nfty.load(str(lbl_path)) if lbl_path is not None else None
+                if label is not None:
+                    label = label.astype(np.int64)
 
                 if self.slice_mode and image.ndim == 3:
                     ax = self.slice_axis if self.slice_axis >= 0 else image.ndim + self.slice_axis
@@ -153,23 +150,27 @@ class MitoEM2Dataset(CircuitDataset):
 
                     for z in range(z_dim):
                         sl_img = np.take(image, z, axis=ax)
-                        sl_lbl = np.take(label, z, axis=ax)
-                        data_list.append({
-                            "image": self._to_shared(sl_img),
-                            "label": self._to_shared(sl_lbl),
+                        entry: Dict[str, Any] = {
+                            "image": sl_img,
                             "dataset": ds_dir.name,
                             "volume_idx": vol_idx,
                             "slice_idx": z,
                             "idx": len(data_list),
-                        })
+                        }
+                        if label is not None:
+                            sl_lbl = np.take(label, z, axis=ax)
+                            entry["label"] = sl_lbl
+                        data_list.append(entry)
                 else:
-                    data_list.append({
-                        "image": self._to_shared(image),
-                        "label": self._to_shared(label),
+                    entry = {
+                        "image": image,
                         "dataset": ds_dir.name,
                         "volume_idx": vol_idx,
                         "idx": len(data_list),
-                    })
+                    }
+                    if label is not None:
+                        entry["label"] = label
+                    data_list.append(entry)
 
         if self._num_samples is not None and len(data_list) > 0:
             self._virtual_len = self._num_samples

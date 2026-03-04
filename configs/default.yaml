@@ -16,12 +16,7 @@ data:
   data_root: data
   batch_size: 4
   num_workers: 16
-  val_num_workers: 8   # Avoid single-worker validation stalls in DDP
-  test_num_workers: 8
   cache_rate: 0.5
-  cache_num_workers: 8
-  prefetch_factor: 4
-  persistent_workers: true
   pin_memory: true
   image_size: null
   slice_mode: true
@@ -52,7 +47,6 @@ optimizer:
 
 # Loss configuration
 loss:
-  throughput_mode: false    # If true, force weight_cov=0.0 for faster training
   semantic_mode: sigmoid     # sigmoid (multi-label: mito inside neuron) or softmax (mutually exclusive)
   weight_semantic: 1.0
   weight_ce: 1.0
@@ -69,7 +63,7 @@ loss:
   weight_geometry: 0.0
   dir_target: centroid         # centroid or skeleton
   weight_dir: 1.0
-  weight_cov: 1.0
+  weight_cov: 0.0
   weight_raw: 1.0
   loss_dir: smooth_l1          # smooth_l1 (robust offsets), mse, or l1
   loss_cov: mse                # mse (Frobenius-norm), l1, or smooth_l1
@@ -88,12 +82,12 @@ training:
   accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: auto
   strategy: ddp  # Explicit DDP for even GPU memory distribution
-  precision: 16-mixed  # Options: 32-true, 16-mixed, bf16-mixed
+  precision: 32-true  # Options: 32-true, 16-mixed, bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
   limit_val_batches: 10
-  check_val_every_n_epoch: 2
+  check_val_every_n_epoch: 1
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   enable_progress_bar: true
@@ -101,12 +95,6 @@ training:
   deterministic: false
   benchmark: true
   fast_dev_run: false
-  ckpt_path: null  # Resume checkpoint path for trainer.fit(..., ckpt_path=...)
-  compile:
-    enabled: false
-    mode: default
-    fullgraph: false
-    dynamic: false
   profiler: null  # Options: null, simple, advanced, pytorch
 
 # Callbacks configuration
@@ -134,6 +122,5 @@ callbacks:
 
   image_logger:
     enabled: true
-    every_n_epochs: 5
+    every_n_epochs: 1
     max_images: 4
-

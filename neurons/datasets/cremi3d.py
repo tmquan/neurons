@@ -7,16 +7,12 @@ CREMI (Circuit Reconstruction from Electron Microscopy Images) Challenge:
 - Annotations: neurons, synaptic clefts, (optionally mitochondria)
 """
 
-import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import torch
 
 from neurons.datasets.base import CircuitDataset
-
-logger = logging.getLogger(__name__)
 
 
 class CREMI3DDataset(CircuitDataset):
@@ -59,7 +55,6 @@ class CREMI3DDataset(CircuitDataset):
         include_clefts: bool = True,
         include_mito: bool = False,
         num_samples: Optional[int] = None,
-        patch_size: Optional[Tuple[int, ...]] = None,
         **kwargs: Any,
     ) -> None:
         self.include_clefts = include_clefts
@@ -73,7 +68,6 @@ class CREMI3DDataset(CircuitDataset):
             transform=transform,
             cache_rate=cache_rate,
             num_workers=num_workers,
-            patch_size=patch_size,
         )
 
     @property
@@ -119,8 +113,8 @@ class CREMI3DDataset(CircuitDataset):
             label = label.astype(np.int64)
 
             data_dict = {
-                "image": self._to_shared(image),
-                "label": self._to_shared(label),
+                "image": image,
+                "label": label,
                 "volume": f"CREMI_{vol_letter}",
                 "idx": len(data_list),
             }
@@ -203,8 +197,7 @@ class CREMI3DDataset(CircuitDataset):
 
                 return image.astype(np.float32), label
 
-        except (OSError, KeyError, ValueError) as e:
-            logger.warning("CREMI3D: skipping volume %s: %s", h5_path, e)
+        except Exception:
             return None, None
 
     def _load_volume_separate_files(

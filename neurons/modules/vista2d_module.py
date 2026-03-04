@@ -126,6 +126,7 @@ class Vista2DModule(pl.LightningModule):
     # ------------------------------------------------------------------
 
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Extract and reshape targets from batch dict."""
         labels = batch["label"]
         if labels.dim() == _SPATIAL_DIMS + 2:
             labels = rearrange(labels, _SQUEEZE_PATTERN)
@@ -147,6 +148,12 @@ class Vista2DModule(pl.LightningModule):
     def _get_proofread_sub_mode(
         self, targets: Dict[str, torch.Tensor],
     ) -> str:
+        """Determine proofread sub-mode for the current batch.
+
+        Returns ``"fractionary"`` when the labels contain a mix of valid
+        values and ``ignore_index`` (partial annotation), otherwise
+        ``"interactive"``.
+        """
         labels = targets["labels"]
         has_ignore = (labels == self._ignore_index).any()
         has_valid_fg = (labels > 0).any() & (labels != self._ignore_index).any()
@@ -157,6 +164,13 @@ class Vista2DModule(pl.LightningModule):
     def _resolve_fractionary_labels(
         self, targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
+        """Prepare targets for a fractionary-annotated patch.
+
+        - Sets ``semantic_labels`` to ``ignore_index`` where annotation is
+          missing.
+        - Builds ``semantic_ids`` from the known pixels.
+        - Remaps instance ``labels`` to contiguous IDs for the known region.
+        """
         targets = dict(targets)
         labels = targets["labels"]
         ignore = self._ignore_index
@@ -192,6 +206,7 @@ class Vista2DModule(pl.LightningModule):
         images: torch.Tensor,
         targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
+        """Automatic mode: forward without prompts."""
         predictions = self.model(images)
         return self.criterion(predictions, targets)
 
@@ -200,6 +215,7 @@ class Vista2DModule(pl.LightningModule):
         images: torch.Tensor,
         targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
+        """Proofread mode: fractionary or interactive sub-mode."""
         sub_mode = self._get_proofread_sub_mode(targets)
 
         if sub_mode == "fractionary":
@@ -269,8 +285,10 @@ class Vista2DModule(pl.LightningModule):
         sem_gt = targets["semantic_labels"]
         sem_acc = (sem_pred == sem_gt).float().mean()
         sem_iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=predictions["semantic"].shape[1])
+        sem_ari = compute_per_batch_ari(sem_pred, sem_gt)
         self.log(f"{prefix}/sem_acc", sem_acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/sem_iou", sem_iou, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/sem_ari", sem_ari, sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/sem_iou", sem_iou, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
 
         fg_mask = targets["labels"] > 0
         ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
