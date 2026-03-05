@@ -51,7 +51,6 @@ optimizer:
     eta_min: 1.0e-7
 
 loss:
-  semantic_mode: sigmoid
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
@@ -75,7 +74,7 @@ loss:
   ignore_index: -100
 
 training:
-  max_epochs: 200
+  max_epochs: 100
   accelerator: auto
   devices: auto
   strategy: ddp
