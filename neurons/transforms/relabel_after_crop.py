@@ -6,7 +6,7 @@ from einops import rearrange
 from monai.config import KeysCollection
 from monai.transforms import MapTransform
 
-from neurons.utils.labels import relabel_after_crop
+from neurons.utils.labels import relabel_after_crop, relabel_sequential
 
 
 class RelabelAfterCropd(MapTransform):
@@ -14,8 +14,8 @@ class RelabelAfterCropd(MapTransform):
 
     After ``RandSpatialCropd``, a single instance can be split into
     disconnected fragments.  This transform assigns a unique ID to each
-    connected component so the discriminative loss treats them as
-    separate instances.
+    connected component and then renumbers them sequentially via
+    ``skimage.segmentation.relabel_sequential``.
 
     Deterministic — always applied.
 
@@ -39,7 +39,9 @@ class RelabelAfterCropd(MapTransform):
             has_channel = lbl.dim() == self.spatial_dims + 1
             if has_channel:
                 lbl = rearrange(lbl, "1 ... -> ...")
-            lbl = relabel_after_crop(lbl, spatial_dims=self.spatial_dims)
+            lbl = relabel_sequential(
+                relabel_after_crop(lbl, spatial_dims=self.spatial_dims),
+            )
             if has_channel:
                 lbl = rearrange(lbl, "... -> 1 ...")
             d[key] = lbl

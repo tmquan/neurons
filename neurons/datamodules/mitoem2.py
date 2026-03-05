@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets.mitoem2 import MitoEM2Dataset
-from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
+from neurons.transforms import RelabelAfterCropd
 
 
 class MitoEM2DataModule(CircuitDataModule):
@@ -30,7 +30,6 @@ class MitoEM2DataModule(CircuitDataModule):
         train_volumes: e.g. ``[{"subdataset": "Dataset001_ME2-Beta"}]``
         test_volumes: e.g. ``[{"subdataset": "Dataset001_ME2-Beta", "img_dir": "imagesTs", "lbl_dir": "labelsTs"}]``
         slice_mode: Return 2D slices if True (default: True).
-        find_boundaries: Probability of zeroing boundary pixels (0.0=off).
     """
 
     dataset_class = MitoEM2Dataset
@@ -46,7 +45,6 @@ class MitoEM2DataModule(CircuitDataModule):
         patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
         slice_mode: bool = True,
         num_samples: Optional[int] = None,
-        find_boundaries: float = 0.0,
         train_volumes: Optional[List[Dict[str, str]]] = None,
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
@@ -54,7 +52,6 @@ class MitoEM2DataModule(CircuitDataModule):
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
-        self.find_boundaries = find_boundaries
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
@@ -76,12 +73,7 @@ class MitoEM2DataModule(CircuitDataModule):
         return kwargs
 
     def _label_post_crop(self, spatial_dims: int) -> list:
-        steps = [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
-        if self.find_boundaries > 0:
-            steps.append(RandFindBoundariesd(
-                keys=["label"], prob=self.find_boundaries,
-            ))
-        return steps
+        return [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
 
     def get_train_transforms(self) -> Compose:
         keys = ["image", "label"]

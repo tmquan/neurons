@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+from skimage.segmentation import find_boundaries as _skimage_find_boundaries
 
 from neurons.datasets.base import CircuitDataset
 from neurons.preprocessors import HDF5Preprocessor, NRRDPreprocessor, TIFFPreprocessor
@@ -22,6 +23,12 @@ class MICRONSDataset(CircuitDataset):
     microscopy imaging of mouse visual cortex with dense neuron segmentation.
 
     Volume format: ``[{"vol": "volume_basename", "seg": "seg_basename"}]``
+
+    Optional per-volume keys:
+        - ``root``: override ``root_dir`` for this volume.
+        - ``find_boundaries``: when > 0, boundary pixels between adjacent
+          labels are zeroed out at load time via
+          ``skimage.segmentation.find_boundaries``.
 
     Args:
         root_dir: Path to directory containing MICRONS data files.
@@ -189,6 +196,9 @@ class MICRONSDataset(CircuitDataset):
             labels = self._load_volume(str(vol_spec["seg"]), required=False)
             if labels is not None:
                 labels = labels.astype(np.int64)
+
+            if labels is not None and float(vol_spec.get("find_boundaries", 0)) > 0:
+                labels[_skimage_find_boundaries(labels)] = 0
 
             n_slices = inputs.shape[0]
             vol_name = vol_spec["vol"]

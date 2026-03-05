@@ -85,15 +85,12 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     if image_size is not None:
         common_args["image_size"] = tuple(image_size) if isinstance(image_size, list) else image_size
 
-    find_boundaries = float(data_cfg.get("find_boundaries", 0.0))
-
     if dataset_type == "snemi3d":
         patch_size = data_cfg.get("patch_size")
         return SNEMI3DDataModule(
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            find_boundaries=find_boundaries,
             **common_args,
         )
 
@@ -104,7 +101,6 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             include_mito=data_cfg.get("include_mito", False),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            find_boundaries=find_boundaries,
             **common_args,
         )
 
@@ -114,7 +110,6 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            find_boundaries=find_boundaries,
             **common_args,
         )
 
@@ -124,7 +119,6 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
-            find_boundaries=find_boundaries,
             **common_args,
         )
 

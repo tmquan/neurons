@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import CREMI3DDataset
-from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
+from neurons.transforms import RelabelAfterCropd
 
 
 class CREMI3DDataModule(CircuitDataModule):
@@ -31,7 +31,6 @@ class CREMI3DDataModule(CircuitDataModule):
         test_volumes: e.g. ``[{"vol": "A+"}, {"vol": "B+"}, {"vol": "C+"}]``
         include_clefts: Include cleft annotations (default: True).
         include_mito: Include mitochondria annotations (default: False).
-        find_boundaries: Probability of zeroing boundary pixels (0.0=off).
     """
 
     dataset_class = CREMI3DDataset
@@ -48,7 +47,6 @@ class CREMI3DDataModule(CircuitDataModule):
         include_clefts: bool = True,
         include_mito: bool = False,
         num_samples: Optional[int] = None,
-        find_boundaries: float = 0.0,
         train_volumes: Optional[List[Dict[str, str]]] = None,
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
@@ -57,7 +55,6 @@ class CREMI3DDataModule(CircuitDataModule):
         self.include_clefts = include_clefts
         self.include_mito = include_mito
         self.num_samples = num_samples
-        self.find_boundaries = find_boundaries
         self.patch_size = tuple(patch_size) if patch_size is not None else None
         super().__init__(
             data_root=data_root,
@@ -82,12 +79,7 @@ class CREMI3DDataModule(CircuitDataModule):
         return kwargs
 
     def _label_post_crop(self) -> list:
-        steps = [RelabelAfterCropd(keys=["label"], spatial_dims=3)]
-        if self.find_boundaries > 0:
-            steps.append(RandFindBoundariesd(
-                keys=["label"], prob=self.find_boundaries,
-            ))
-        return steps
+        return [RelabelAfterCropd(keys=["label"], spatial_dims=3)]
 
     def get_train_transforms(self) -> Compose:
         keys = ["image", "label"]

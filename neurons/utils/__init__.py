@@ -4,7 +4,6 @@ Utility functions for connectomics data I/O and label manipulation.
 
 from neurons.utils.io import find_folder, load_volume, save_volume
 from neurons.utils.labels import (
-    find_boundaries,
     relabel_sequential,
     relabel_connected_components,
     relabel_connected_components_2d,
@@ -19,7 +18,6 @@ __all__ = [
     "find_folder",
     "load_volume",
     "save_volume",
-    "find_boundaries",
     "relabel_sequential",
     "relabel_connected_components",
     "relabel_connected_components_2d",

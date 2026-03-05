@@ -19,7 +19,7 @@ from monai.transforms import (
 
 from neurons.datamodules import CircuitDataModule
 from neurons.datasets import MICRONSDataset
-from neurons.transforms import RelabelAfterCropd, RandFindBoundariesd
+from neurons.transforms import RelabelAfterCropd
 
 
 class MICRONSDataModule(CircuitDataModule):
@@ -30,7 +30,6 @@ class MICRONSDataModule(CircuitDataModule):
         train_volumes: e.g. ``[{"vol": "train_volume", "seg": "train_seg"}]``
         test_volumes: e.g. ``[{"vol": "test_volume", "seg": "test_seg"}]``
         slice_mode: Return 2D slices if True (default: True).
-        find_boundaries: Probability of zeroing boundary pixels (0.0=off).
     """
 
     dataset_class = MICRONSDataset
@@ -46,7 +45,6 @@ class MICRONSDataModule(CircuitDataModule):
         slice_mode: bool = True,
         patch_size: Optional[Tuple[int, int, int]] = None,
         num_samples: Optional[int] = None,
-        find_boundaries: float = 0.0,
         train_volumes: Optional[List[Dict[str, str]]] = None,
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
@@ -55,7 +53,6 @@ class MICRONSDataModule(CircuitDataModule):
         self.slice_mode = slice_mode
         self.patch_size = patch_size
         self.num_samples = num_samples
-        self.find_boundaries = find_boundaries
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
@@ -79,12 +76,7 @@ class MICRONSDataModule(CircuitDataModule):
         return kwargs
 
     def _label_post_crop(self, spatial_dims: int) -> list:
-        steps = [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
-        if self.find_boundaries > 0:
-            steps.append(RandFindBoundariesd(
-                keys=["label"], prob=self.find_boundaries,
-            ))
-        return steps
+        return [RelabelAfterCropd(keys=["label"], spatial_dims=spatial_dims)]
 
     def get_train_transforms(self) -> Compose:
         keys = ["image", "label"]
