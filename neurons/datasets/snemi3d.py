@@ -119,7 +119,7 @@ class SNEMI3DDataset(CircuitDataset):
                 labels = None
 
             if labels is not None and float(vol_spec.get("find_boundaries", 0)) > 0:
-                labels[_skimage_find_boundaries(labels)] = 0
+                labels[_skimage_find_boundaries(labels, mode='inner')] = 0
 
             n_slices = inputs.shape[0]
             vol_name = vol_spec["vol"]
