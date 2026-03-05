@@ -102,6 +102,9 @@ class Vista2DModule(pl.LightningModule):
             weight_cov=loss_config.get("weight_cov", 1.0),
             weight_raw=loss_config.get("weight_raw", 1.0),
             dir_target=loss_config.get("dir_target", "centroid"),
+            loss_dir=loss_config.get("loss_dir", "smooth_l1"),
+            loss_cov=loss_config.get("loss_cov", "mse"),
+            loss_raw=loss_config.get("loss_raw", "l1"),
         )
 
         self._clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
