@@ -1,14 +1,9 @@
 """
-Utility functions for connectomics data I/O and label manipulation.
+Utility functions for connectomics data I/O and clustering.
 """
 
 from neurons.utils.io import find_folder, load_volume, save_volume
-from neurons.utils.labels import (
-    relabel_sequential,
-    relabel_connected_components,
-    relabel_connected_components_2d,
-    relabel_connected_components_3d,
-    relabel_after_crop,
+from neurons.utils.clustering import (
     cluster_embeddings_meanshift,
     cluster_embeddings_soft,
     cluster_offsets_hough,
@@ -18,11 +13,6 @@ __all__ = [
     "find_folder",
     "load_volume",
     "save_volume",
-    "relabel_sequential",
-    "relabel_connected_components",
-    "relabel_connected_components_2d",
-    "relabel_connected_components_3d",
-    "relabel_after_crop",
     "cluster_embeddings_meanshift",
     "cluster_embeddings_soft",
     "cluster_offsets_hough",

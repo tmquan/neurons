@@ -66,7 +66,7 @@ loss:
   weight_geometry: 1.0
   dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 0.0
+  weight_cov: 1.0
   weight_raw: 1.0
   loss_dir: l1
   loss_cov: l1

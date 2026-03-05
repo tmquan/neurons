@@ -3,7 +3,7 @@ Base DataModule for connectomics datasets.
 """
 
 from abc import ABC
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import pytorch_lightning as pl
@@ -14,20 +14,32 @@ from monai.transforms import (
     RandFlipd,
     RandGaussianNoised,
     RandRotate90d,
+    RandSpatialCropd,
     Resized,
     ScaleIntensityd,
+    SpatialPadd,
     ToTensord,
 )
 
 from neurons.datasets.base import CircuitDataset
+from neurons.transforms import Labeld, Directiond, Covarianced
 
 
 class CircuitDataModule(pl.LightningDataModule, ABC):
     """
     Base PyTorch Lightning DataModule for connectomics datasets.
 
-    The datamodule owns the train/val/test volume lists and passes them
-    to the dataset class.  No split logic lives in the dataset.
+    Subclasses set ``dataset_class``, override ``_get_dataset_kwargs``,
+    and optionally override the three label-target hooks
+    (``_instance_transforms``, ``_semantic_transforms``,
+    ``_geometry_transforms``) or ``_get_spatial_dims`` for the
+    appropriate dimensionality.
+
+    Pipeline order (train)::
+
+        EnsureChannelFirst → [Pad + Crop + instance_transforms]
+        → spatial augmentations → geometry_transforms
+        → semantic_transforms → intensity augmentations → ToTensor
 
     Args:
         data_root: Path to the data directory.
@@ -36,6 +48,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         cache_rate: Fraction of data to cache in memory (default: 0.5).
         pin_memory: Whether to pin memory for faster GPU transfer.
         image_size: Optional image size for resizing.
+        patch_size: Spatial crop size (enables crop pipeline when set).
         train_volumes: Volume list for training (dataset-specific format).
         val_volumes: Volume list for validation (defaults to train_volumes).
         test_volumes: Volume list for testing (defaults to train_volumes).
@@ -52,6 +65,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         cache_rate: float = 0.5,
         pin_memory: bool = True,
         image_size: Optional[tuple] = None,
+        patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
         train_volumes: Optional[List[Dict[str, str]]] = None,
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
@@ -66,6 +80,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.cache_rate = cache_rate
         self.pin_memory = pin_memory
         self.image_size = image_size
+        self.patch_size = tuple(patch_size) if patch_size is not None else None
         self.train_volumes = train_volumes
         self.val_volumes = val_volumes if val_volumes is not None else train_volumes
         self.test_volumes = test_volumes if test_volumes is not None else train_volumes
@@ -75,9 +90,124 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.val_dataset: Optional[CircuitDataset] = None
         self.test_dataset: Optional[CircuitDataset] = None
 
+    # ------------------------------------------------------------------
+    # Subclass hooks
+    # ------------------------------------------------------------------
+
     def _get_dataset_kwargs(self) -> dict:
         """Override in subclasses to provide dataset-specific arguments."""
         return {}
+
+    def _get_spatial_dims(self) -> int:
+        """Return the number of spatial dimensions for the current config.
+
+        Override in subclasses that support ``slice_mode`` or other
+        dimension-switching logic.  Default is 3 (volumetric).
+        """
+        return 3
+
+    # ------------------------------------------------------------------
+    # Label-target transform hooks  (override to customise)
+    # ------------------------------------------------------------------
+
+    def _instance_transforms(self, spatial_dims: int) -> list:
+        """Post-crop connected-component relabeling.
+
+        Splits instances that became disconnected after cropping and
+        renumbers labels sequentially.  Runs immediately after crop.
+        """
+        return [Labeld(keys=["label"], spatial_dims=spatial_dims)]
+
+    def _semantic_transforms(self, spatial_dims: int) -> list:
+        """Semantic-level label transforms.
+
+        Override to derive semantic segmentation targets from instance
+        labels (e.g. boundary maps, class maps).  Runs after geometry
+        transforms and before intensity augmentations.
+        """
+        return []
+
+    def _geometry_transforms(self, spatial_dims: int) -> list:
+        """Direction and covariance targets for the geometry loss head.
+
+        Runs after all spatial augmentations so the targets are
+        consistent with the augmented label layout.
+        """
+        return [
+            Directiond(keys=["label"], spatial_dims=spatial_dims),
+            Covarianced(keys=["label"], spatial_dims=spatial_dims),
+        ]
+
+    # ------------------------------------------------------------------
+    # Pipeline assembly
+    # ------------------------------------------------------------------
+
+    def _output_keys(self) -> list:
+        """All keys that must pass through ``ToTensord``."""
+        return ["image", "label", "label_direction", "label_covariance"]
+
+    def get_train_transforms(self) -> Compose:
+        io_keys = ["image", "label"]
+        sd = self._get_spatial_dims()
+        rot_axes = (0, 1) if sd == 2 else (1, 2)
+
+        transforms: list = [
+            EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
+        ]
+
+        if self.patch_size is not None:
+            transforms.extend([
+                SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
+                RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
+                *self._instance_transforms(sd),
+            ])
+        elif self.image_size is not None:
+            transforms.append(
+                Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
+            )
+
+        transforms.extend([
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=0),
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
+            RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
+            *self._geometry_transforms(sd),
+            *self._semantic_transforms(sd),
+            RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
+            RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
+            ToTensord(keys=self._output_keys()),
+        ])
+
+        return Compose(transforms)
+
+    def get_val_transforms(self) -> Compose:
+        io_keys = ["image", "label"]
+        sd = self._get_spatial_dims()
+
+        transforms: list = [
+            EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
+        ]
+
+        if self.patch_size is not None:
+            transforms.extend([
+                SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
+                RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
+                *self._instance_transforms(sd),
+            ])
+        elif self.image_size is not None:
+            transforms.append(
+                Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
+            )
+
+        transforms.extend([
+            *self._geometry_transforms(sd),
+            *self._semantic_transforms(sd),
+            ToTensord(keys=self._output_keys()),
+        ])
+        return Compose(transforms)
+
+    # ------------------------------------------------------------------
+    # Dataset / DataLoader wiring
+    # ------------------------------------------------------------------
 
     def setup(self, stage: Optional[str] = None) -> None:
         extra = self._get_dataset_kwargs()
@@ -106,42 +236,6 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
                 transform=self.get_val_transforms(),
                 **extra,
             )
-
-    def get_train_transforms(self) -> Compose:
-        transforms = [
-            EnsureChannelFirstd(keys=["image", "label"], channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
-        ]
-
-        if self.image_size is not None:
-            transforms.append(
-                Resized(keys=["image", "label"], spatial_size=self.image_size, mode=["bilinear", "nearest"])
-            )
-
-        transforms.extend([
-            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
-            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
-            RandRotate90d(keys=["image", "label"], prob=0.5, spatial_axes=(0, 1)),
-            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
-            RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.8, 1.2)),
-            ToTensord(keys=["image", "label"]),
-        ])
-
-        return Compose(transforms)
-
-    def get_val_transforms(self) -> Compose:
-        transforms = [
-            EnsureChannelFirstd(keys=["image", "label"], channel_dim="no_channel"),
-            ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
-        ]
-
-        if self.image_size is not None:
-            transforms.append(
-                Resized(keys=["image", "label"], spatial_size=self.image_size, mode=["bilinear", "nearest"])
-            )
-
-        transforms.append(ToTensord(keys=["image", "label"]))
-        return Compose(transforms)
 
     def train_dataloader(self) -> torch.utils.data.DataLoader:
         return torch.utils.data.DataLoader(

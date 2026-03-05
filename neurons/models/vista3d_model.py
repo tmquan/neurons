@@ -4,7 +4,7 @@ Vista3D model wrapper for volumetric connectomics segmentation.
 3D version of the Vista architecture with three parallel task heads:
 - Semantic: per-voxel class logits (num_classes channels)
 - Instance: per-voxel embedding vectors for discriminative clustering (emb_dim channels)
-- Geometry: per-voxel direction, structure tensor, and RGBA reconstruction
+- Geometry: per-voxel direction, covariance (upper-triangle), and RGBA reconstruction
 """
 
 from typing import Any, Dict, Optional

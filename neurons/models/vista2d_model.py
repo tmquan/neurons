@@ -4,7 +4,7 @@ Vista2D model wrapper for image-based connectomics segmentation.
 2D version of the Vista architecture with three parallel task heads:
 - Semantic: per-pixel class logits (num_classes channels)
 - Instance: per-pixel embedding vectors for discriminative clustering (emb_dim channels)
-- Geometry: per-pixel direction, structure tensor, and RGBA reconstruction
+- Geometry: per-pixel direction, covariance (upper-triangle), and RGBA reconstruction
 """
 
 from typing import Any, Dict, Optional

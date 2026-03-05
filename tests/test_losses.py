@@ -122,7 +122,7 @@ class TestGeometryLoss:
     """Tests for GeometryLoss (geometry head supervision)."""
 
     S = 2
-    GEOM_CH = S + S * S + 4  # 10
+    GEOM_CH = S + S * S + 4  # 2 + 4 + 4 = 10
 
     def _make_inputs(self, B=1, H=16, W=16):
         geometry = torch.randn(B, self.GEOM_CH, H, W, requires_grad=True)
@@ -160,16 +160,16 @@ class TestGeometryLoss:
         assert geometry.grad is not None
         assert geometry.grad.isfinite().all()
 
-    def test_dir_centroid(self) -> None:
-        loss_fn = GeometryLoss(dir_target="centroid", weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
+    def test_dir_only(self) -> None:
+        loss_fn = GeometryLoss(weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
         geometry, labels = self._make_inputs()
         result = loss_fn(geometry, labels)
         assert result["dir"].isfinite()
         assert result["dir"].item() >= 0.0
         assert result["cov"].item() == 0.0
 
-    def test_dir_skeleton(self) -> None:
-        loss_fn = GeometryLoss(dir_target="skeleton", weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
+    def test_dir_large_instances(self) -> None:
+        loss_fn = GeometryLoss(weight_dir=1.0, weight_cov=0.0, weight_raw=0.0)
         geometry = torch.randn(1, self.GEOM_CH, 16, 16, requires_grad=True)
         labels = torch.zeros(1, 16, 16, dtype=torch.long)
         labels[:, 2:14, 2:7] = 1

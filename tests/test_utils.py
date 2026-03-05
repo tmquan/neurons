@@ -10,13 +10,13 @@ import pytest
 import torch
 
 from neurons.utils.io import find_folder, load_volume, save_volume, ensure_data, SUPPORTED_EXTENSIONS
-from neurons.utils.labels import (
+from neurons.transforms.label import (
     relabel_after_crop,
     relabel_sequential,
     relabel_connected_components_2d,
     relabel_connected_components_3d,
-    cluster_embeddings_meanshift,
 )
+from neurons.utils.clustering import cluster_embeddings_meanshift
 from neurons.metrics.instance import (
     _prepare_flat_labels,
     compute_per_point_ari as compute_ari_point,

@@ -8,7 +8,7 @@ from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
 
-class Defectsd(MapTransform, Randomizable):
+class Defectd(MapTransform, Randomizable):
     """Simulate imaging defects common in EM data.
 
     Includes:

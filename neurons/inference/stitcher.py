@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from einops import rearrange
 
-from neurons.utils.labels import (
+from neurons.transforms.label import (
     relabel_connected_components,
     relabel_sequential,
 )

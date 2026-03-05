@@ -450,20 +450,27 @@ class Vista2DLoss(nn.Module):
     def _label_fingerprint(labels):
         return (labels.shape, labels.data_ptr(), int(labels.sum().item()))
 
-    def _get_cached_targets(self, labels):
+    def _get_cached_targets(self, labels, targets=None):
         key = self._label_fingerprint(labels)
         if key != self._cache_key:
             self._cache_key = key
             self._cached_ins_weights = self.instance_loss.compute_weights(labels)
-            self._cached_geom_targets = (
-                self.geometry_loss.compute_targets(labels)
-                if self.geometry_loss is not None else None
-            )
+            if (self.geometry_loss is not None
+                    and targets is not None
+                    and "label_direction" in targets
+                    and "label_covariance" in targets):
+                self._cached_geom_targets = self.geometry_loss.targets_from_pipeline(
+                    targets["label_direction"], targets["label_covariance"],
+                )
+            elif self.geometry_loss is not None:
+                self._cached_geom_targets = self.geometry_loss.compute_targets(labels)
+            else:
+                self._cached_geom_targets = None
         return self._cached_ins_weights, self._cached_geom_targets
 
     def forward(self, predictions, targets) -> Dict[str, torch.Tensor]:
         labels = targets["labels"]
-        (w_edge, w_bone), geom_targets = self._get_cached_targets(labels)
+        (w_edge, w_bone), geom_targets = self._get_cached_targets(labels, targets)
 
         sem = self.semantic_loss(predictions["semantic"], targets["semantic_labels"])
         ins = self.instance_loss(

@@ -129,19 +129,34 @@ class Vista2DModule(pl.LightningModule):
     # ------------------------------------------------------------------
 
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Extract and reshape targets from batch dict."""
+        """Extract and reshape targets from batch dict.
+
+        Squeezes the unit channel dim added by ``EnsureChannelFirstd``
+        from both ``label`` and ``semantic_ids`` so every spatial target
+        is ``[B, *spatial]`` — identical logic for 2-D and 3-D.
+        """
         labels = batch["label"]
         if labels.dim() == _SPATIAL_DIMS + 2:
             labels = rearrange(labels, _SQUEEZE_PATTERN)
 
+        sem = batch.get("semantic_ids", (labels > 0).long())
+        if sem.dim() == _SPATIAL_DIMS + 2:
+            sem = rearrange(sem, _SQUEEZE_PATTERN)
+
         targets: Dict[str, Any] = {
-            "semantic_labels": batch.get("semantic_ids", (labels > 0).long()),
+            "semantic_labels": sem,
             "labels": labels,
         }
         if "semantic_ids" in batch:
-            targets["semantic_ids"] = batch["semantic_ids"]
+            targets["semantic_ids"] = rearrange(
+                batch["semantic_ids"], _SQUEEZE_PATTERN,
+            ) if batch["semantic_ids"].dim() == _SPATIAL_DIMS + 2 else batch["semantic_ids"]
         if "image" in batch:
             targets["raw_image"] = batch["image"]
+        if "label_direction" in batch:
+            targets["label_direction"] = batch["label_direction"]
+        if "label_covariance" in batch:
+            targets["label_covariance"] = batch["label_covariance"]
         return targets
 
     # ------------------------------------------------------------------
@@ -250,7 +265,7 @@ class Vista2DModule(pl.LightningModule):
         targets = self._prepare_targets(batch)
 
         if len(self.training_modes) > 1:
-            self.criterion._get_cached_targets(targets["labels"])
+            self.criterion._get_cached_targets(targets["labels"], targets)
 
         all_losses: Dict[str, torch.Tensor] = {}
         mode_losses = []

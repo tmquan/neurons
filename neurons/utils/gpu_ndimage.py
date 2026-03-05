@@ -38,13 +38,18 @@ except ImportError:
 
 
 def is_available() -> bool:
-    """Return True if cupy is importable and a CUDA device is visible."""
+    """Return True if cupy is importable and a CUDA device is visible.
+
+    Catches all exceptions (not just ``CUDARuntimeError``) because
+    forked DataLoader workers can raise ``RuntimeError`` or ``OSError``
+    from a corrupted CUDA context inherited across ``fork()``.
+    """
     if not _HAS_CUPY:
         return False
     try:
         cp.cuda.Device(0).compute_capability
         return True
-    except cp.cuda.runtime.CUDARuntimeError:
+    except Exception:
         return False
 
 
