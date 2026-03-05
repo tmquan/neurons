@@ -3,7 +3,9 @@
 # Install: pip install -r requirements.txt
 
 # Core deep learning
-# torch==2.10.0+cu130
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.10.0+cu130
+torchvision
 # cupy-cuda13x==14.0.1
 pytorch-lightning==2.6.1
 torchmetrics==1.8.2
@@ -25,6 +27,7 @@ pillow==12.0.0
 numpy==2.4.2
 scipy==1.17.0
 scikit-learn==1.8.0
+scikit-image==0.26.0
 
 # Experiment tracking
 wandb==0.25.0
