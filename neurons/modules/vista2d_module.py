@@ -27,9 +27,10 @@ from neurons.inference.soft_clustering import SoftMeanShift
 from neurons.metrics import (
     compute_per_batch_ari,
     compute_per_batch_ami,
+    compute_per_batch_dice,
+    compute_per_batch_iou,
     compute_per_batch_voi,
     compute_per_batch_ted,
-    compute_per_batch_iou,
 )
 from neurons.utils.point_sampling import sample_point_prompts
 
@@ -86,6 +87,7 @@ class Vista2DModule(pl.LightningModule):
             weight_semantic=loss_config.get("weight_semantic", 1.0),
             weight_instance=loss_config.get("weight_instance", 1.0),
             weight_geometry=loss_config.get("weight_geometry", 0.0),
+            semantic_mode=loss_config.get("semantic_mode", "sigmoid"),
             weight_pull=loss_config.get("weight_pull", 1.0),
             weight_push=loss_config.get("weight_push", 1.0),
             weight_norm=loss_config.get("weight_norm", 0.001),
@@ -98,6 +100,7 @@ class Vista2DModule(pl.LightningModule):
             weight_dice=loss_config.get("weight_dice", 0.0),
             class_weights=loss_config.get("class_weights"),
             ignore_index=loss_config.get("ignore_index", -100),
+            active_classes=loss_config.get("active_classes"),
             weight_dir=loss_config.get("weight_dir", 1.0),
             weight_cov=loss_config.get("weight_cov", 1.0),
             weight_raw=loss_config.get("weight_raw", 1.0),
@@ -301,12 +304,13 @@ class Vista2DModule(pl.LightningModule):
     ) -> None:
         sem_pred = predictions["semantic"].argmax(dim=1)
         sem_gt = targets["semantic_labels"]
+        n_cls = predictions["semantic"].shape[1]
         sem_acc = (sem_pred == sem_gt).float().mean()
-        sem_iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=predictions["semantic"].shape[1])
-        sem_ari = compute_per_batch_ari(sem_pred, sem_gt)
+        sem_iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls)
+        sem_dice = compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls)
         self.log(f"{prefix}/sem_acc", sem_acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/sem_ari", sem_ari, sync_dist=True, batch_size=bs)
         self.log(f"{prefix}/sem_iou", sem_iou, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+        self.log(f"{prefix}/sem_dice", sem_dice, sync_dist=True, batch_size=bs)
 
         fg_mask = targets["labels"] > 0
         ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
