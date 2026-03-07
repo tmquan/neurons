@@ -399,6 +399,7 @@ class _DecoderAdapter3D(nn.Module):
         spatial_compression: int,
         temporal_compression: int,
         dropout: float = 0.0,
+        freeze_decoder: bool = False,
     ) -> None:
         super().__init__()
         self._has_pretrained = vae_decoder is not None
@@ -407,7 +408,8 @@ class _DecoderAdapter3D(nn.Module):
             self.to_latent = _CONV(feature_size, latent_channels, 1)
             self.decoder_body = vae_decoder
             self._hidden_ch = self._replace_conv_out()
-            self._freeze_body()
+            if freeze_decoder:
+                self._freeze_body()
         else:
             self.to_latent = None
             num_up_spatial = int(math.log2(spatial_compression))
@@ -547,6 +549,8 @@ class CosmosTransfer3DWrapper(nn.Module):
         checkpoint_variant: str = "post-trained",
         dtype: str = "bf16",
         freeze_backbone: bool = False,
+        freeze_decoder: bool = False,
+        freeze_encoder: bool = True,
         feature_layers: Optional[List[int]] = None,
         cache_dir: Optional[str] = None,
         hf_token: Optional[str] = None,
@@ -580,6 +584,8 @@ class CosmosTransfer3DWrapper(nn.Module):
             "fp32": torch.float32,
         }[dtype]
         self._freeze_backbone = freeze_backbone
+        self._freeze_decoder = freeze_decoder
+        self._freeze_encoder = freeze_encoder
 
         if feature_layers is not None:
             self._feature_layers = sorted(feature_layers)
@@ -610,6 +616,7 @@ class CosmosTransfer3DWrapper(nn.Module):
             spatial_compression=self.cfg.spatial_compression,
             temporal_compression=self.cfg.temporal_compression,
             dropout=dropout,
+            freeze_decoder=freeze_decoder,
         )
 
         self.point_encoder = PointPromptEncoder(
@@ -618,7 +625,7 @@ class CosmosTransfer3DWrapper(nn.Module):
             spatial_dims=_SPATIAL_DIMS,
         )
 
-        if self.vae_encoder is not None:
+        if self.vae_encoder is not None and freeze_encoder:
             self.vae_encoder.requires_grad_(False)
             self.vae_encoder.eval()
 
@@ -702,8 +709,6 @@ class CosmosTransfer3DWrapper(nn.Module):
             )
 
             self.vae_encoder = vae.encoder
-            self.vae_encoder.requires_grad_(False)
-            self.vae_encoder.eval()
             self.vae_decoder = vae.decoder
 
             self.dit = transformer
@@ -738,8 +743,6 @@ class CosmosTransfer3DWrapper(nn.Module):
             )
             if hasattr(pipe, "vae") and hasattr(pipe.vae, "encoder"):
                 self.vae_encoder = pipe.vae.encoder
-                self.vae_encoder.requires_grad_(False)
-                self.vae_encoder.eval()
 
             if hasattr(pipe, "vae") and hasattr(pipe.vae, "decoder"):
                 self.vae_decoder = pipe.vae.decoder

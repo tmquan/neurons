@@ -76,13 +76,21 @@ def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
     The top-3 principal components are used as RGB channels.  Each image
     in the batch is projected independently so colours are locally
     meaningful (nearby pixels with similar embeddings get similar colours).
+
+    Falls back to the first 3 channels when SVD fails to converge
+    (ill-conditioned matrices are common in early training).
     """
     B, E, H, W = emb.shape
     flat = rearrange(emb, "b e h w -> b e (h w)").float()         # [B, E, N]
     mean = flat.mean(dim=2, keepdim=True)
     centered = flat - mean
-    U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
-    proj = Vh[:, :n_components]                                    # [B, 3, N]
+
+    try:
+        U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
+        proj = Vh[:, :n_components]                                # [B, 3, N]
+    except torch._C._LinAlgError:
+        proj = centered[:, :n_components]                          # [B, 3, N]
+
     proj = rearrange(proj, "b c (h w) -> b c h w", h=H, w=W)
     return _normalise(proj)
 
@@ -548,7 +556,9 @@ class ImageLogger(pl.Callback):
 
             n = min(images.shape[0], self.max_images)
             preds_auto = pl_module.model(images[:n])
-            clusterer = getattr(pl_module, "_clusterer", None)
+
+        preds_auto = {k: v.float() if isinstance(v, torch.Tensor) and v.is_floating_point() else v for k, v in preds_auto.items()}
+        clusterer = getattr(pl_module, "_clusterer", None)
 
         criterion = getattr(pl_module, "criterion", None)
         geom_loss = getattr(criterion, "geometry_loss", None) if criterion else None
@@ -573,7 +583,7 @@ class ImageLogger(pl.Callback):
 
         from neurons.utils.point_sampling import sample_point_prompts
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.amp.autocast(device_type=str(pl_module.device).split(":")[0], enabled=torch.cuda.is_available()):
             sem_labels = (labels[:n] > 0).long()
             point_prompts = sample_point_prompts(
                 sem_labels, labels[:n],
@@ -582,6 +592,8 @@ class ImageLogger(pl.Callback):
                 sample_mode=getattr(pl_module, "_point_sample_mode", "class"),
             )
             preds_proof = pl_module.model(images[:n], point_prompts=point_prompts)
+
+        preds_proof = {k: v.float() if isinstance(v, torch.Tensor) and v.is_floating_point() else v for k, v in preds_proof.items()}
 
         img_gray = _log_predictions(
             tb, "train_vis_proofread", images_2d, labels_2d,

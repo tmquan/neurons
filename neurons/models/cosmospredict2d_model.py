@@ -435,6 +435,8 @@ class CosmosPredict2DWrapper(nn.Module):
         checkpoint_variant: str = "post-trained",
         dtype: str = "bf16",
         freeze_backbone: bool = False,
+        freeze_decoder: bool = False,
+        freeze_encoder: bool = True,
         feature_layers: Optional[List[int]] = None,
         cache_dir: Optional[str] = None,
         hf_token: Optional[str] = None,
@@ -461,6 +463,8 @@ class CosmosPredict2DWrapper(nn.Module):
 
         self._dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[dtype]
         self._freeze_backbone = freeze_backbone
+        self._freeze_decoder = freeze_decoder
+        self._freeze_encoder = freeze_encoder
 
         if feature_layers is not None:
             self._feature_layers = sorted(feature_layers)
@@ -509,7 +513,7 @@ class CosmosPredict2DWrapper(nn.Module):
             spatial_dims=_SPATIAL_DIMS,
         )
 
-        if self.vae_encoder is not None:
+        if self.vae_encoder is not None and freeze_encoder:
             self.vae_encoder.requires_grad_(False)
             self.vae_encoder.eval()
 
@@ -591,8 +595,6 @@ class CosmosPredict2DWrapper(nn.Module):
             )
 
             self.vae_encoder = vae.encoder
-            self.vae_encoder.requires_grad_(False)
-            self.vae_encoder.eval()
 
             self.dit = transformer
             self._backbone_loaded = True
@@ -631,8 +633,6 @@ class CosmosPredict2DWrapper(nn.Module):
             # installed cosmos_predict2 version.
             if hasattr(pipe, "vae") and hasattr(pipe.vae, "encoder"):
                 self.vae_encoder = pipe.vae.encoder
-                self.vae_encoder.requires_grad_(False)
-                self.vae_encoder.eval()
 
             if hasattr(pipe, "dit"):
                 self.dit = pipe.dit
