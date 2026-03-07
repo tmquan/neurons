@@ -130,9 +130,9 @@ def _render_cov_glyphs(
 
     result = []
     for b in range(B):
-        bg = rearrange(img_rgb[b].detach().cpu(), "c h w -> h w c").numpy().copy()
+        bg = rearrange(img_rgb[b].detach().cpu().float(), "c h w -> h w c").numpy().copy()
         lbl = labels[b].detach().cpu().numpy()
-        mat = cov_mat[b].detach().cpu().numpy()
+        mat = cov_mat[b].detach().cpu().float().numpy()
 
         rows_sub = np.arange(step // 2, H, step)
         cols_sub = np.arange(step // 2, W, step)
@@ -256,9 +256,9 @@ def _render_dir_quiver(
 
     result = []
     for b in range(B):
-        bg = rearrange(img_rgb[b].detach().cpu(), "c h w -> h w c").numpy().copy()
+        bg = rearrange(img_rgb[b].detach().cpu().float(), "c h w -> h w c").numpy().copy()
         lbl = labels[b].detach().cpu().numpy()
-        d = dir_val[b].detach().cpu().numpy()
+        d = dir_val[b].detach().cpu().float().numpy()
 
         # Channel layout: 2D → [x, y];  3D → [z, y, x].
         # For 2D quiver display we need (U=horizontal, V=vertical).

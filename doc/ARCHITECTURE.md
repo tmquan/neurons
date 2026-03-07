@@ -215,25 +215,25 @@ Input [B, 1, D, H, W]
 └────────┬───────-──┘
          │ intermediate features: List[[B, N, hidden_dim]]
          ▼
-┌───────────────-───┐
+┌───────────────────┐
 │ FeatureProjector3D│  Concat multi-layer features → Conv3d projection
 │                   │  Output: [B, feature_size, D_lat, H_lat, W_lat]
-└────────┬───────-──┘
+└────────┬──────────┘
          │
          ▼
-┌───────────────-───┐
-│ DecoderAdapter3D  │  Reuses pretrained VAE decoder body (partially frozen)
-│                   │  OR fallback ProgressiveUpsampler3D
-│  ┌──────────────┐ │
-│  │ to_latent    │ │  Conv3d: feature_size → latent_channels
-│  │ decoder_body │ │  Pretrained VAE decoder (frozen body, trainable last block)
-│  │ ┌──────────┐ │ │
-│  │ │head_sem  │ │ │  [B, C, D, H, W]
-│  │ │head_ins  │ │ │  [B, E, D, H, W]
-│  │ │head_geom │ │ │  [B, 16, D, H, W]
-│  │ └──────────┘ │ │
-│  └──────────────┘ │
-└────────────────-──┘
+┌───────────────────┐
+│ DecoderAdapter3D  │  Two paths depending on pretrained decoder availability:
+│                   │
+│  WITH pretrained VAE decoder:
+│  │ to_latent     │  Conv3d: feature_size → latent_channels (64→16)
+│  │ decoder_body  │  Pretrained VAE decoder (frozen body, trainable last block)
+│  │ task heads    │  semantic / instance / geometry
+│                   │
+│  WITHOUT pretrained decoder (standalone fallback):
+│  │ decoder_body  │  ProgressiveUpsampler3D(feature_size → feature_size)
+│  │ task heads    │  Heads read directly from feature_size channels
+│  │               │  (no to_latent bottleneck — skipped entirely)
+└───────────────────┘
 ```
 
 ### 6.3 Components
@@ -244,12 +244,32 @@ Input [B, 1, D, H, W]
 | Input adapter     | `_InputAdapter3D`                                | `Conv3d(in_ch, 3, k=1)` to map single-channel EM to 3-ch RGB expected by Cosmos.                                                |
 | VAE encoder       | From `AutoencoderKLCosmos`                       | Compresses `[B,3,D,H,W]` to latent `[B,16,D/8,H/8,W/8]`. Always frozen.                                                         |
 | DiT backbone      | `_StandaloneDiT3D` or `CosmosTransformer3DModel` | N layers of self-attention blocks with adaptive layer norm. Processes 3D patch tokens.                                          |
-| Feature projector | `_FeatureProjector3D`                            | Fuses features from 4 DiT layers (quartile indices) into a single spatial feature map via concat + Conv3d projection.           |
-| Decoder adapter   | `_DecoderAdapter3D`                              | Projects features back to latent dim, runs through (partially frozen) VAE decoder, then three task heads produce final outputs. |
+| Feature projector | `_FeatureProjector3D`                            | Reshapes DiT token sequences to spatial grids, fuses 4 layers via concat, and projects `hidden_dim*4 → feature_size`. |
+| Decoder adapter   | `_DecoderAdapter3D`                              | With pretrained VAE: projects `feature_size → latent_channels`, runs frozen decoder, then task heads. Without pretrained VAE: upsamples directly from `feature_size` (no bottleneck). |
 | Point encoder     | `PointPromptEncoder`                             | Same as Vista3D -- sparse point prompts added as a feature residual.                                                            |
 
 
-### 6.4 Weight Loading Strategy
+### 6.4 Why FeatureProjector + DecoderAdapter (Not One Module)
+
+The FeatureProjector and DecoderAdapter serve distinct, non-overlapping roles:
+
+- **FeatureProjector** handles the DiT-specific translation: reshaping flat
+  token sequences `[B, N, hidden_dim]` into 3D spatial grids, fusing
+  multi-layer features (4 layers concatenated), and compressing from
+  `hidden_dim * 4` (e.g. 8192) down to `feature_size` (e.g. 64).
+
+- **DecoderAdapter** handles spatial upsampling back to input resolution.
+  When a pretrained VAE decoder is available, it first projects
+  `feature_size → latent_channels` via `to_latent` to match the decoder's
+  expected input, then runs the (partially frozen) pretrained decoder.
+  When no pretrained decoder is available, the `to_latent` projection is
+  skipped entirely and the fallback `ProgressiveUpsampler` works directly
+  from `feature_size`, avoiding a wasteful channel bottleneck.
+
+The point prompt encoder residual is added between these two stages,
+operating in `feature_size`-dimensional space at latent resolution.
+
+### 6.5 Weight Loading Strategy
 
 Three loading strategies are tried in order:
 
@@ -258,7 +278,7 @@ Three loading strategies are tried in order:
 3. **Raw checkpoint** -- `snapshot_download()` + `load_state_dict(strict=False)`
 4. **Standalone fallback** -- Random init with matching architecture shape
 
-### 6.5 Freeze Policy (Default)
+### 6.6 Freeze Policy (Default)
 
 
 | Component                 | Default state     | Notes                                                  |
@@ -267,14 +287,16 @@ Three loading strategies are tried in order:
 | VAE encoder               | **Always frozen** | `requires_grad_(False)` + `.eval()`                    |
 | DiT backbone              | **Trainable**     | `freeze_backbone=False` by default                     |
 | Feature projector         | **Trainable**     | Randomly initialized                                   |
+| `to_latent` projection    | **Trainable**     | Only exists when pretrained VAE decoder is loaded       |
 | VAE decoder body          | **Mostly frozen** | All params frozen except last up-block and output norm |
 | VAE decoder last up-block | **Trainable**     | Fine-tuned for domain adaptation                       |
 | VAE decoder output norm   | **Trainable**     | Fine-tuned for domain adaptation                       |
+| Fallback upsampler        | **Trainable**     | Used when no VAE decoder; upsamples from `feature_size` directly |
 | Task heads (sem/ins/geom) | **Trainable**     | Randomly initialized                                   |
 | Point encoder             | **Trainable**     | Initialized near-zero for no-op at start               |
 
 
-### 6.6 Loss Function: `CosmosPredict3DLoss`
+### 6.7 Loss Function: `CosmosPredict3DLoss`
 
 Same three-component structure as Vista3DLoss, plus an optional fourth term:
 
@@ -288,7 +310,7 @@ The **feature-consistency loss** (`L_fc`) penalizes L2 distance between
 DiT features computed on two augmented views of the same input, encouraging
 augmentation-invariant backbone representations.
 
-### 6.7 Optimizer Enhancements
+### 6.8 Optimizer Enhancements
 
 CosmosPredict3DModule supports **differential learning rates**:
 
@@ -301,7 +323,7 @@ optimizer:
 Also supports `cosine_warmup` scheduler (linear warmup then cosine decay),
 in addition to the plain `cosine` scheduler from Vista3D.
 
-### 6.8 When to Use CosmosPredict3D
+### 6.9 When to Use CosmosPredict3D
 
 - When you want to leverage pretrained video generation features for EM data.
 - Large-scale datasets (MICRONS, combined SNEMI3D+MICRONS) where the pretrained
@@ -349,15 +371,17 @@ prefixed with `CosmosTransfer` instead of `CosmosPredict`.
 Identical to CosmosPredict3D (Section 6.5):
 
 
-| Component         | Default state                                   |
-| ----------------- | ----------------------------------------------- |
-| Input adapter     | **Trainable**                                   |
-| VAE encoder       | **Always frozen**                               |
-| DiT backbone      | **Trainable** (`freeze_backbone=False`)         |
-| Feature projector | **Trainable**                                   |
-| VAE decoder body  | **Mostly frozen** (except last up-block + norm) |
-| Task heads        | **Trainable**                                   |
-| Point encoder     | **Trainable**                                   |
+| Component              | Default state                                   |
+| ---------------------- | ----------------------------------------------- |
+| Input adapter          | **Trainable**                                   |
+| VAE encoder            | **Always frozen**                               |
+| DiT backbone           | **Trainable** (`freeze_backbone=False`)         |
+| Feature projector      | **Trainable**                                   |
+| `to_latent` projection | **Trainable** (only when pretrained VAE loaded)  |
+| VAE decoder body       | **Mostly frozen** (except last up-block + norm) |
+| Fallback upsampler     | **Trainable** (when no VAE; works from `feature_size` directly) |
+| Task heads             | **Trainable**                                   |
+| Point encoder          | **Trainable**                                   |
 
 
 ### 7.5 Loss Function: `CosmosTransfer3DLoss`
@@ -391,8 +415,10 @@ Encoding      Direct convolution     VAE encoder → latent (8x compress)
 Features      Single feature map     Multi-layer extraction at
               from encoder-decoder   {n/4, n/2, 3n/4, n-1} + projection
 
-Decoding      Direct from backbone   VAE decoder adapter (partially
-                                     frozen pretrained upsampling)
+Decoding      Direct from backbone   With pretrained VAE: to_latent →
+                                       frozen decoder (last block trainable)
+                                     Without: ProgressiveUpsampler
+                                       directly from feature_size (no bottleneck)
 
 Task heads    Conv3d + GN + ReLU     Same structure
               + Conv3d

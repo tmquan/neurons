@@ -402,21 +402,22 @@ class _DecoderAdapter3D(nn.Module):
     ) -> None:
         super().__init__()
         self._has_pretrained = vae_decoder is not None
-        self.to_latent = _CONV(feature_size, latent_channels, 1)
 
         if vae_decoder is not None:
+            self.to_latent = _CONV(feature_size, latent_channels, 1)
             self.decoder_body = vae_decoder
             self._hidden_ch = self._replace_conv_out()
             self._freeze_body()
         else:
+            self.to_latent = None
             num_up_spatial = int(math.log2(spatial_compression))
             num_up_temporal = int(math.log2(temporal_compression))
             num_stages = max(num_up_spatial, num_up_temporal)
             self.decoder_body = _ProgressiveUpsampler3D(
-                in_dim=latent_channels, out_dim=latent_channels,
+                in_dim=feature_size, out_dim=feature_size,
                 num_stages=num_stages,
             )
-            self._hidden_ch = latent_channels
+            self._hidden_ch = feature_size
 
         self.head_semantic = nn.Sequential(
             _CONV(self._hidden_ch, 64, 3, padding=1), _NORM(64),
@@ -473,15 +474,15 @@ class _DecoderAdapter3D(nn.Module):
     def forward(
         self, features: torch.Tensor, target_size: tuple,
     ) -> Dict[str, torch.Tensor]:
-        latent = self.to_latent(features)
         if self._has_pretrained:
+            latent = self.to_latent(features)
             decoded = self.decoder_body(latent)
             if isinstance(decoded, (tuple, list)):
                 decoded = decoded[0]
             if hasattr(decoded, "sample"):
                 decoded = decoded.sample
         else:
-            decoded = self.decoder_body(latent)
+            decoded = self.decoder_body(features)
         if decoded.shape[-3:] != target_size:
             decoded = F.interpolate(
                 decoded, size=target_size, mode="trilinear", align_corners=False,

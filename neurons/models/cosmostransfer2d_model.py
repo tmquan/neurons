@@ -412,19 +412,20 @@ class _DecoderAdapter(nn.Module):
         super().__init__()
         self._is_video_decoder = is_video_decoder and (vae_decoder is not None)
         self._has_pretrained = vae_decoder is not None
-        self.to_latent = _CONV(feature_size, latent_channels, 1)
 
         if vae_decoder is not None:
+            self.to_latent = _CONV(feature_size, latent_channels, 1)
             self.decoder_body = vae_decoder
             self._hidden_ch = self._replace_conv_out()
             self._freeze_body()
         else:
+            self.to_latent = None
             num_stages = int(math.log2(spatial_compression))
             self.decoder_body = _ProgressiveUpsampler(
-                in_dim=latent_channels, out_dim=latent_channels,
+                in_dim=feature_size, out_dim=feature_size,
                 num_stages=num_stages,
             )
-            self._hidden_ch = latent_channels
+            self._hidden_ch = feature_size
 
         self.head_semantic = nn.Sequential(
             _CONV(self._hidden_ch, 64, 3, padding=1), _NORM(64),
@@ -481,8 +482,8 @@ class _DecoderAdapter(nn.Module):
     def forward(
         self, features: torch.Tensor, target_size: tuple,
     ) -> Dict[str, torch.Tensor]:
-        latent = self.to_latent(features)
         if self._is_video_decoder:
+            latent = self.to_latent(features)
             latent = rearrange(latent, "b c h w -> b c 1 h w")
             decoded = self.decoder_body(latent)
             if isinstance(decoded, (tuple, list)):
@@ -491,8 +492,11 @@ class _DecoderAdapter(nn.Module):
                 decoded = decoded.sample
             if decoded.dim() == 5:
                 decoded = decoded[:, :, 0]
-        else:
+        elif self._has_pretrained:
+            latent = self.to_latent(features)
             decoded = self.decoder_body(latent)
+        else:
+            decoded = self.decoder_body(features)
         if decoded.shape[-2:] != target_size:
             decoded = F.interpolate(
                 decoded, size=target_size, mode="bilinear", align_corners=False,
