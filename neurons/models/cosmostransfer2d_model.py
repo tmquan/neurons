@@ -275,6 +275,9 @@ class _StandaloneDiT(nn.Module):
             ``final_hidden`` is ``[B, N, hidden_dim]`` and
             ``intermediate_features`` maps layer index -> ``[B, N, D]``.
         """
+        _param_dtype = self.patch_embed.weight.dtype
+        latent = latent.to(dtype=_param_dtype)
+
         B, C, H, W = latent.shape
         P = self.patch_size
 
@@ -290,7 +293,7 @@ class _StandaloneDiT(nn.Module):
                 timestep = repeat(timestep, "-> b 1", b=B)
             elif timestep.dim() == 1:
                 timestep = rearrange(timestep, "b -> b 1")
-            t_emb = self.timestep_embed(timestep.float())
+            t_emb = self.timestep_embed(timestep.to(dtype=_param_dtype))
         else:
             t_emb = None
 

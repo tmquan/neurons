@@ -537,7 +537,7 @@ class ImageLogger(pl.Callback):
 
     def _run_visualization(self, tb, pl_module, batch):
         epoch = pl_module.current_epoch
-        with torch.no_grad():
+        with torch.no_grad(), torch.amp.autocast(device_type=str(pl_module.device).split(":")[0], enabled=torch.cuda.is_available()):
             images = batch["image"].to(pl_module.device)
             if images.dim() == self.spatial_dims + 1:
                 images = rearrange(images, "b ... -> b 1 ...")
