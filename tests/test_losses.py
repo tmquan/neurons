@@ -7,11 +7,11 @@ import torch
 
 from neurons.losses.discriminative import (
     CentroidEmbeddingLoss,
-    GeometryLoss,
     SkeletonEmbeddingLoss,
     DiscriminativeLoss,
     DiscriminativeLossVectorized,
 )
+from neurons.losses.geometry import GeometryLoss
 from neurons.losses.vista2d_losses import Vista2DLoss
 from neurons.losses.vista3d_losses import Vista3DLoss
 

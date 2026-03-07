@@ -91,6 +91,9 @@ class _DummyDataModule(CircuitDataModule):
 
     dataset_class = _DummyDataset  # type: ignore[assignment]
 
+    def _get_spatial_dims(self) -> int:
+        return 2
+
 
 # ---------------------------------------------------------------------------
 # Tests: CircuitDataModule (base)

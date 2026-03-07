@@ -107,15 +107,13 @@ class Vista2DLoss(nn.Module):
         out: Dict[str, torch.Tensor] = {
             "loss_sem":       sem["loss"],
             "loss_sem/ce":    sem["ce"],
+            "loss_sem/iou":   sem["iou"],
+            "loss_sem/dice":  sem["dice"],
             "loss_ins":       ins["loss"],
             "loss_ins/pull":  ins["pull"],
             "loss_ins/push":  ins["push"],
             "loss_ins/norm":  ins["norm"],
         }
-        if self.semantic_loss.weight_iou > 0:
-            out["loss_sem/iou"] = sem["iou"]
-        if self.semantic_loss.weight_dice > 0:
-            out["loss_sem/dice"] = sem["dice"]
 
         if self.geometry_loss is not None and "geometry" in predictions:
             geom = self.geometry_loss(

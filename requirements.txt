@@ -36,6 +36,12 @@ tensorboard==2.20.0
 # Visualization
 matplotlib==3.10.8
 
+# Cosmos-Predict2.5 backbone
+diffusers==0.37.0
+huggingface_hub>=1.6.0
+safetensors==0.7.0
+accelerate==1.13.0
+
 # Utilities
 rich==14.3.2
 tqdm==4.66.5

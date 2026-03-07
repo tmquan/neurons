@@ -11,7 +11,7 @@ project_name: neurons-combined
 data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
-  batch_size: 4
+  batch_size: 2
   num_workers: 8
   cache_rate: 0.0
   slice_mode: false
@@ -33,12 +33,38 @@ data:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 0.0}
     - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
 
+# # --- vista3d ---
+# model:
+#   type: vista3d
+#   in_channels: 1
+#   num_classes: 16
+#   emb_dim: 16
+#   feature_size: 48
+#   dropout: 0.1
+
+# # --- cosmospredict3d ---
+# model:
+#   type: cosmospredict3d
+#   in_channels: 1
+#   num_classes: 16
+#   emb_dim: 16
+#   feature_size: 64
+#   variant: "2B"
+#   checkpoint_variant: "post-trained"
+#   dtype: "bf16"
+#   freeze_backbone: false
+#   dropout: 0.1
+
+# --- cosmostransfer3d ---
 model:
-  type: vista3d
+  type: cosmostransfer3d
   in_channels: 1
   num_classes: 16
   emb_dim: 16
-  feature_size: 48
+  feature_size: 64
+  variant: "2B"
+  dtype: "bf16"
+  freeze_backbone: false
   dropout: 0.1
 
 optimizer:

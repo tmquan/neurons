@@ -198,7 +198,14 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
 
 def get_module(cfg: DictConfig) -> pl.LightningModule:
     """Create appropriate Lightning module based on config."""
-    from neurons.modules import Vista3DModule, Vista2DModule
+    from neurons.modules import (
+        Vista3DModule,
+        Vista2DModule,
+        CosmosPredict2DModule,
+        CosmosPredict3DModule,
+        CosmosTransfer2DModule,
+        CosmosTransfer3DModule,
+    )
 
     model_cfg = dict(cfg.get("model", {}))
     optimizer_cfg = dict(cfg.get("optimizer", {}))
@@ -207,8 +214,23 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
 
     model_type = model_cfg.pop("type", "vista3d").lower()
 
-    if model_type == "vista2d":
-        return Vista2DModule(
+    _MODULE_MAP = {
+        "vista2d": Vista2DModule,
+        "cosmospredict2d": CosmosPredict2DModule,
+        "cosmos_predict25": CosmosPredict2DModule,
+        "cosmos_predict25_2d": CosmosPredict2DModule,
+        "cosmospredict3d": CosmosPredict3DModule,
+        "cosmos_predict25_3d": CosmosPredict3DModule,
+        "cosmostransfer2d": CosmosTransfer2DModule,
+        "cosmos_transfer25": CosmosTransfer2DModule,
+        "cosmos_transfer25_2d": CosmosTransfer2DModule,
+        "cosmostransfer3d": CosmosTransfer3DModule,
+        "cosmos_transfer25_3d": CosmosTransfer3DModule,
+    }
+
+    module_cls = _MODULE_MAP.get(model_type)
+    if module_cls is not None:
+        return module_cls(
             model_config=model_cfg,
             optimizer_config=optimizer_cfg,
             loss_config=loss_cfg,
@@ -367,6 +389,7 @@ def main(cfg: DictConfig) -> None:
         strategy = DDPStrategy(
             find_unused_parameters=has_unused_params,
             static_graph=not has_unused_params,
+            gradient_as_bucket_view=False,
         )
     elif strategy_name == "fsdp":
         strategy = FSDPStrategy(

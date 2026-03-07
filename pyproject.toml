@@ -30,6 +30,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cosmos = [
+    "diffusers>=0.37.0",
+    "huggingface_hub>=1.6.0",
+    "safetensors>=0.7.0",
+    "accelerate>=1.13.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
