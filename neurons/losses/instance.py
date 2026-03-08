@@ -219,16 +219,18 @@ class InstanceLoss(nn.Module):
         """
         E = emb.shape[0]
         fg = lbl >= 0
-        emb_fg = emb[:, fg]                          # [E, M]
-        lbl_fg = lbl[fg]                              # [M]
-        wgt_fg = wgt[fg]                              # [M]
+        emb_fg = emb[:, fg].float()                   # [E, M] always float32
+        lbl_fg = lbl[fg]                               # [M]
+        if wgt is not None:
+            wgt_fg = wgt[fg].float()                   # [M] always float32
+            weighted_emb = emb_fg * wgt_fg.unsqueeze(0)
+            w_sum = torch.zeros(K, device=emb.device, dtype=torch.float32)
+            w_sum.scatter_add_(0, lbl_fg, wgt_fg)
+        else:
+            weighted_emb = emb_fg
+            w_sum = torch.bincount(lbl_fg, minlength=K).float().clamp(min=1)
 
-        weighted_emb = emb_fg * wgt_fg.unsqueeze(0)   # [E, M]
-
-        w_sum = emb.new_zeros(K)
-        w_sum.scatter_add_(0, lbl_fg, wgt_fg)
-
-        c_sum = emb.new_zeros(E, K)
+        c_sum = torch.zeros(E, K, device=emb.device, dtype=torch.float32)
         lbl_expand = lbl_fg.unsqueeze(0).expand(E, -1)
         c_sum.scatter_add_(1, lbl_expand, weighted_emb)
 
@@ -246,12 +248,19 @@ class InstanceLoss(nn.Module):
         """
         emb_flat = rearrange(embed, "b e ... -> b e (...)")
         lbl_flat = rearrange(label, "b ... -> b (...)")
-        wgt_flat = rearrange(w_edge * w_bone, "b ... -> b (...)")
+        if w_edge is not None and w_bone is not None:
+            wgt_flat = rearrange(w_edge * w_bone, "b ... -> b (...)")
+        elif w_edge is not None:
+            wgt_flat = rearrange(w_edge, "b ... -> b (...)")
+        elif w_bone is not None:
+            wgt_flat = rearrange(w_bone, "b ... -> b (...)")
+        else:
+            wgt_flat = None
 
-        dev = embed.device
-        loss_pull = torch.tensor(0.0, device=dev)
-        loss_push = torch.tensor(0.0, device=dev)
-        loss_norm = torch.tensor(0.0, device=dev)
+        device = embed.device
+        loss_pull = torch.tensor(0.0, device=device)
+        loss_push = torch.tensor(0.0, device=device)
+        loss_norm = torch.tensor(0.0, device=device)
         n_valid = 0
 
         for b in range(embed.shape[0]):
@@ -270,37 +279,35 @@ class InstanceLoss(nn.Module):
             remap[fg] = inverse
 
             emb_b = emb_flat[b]                        # [E, N]
-            wgt_b = wgt_flat[b]                        # [N]
+            wgt_b = wgt_flat[b] if wgt_flat is not None else None
 
             centers = self._scatter_weighted_mean(emb_b, remap, wgt_b, K)  # [K, E]
 
-            center_per_pixel = centers[inverse]        # [M, E] where M = fg.sum()
-            emb_fg = emb_b[:, fg].T                    # [M, E]
-            wgt_fg = wgt_b[fg]                         # [M]
+            center_per_pixel = centers[inverse]        # [M, E] float32
+            emb_fg = emb_b[:, fg].T.float()            # [M, E]
 
-            dist = torch.norm(emb_fg - center_per_pixel, dim=1)  # [M]
-            pull_per_pixel = F.relu(dist - self.delta_v) ** 2 * wgt_fg
+            dist = ((emb_fg - center_per_pixel) ** 2).sum(dim=1).clamp(min=1e-12).sqrt()  # [M]
+            pull_per_pixel = F.relu(dist - self.delta_v) ** 2
+            if wgt_b is not None:
+                pull_per_pixel = pull_per_pixel * wgt_b[fg].float()
 
-            pull_sum = emb_b.new_zeros(K)
+            pull_sum = torch.zeros(K, device=device, dtype=torch.float32)
             pull_sum.scatter_add_(0, inverse, pull_per_pixel)
-            pull_count = emb_b.new_zeros(K)
-            pull_count.scatter_add_(0, inverse, torch.ones_like(pull_per_pixel))
-            b_pull = (pull_sum / pull_count.clamp(min=1)).mean()
+            pull_count = torch.bincount(inverse, minlength=K).float().clamp(min=1)
+            b_pull = (pull_sum / pull_count).mean()
             loss_pull = loss_pull + b_pull
 
             if K > 1:
-                pw = torch.norm(
-                    rearrange(centers, "i e -> i 1 e") -
-                    rearrange(centers, "j e -> 1 j e"),
-                    dim=2,
-                )
-                triu = torch.triu_indices(K, K, offset=1, device=dev)
+                pw_diff = (rearrange(centers, "i e -> i 1 e") -
+                           rearrange(centers, "j e -> 1 j e"))
+                pw = (pw_diff ** 2).sum(dim=2).clamp(min=1e-12).sqrt()
+                triu = torch.triu_indices(K, K, offset=1, device=device)
                 loss_push = loss_push + reduce(
                     F.relu(2 * self.delta_d - pw[triu[0], triu[1]]) ** 2,
                     "n -> ", "mean",
                 )
 
-            loss_norm = loss_norm + centers.norm(dim=1).mean()
+            loss_norm = loss_norm + (centers ** 2).sum(dim=1).clamp(min=1e-12).sqrt().mean()
 
         n = max(n_valid, 1)
         pull = loss_pull / n
@@ -313,10 +320,14 @@ class InstanceLoss(nn.Module):
     # Public interface
     # ------------------------------------------------------------------
 
-    def compute_weights(self, label: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Pre-compute boundary + skeleton weights (cache-friendly)."""
-        w_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else torch.ones_like(label, dtype=torch.float32)
-        w_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else torch.ones_like(label, dtype=torch.float32)
+    def compute_weights(self, label: torch.Tensor) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Pre-compute boundary + skeleton weights (cache-friendly).
+
+        Returns ``None`` for a weight component when the corresponding
+        multiplier is <= 1.0 (disabled), avoiding a full-size ones allocation.
+        """
+        w_edge = self._get_weight_boundary(label) if self.weight_edge > 1.0 else None
+        w_bone = self._get_weight_skeleton(label) if self.weight_bone > 1.0 else None
         return w_edge, w_bone
 
     def forward(
@@ -327,7 +338,7 @@ class InstanceLoss(nn.Module):
         weight_edge: Optional[torch.Tensor] = None,
         weight_bone: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        if weight_edge is None or weight_bone is None:
+        if weight_edge is None and weight_bone is None:
             weight_edge, weight_bone = self.compute_weights(label)
 
         if semantic_ids is not None:

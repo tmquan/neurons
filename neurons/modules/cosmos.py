@@ -189,7 +189,7 @@ class BaseCosmosModule(pl.LightningModule):
                 if batch["semantic_ids"].dim() == _SPATIAL_DIMS + 2
                 else batch["semantic_ids"]
             )
-        if "image" in batch:
+        if "image" in batch and self.criterion.weight_geometry > 0:
             targets["raw_image"] = batch["image"]
         if "label_direction" in batch:
             targets["label_direction"] = batch["label_direction"]
@@ -221,7 +221,7 @@ class BaseCosmosModule(pl.LightningModule):
         sem = targets["semantic_labels"].clone()
         sem[unknown] = self._ignore_index
         targets["semantic_labels"] = sem
-        targets["semantic_ids"] = sem.clone()
+        targets["semantic_ids"] = sem
 
         inst = labels.clone()
         inst[unknown] = 0
@@ -231,8 +231,7 @@ class BaseCosmosModule(pl.LightningModule):
             int(known_ids.max().item()) + 1 if known_ids.numel() > 0 else 1,
             dtype=torch.long, device=labels.device,
         )
-        for new_id, old_id in enumerate(known_ids, start=1):
-            remap[old_id] = new_id
+        remap[known_ids] = torch.arange(1, known_ids.numel() + 1, device=labels.device)
         flat = rearrange(inst, "... -> (...)")
         mask = flat > 0
         flat[mask] = remap[flat[mask]]
@@ -279,7 +278,8 @@ class BaseCosmosModule(pl.LightningModule):
         targets = self._prepare_targets(batch)
 
         if len(self.training_modes) > 1:
-            self.criterion._get_cached_targets(targets["labels"], targets)
+            cached = self.criterion._compute_targets(targets["labels"], targets)
+            targets["_cached_weights"] = cached
 
         all_losses: Dict[str, torch.Tensor] = {}
         mode_losses: List[torch.Tensor] = []
@@ -381,20 +381,37 @@ class BaseCosmosModule(pl.LightningModule):
 
         backbone_lr = self.optimizer_config.get("backbone_lr")
         if backbone_lr is not None and backbone_lr != lr:
-            backbone_params = [
-                p for p in self.model.dit.parameters() if p.requires_grad
-            ]
-            head_params = [
-                p for n, p in self.model.named_parameters()
-                if not n.startswith("dit.") and p.requires_grad
-            ]
+            backbone_decay, backbone_no_decay = [], []
+            head_decay, head_no_decay = [], []
+            for name, param in self.named_parameters():
+                if not param.requires_grad:
+                    continue
+                is_backbone = name.startswith("model.dit.")
+                if param.dim() <= 1 or name.endswith(".bias"):
+                    (backbone_no_decay if is_backbone else head_no_decay).append(param)
+                else:
+                    (backbone_decay if is_backbone else head_decay).append(param)
             param_groups = [
-                {"params": backbone_params, "lr": backbone_lr},
-                {"params": head_params, "lr": lr},
+                {"params": backbone_decay, "lr": backbone_lr, "weight_decay": wd},
+                {"params": backbone_no_decay, "lr": backbone_lr, "weight_decay": 0.0},
+                {"params": head_decay, "lr": lr, "weight_decay": wd},
+                {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
             ]
             optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
         else:
-            optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=wd)
+            decay, no_decay = [], []
+            for name, param in self.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if param.dim() <= 1 or name.endswith(".bias"):
+                    no_decay.append(param)
+                else:
+                    decay.append(param)
+            param_groups = [
+                {"params": decay, "weight_decay": wd},
+                {"params": no_decay, "weight_decay": 0.0},
+            ]
+            optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
 
         sched_cfg = self.optimizer_config.get("scheduler", {})
         stype = sched_cfg.get("type", "cosine").lower()
@@ -413,7 +430,7 @@ class BaseCosmosModule(pl.LightningModule):
             scheduler = SequentialLR(
                 optimizer, [warmup, cosine], milestones=[warmup_epochs],
             )
-            return {"optimizer": optimizer, "lr_scheduler": scheduler}
+            return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
 
         if stype:
             warnings.warn(

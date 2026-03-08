@@ -313,6 +313,11 @@ class CombineDataModule(pl.LightningDataModule):
         """Create training DataLoader."""
         if self.train_dataset is None:
             return None
+        extra_kw = {}
+        if self.num_workers > 0:
+            extra_kw["persistent_workers"] = True
+            extra_kw["prefetch_factor"] = 2
+            extra_kw["multiprocessing_context"] = "forkserver"
         return torch.utils.data.DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -321,16 +326,23 @@ class CombineDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=True,
+            **extra_kw,
         )
 
     def val_dataloader(self) -> Optional[torch.utils.data.DataLoader]:
         """Create validation DataLoader."""
         if self.val_dataset is None:
             return None
+        extra_kw = {}
+        if self.num_workers > 0:
+            extra_kw["persistent_workers"] = True
+            extra_kw["prefetch_factor"] = 2
+            extra_kw["multiprocessing_context"] = "forkserver"
         return torch.utils.data.DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            **extra_kw,
         )

@@ -147,7 +147,7 @@ class BaseVistaModule(pl.LightningModule):
             targets["semantic_ids"] = (
                 rearrange(sid, squeeze) if sid.dim() == ndim_with_channel else sid
             )
-        if "image" in batch:
+        if "image" in batch and self.criterion.weight_geometry > 0:
             targets["raw_image"] = batch["image"]
         if "label_direction" in batch:
             targets["label_direction"] = batch["label_direction"]
@@ -179,7 +179,7 @@ class BaseVistaModule(pl.LightningModule):
         sem = targets["semantic_labels"].clone()
         sem[unknown] = self._ignore_index
         targets["semantic_labels"] = sem
-        targets["semantic_ids"] = sem.clone()
+        targets["semantic_ids"] = sem
 
         inst = labels.clone()
         inst[unknown] = 0
@@ -189,8 +189,7 @@ class BaseVistaModule(pl.LightningModule):
             int(known_ids.max().item()) + 1 if known_ids.numel() > 0 else 1,
             dtype=torch.long, device=labels.device,
         )
-        for new_id, old_id in enumerate(known_ids, start=1):
-            remap[old_id] = new_id
+        remap[known_ids] = torch.arange(1, known_ids.numel() + 1, device=labels.device)
         flat = rearrange(inst, "... -> (...)")
         mask = flat > 0
         flat[mask] = remap[flat[mask]]
@@ -237,7 +236,8 @@ class BaseVistaModule(pl.LightningModule):
         targets = self._prepare_targets(batch)
 
         if len(self.training_modes) > 1:
-            self.criterion._get_cached_targets(targets["labels"], targets)
+            cached = self.criterion._compute_targets(targets["labels"], targets)
+            targets["_cached_weights"] = cached
 
         all_losses: Dict[str, torch.Tensor] = {}
         mode_losses: List[torch.Tensor] = []
@@ -337,7 +337,19 @@ class BaseVistaModule(pl.LightningModule):
         lr = self.optimizer_config.get("lr", 1e-4)
         wd = self.optimizer_config.get("weight_decay", 1e-5)
 
-        optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=wd)
+        decay, no_decay = [], []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            if param.dim() <= 1 or name.endswith(".bias"):
+                no_decay.append(param)
+            else:
+                decay.append(param)
+        param_groups = [
+            {"params": decay, "weight_decay": wd},
+            {"params": no_decay, "weight_decay": 0.0},
+        ]
+        optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
 
         sched_cfg = self.optimizer_config.get("scheduler", {})
         stype = sched_cfg.get("type", "cosine").lower()
@@ -356,7 +368,7 @@ class BaseVistaModule(pl.LightningModule):
             scheduler = SequentialLR(
                 optimizer, [warmup, cosine], milestones=[warmup_epochs],
             )
-            return {"optimizer": optimizer, "lr_scheduler": scheduler}
+            return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
 
         if stype:
             warnings.warn(

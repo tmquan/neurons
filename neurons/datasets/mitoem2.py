@@ -149,7 +149,7 @@ class MitoEM2Dataset(CircuitDataset):
                     z_dim = image.shape[ax]
 
                     for z in range(z_dim):
-                        sl_img = np.take(image, z, axis=ax)
+                        sl_img = np.take(image, z, axis=ax).copy()
                         entry: Dict[str, Any] = {
                             "image": sl_img,
                             "dataset": ds_dir.name,
@@ -158,9 +158,10 @@ class MitoEM2Dataset(CircuitDataset):
                             "idx": len(data_list),
                         }
                         if label is not None:
-                            sl_lbl = np.take(label, z, axis=ax)
+                            sl_lbl = np.take(label, z, axis=ax).copy()
                             entry["label"] = sl_lbl
                         data_list.append(entry)
+                    del image, label
                 else:
                     entry = {
                         "image": image,

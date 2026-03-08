@@ -87,8 +87,7 @@ def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
 
     try:
         U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
-        proj = U[:, :, :n_components] * S[:, None, :n_components]  # [B, N, 3]
-        proj = rearrange(proj, "b n c -> b c n")                   # [B, 3, N]
+        proj = Vh[:, :n_components]                                # [B, 3, N]
     except (torch._C._LinAlgError, RuntimeError):
         proj = centered[:, :n_components]                          # [B, 3, N]
 
@@ -541,6 +540,7 @@ class ImageLogger(pl.Callback):
         try:
             self._run_visualization(tb, pl_module, batch)
         finally:
+            self._train_batch = None
             if was_training:
                 pl_module.train()
 
@@ -576,6 +576,7 @@ class ImageLogger(pl.Callback):
             preds_auto, self.spatial_dims, n, epoch,
             clusterer=clusterer, dir_target=dir_target,
         )
+        del preds_auto
 
         # --- Proofread mode (only if enabled) ---
         training_modes = getattr(pl_module, "training_modes", [])
@@ -601,6 +602,7 @@ class ImageLogger(pl.Callback):
             preds_proof, self.spatial_dims, n, epoch,
             clusterer=clusterer, dir_target=dir_target,
         )
+        del preds_proof
 
         center_d = images.shape[2] // 2 if self.spatial_dims == 3 else None
         overlay = _draw_points_on_image(

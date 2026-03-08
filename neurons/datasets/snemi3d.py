@@ -127,12 +127,13 @@ class SNEMI3DDataset(CircuitDataset):
             if self.slice_mode:
                 for si in range(n_slices):
                     entry: Dict[str, Any] = {
-                        "image": inputs[si], "slice_idx": si,
+                        "image": inputs[si].copy(), "slice_idx": si,
                         "volume": vol_name, "idx": len(data_list),
                     }
                     if labels is not None:
-                        entry["label"] = labels[si]
+                        entry["label"] = labels[si].copy()
                     data_list.append(entry)
+                del inputs, labels
             else:
                 entry = {"image": inputs, "volume": vol_name, "idx": len(data_list)}
                 if labels is not None:

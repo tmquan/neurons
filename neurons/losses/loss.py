@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from neurons.losses.semantic import SemanticLoss
 from neurons.losses.instance import InstanceLoss
@@ -105,7 +106,11 @@ class BaseCombinedLoss(nn.Module):
         targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
         labels = targets["labels"]
-        (w_edge, w_bone), geom_targets = self._compute_targets(labels, targets)
+        cached = targets.get("_cached_weights")
+        if cached is not None:
+            (w_edge, w_bone), geom_targets = cached
+        else:
+            (w_edge, w_bone), geom_targets = self._compute_targets(labels, targets)
 
         sem = self.semantic_loss(
             predictions["semantic"], targets["semantic_labels"],
@@ -237,8 +242,8 @@ class BaseCombinedLossWithConsistency(BaseCombinedLoss):
         a_flat = rearrange(features_a, "b c ... -> b c (...)")
         b_flat = rearrange(features_b, "b c ... -> b c (...)")
 
-        a_norm = a_flat / (reduce(a_flat ** 2, "b c n -> b 1 n", "sum").sqrt() + 1e-8)
-        b_norm = b_flat / (reduce(b_flat ** 2, "b c n -> b 1 n", "sum").sqrt() + 1e-8)
+        a_norm = F.normalize(a_flat, p=2, dim=1, eps=1e-8)
+        b_norm = F.normalize(b_flat, p=2, dim=1, eps=1e-8)
 
         return reduce((a_norm - b_norm) ** 2, "b c n -> ", "mean")
 

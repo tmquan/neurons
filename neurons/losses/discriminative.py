@@ -16,6 +16,8 @@ Two embedding loss modules:
 
 from typing import Dict, List, Optional, Tuple
 
+import functools
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -76,18 +78,18 @@ def _scatter_mean(
 ) -> torch.Tensor:
     """Per-cluster mean embedding via scatter_add.  Returns [K, E]."""
     E = emb.shape[0]
-    device, dtype = emb.device, emb.dtype
+    device = emb.device
 
     v_emb = emb[:, valid]
     v_idx = idx[valid]
-    v_emb_t = rearrange(v_emb, "e m -> m e")
+    v_emb_t = rearrange(v_emb, "e m -> m e").float()
 
-    sums = torch.zeros((num_clusters, E), device=device, dtype=dtype)
-    counts = torch.zeros(num_clusters, device=device, dtype=dtype)
+    sums = torch.zeros((num_clusters, E), device=device, dtype=torch.float32)
+    counts = torch.zeros(num_clusters, device=device, dtype=torch.float32)
 
     idx_for_scatter = repeat(v_idx, "m -> m e", e=E)
     sums.scatter_add_(0, idx_for_scatter, v_emb_t)
-    counts.scatter_add_(0, v_idx, torch.ones(v_idx.shape[0], device=device, dtype=dtype))
+    counts.scatter_add_(0, v_idx, torch.ones(v_idx.shape[0], device=device, dtype=torch.float32))
     counts = counts.clamp(min=1)
     return sums / rearrange(counts, "k -> k 1")
 
@@ -160,10 +162,12 @@ def _flat_indices(
     return (coords_ij.long() * rearrange(strides_t, "s -> 1 s")).sum(dim=1)
 
 
-import threading as _threading
-
-_SKEL_LOCK = _threading.Lock()
-_SKEL_MODULES: Dict[str, Skeletonize] = {}
+@functools.lru_cache(maxsize=8)
+def _get_skel_module(device_str: str, num_iter: int) -> Skeletonize:
+    """Cached Skeletonize module per (device, num_iter) pair."""
+    mod = Skeletonize(probabilistic=False, num_iter=num_iter)
+    mod.eval()
+    return mod.to(device_str)
 
 
 @torch.no_grad()
@@ -171,13 +175,7 @@ def _skeletonize_mask(
     mask: torch.Tensor, num_iter: int = 50,
 ) -> torch.Tensor:
     """Thin a binary mask to a 1-pixel-wide skeleton (topology-preserving)."""
-    key = f"{mask.device}_{num_iter}"
-    with _SKEL_LOCK:
-        if key not in _SKEL_MODULES:
-            mod = Skeletonize(probabilistic=False, num_iter=num_iter)
-            mod.eval()
-            _SKEL_MODULES[key] = mod.to(mask.device)
-        mod = _SKEL_MODULES[key]
+    mod = _get_skel_module(str(mask.device), num_iter)
     inp = rearrange(mask.float(), "... -> 1 1 ...")               # [1, 1, *spatial]
     skel = mod(inp)
     return rearrange(skel, "1 1 ... -> ...") > 0.5
@@ -561,7 +559,8 @@ class CentroidEmbeddingLoss(nn.Module):
         v_emb = emb[:, valid]
         v_idx = idx[valid]
         gathered = rearrange(centers[v_idx], "m e -> e m")
-        dist = torch.norm(v_emb.float() - gathered.float(), p=self.norm, dim=0)
+        diff = v_emb.float() - gathered.float()
+        dist = (diff ** 2).sum(dim=0).clamp(min=1e-12).sqrt()
         hinged = F.relu(dist - self.delta_pull) ** 2
         cl = torch.zeros(K, device=emb.device, dtype=torch.float32)
         cc = torch.zeros(K, device=emb.device, dtype=torch.float32)
@@ -575,7 +574,7 @@ class CentroidEmbeddingLoss(nn.Module):
             return torch.tensor(0.0, device=centers.device, dtype=torch.float32)
         ci = rearrange(centers.float(), "k e -> k 1 e")
         cj = rearrange(centers.float(), "k e -> 1 k e")
-        pw = torch.norm(ci - cj, p=self.norm, dim=2)
+        pw = ((ci - cj) ** 2).sum(dim=2).clamp(min=1e-12).sqrt()
         triu = torch.triu_indices(K, K, offset=1, device=centers.device)
         hinged = F.relu(2 * self.delta_push - pw[triu[0], triu[1]]) ** 2
         return reduce(hinged, "n -> ", "mean")
@@ -583,7 +582,7 @@ class CentroidEmbeddingLoss(nn.Module):
     def _reg_loss(self, centers):
         if centers.shape[0] == 0:
             return torch.tensor(0.0, device=centers.device, dtype=torch.float32)
-        return torch.norm(centers.float(), p=self.norm, dim=1).mean()
+        return (centers.float() ** 2).sum(dim=1).clamp(min=1e-12).sqrt().mean()
 
     def forward(self, embedding, ins_label):
         emb_flat, lbl_flat, _ = _flatten_spatial(embedding, ins_label)
@@ -685,7 +684,7 @@ class SkeletonEmbeddingLoss(nn.Module):
         mask_flat = rearrange(gt_labels, "b ... -> b (...)")
 
         pull_diff = emb_flat - skel_flat
-        l_pull = reduce(pull_diff ** 2, "b s n -> b n", "sum")
+        l_pull = reduce(pull_diff.float() ** 2, "b s n -> b n", "sum")
         l_pull = reduce(l_pull * fg_flat.float(), "b n -> ", "sum") / N_fg
 
         norm_off = F.normalize(off_flat, p=2, dim=1, eps=1e-5)

@@ -107,11 +107,7 @@ class SemanticLoss(nn.Module):
         probs = torch.sigmoid(logits)
 
         if class_labels.dim() == logits.dim():
-            valid_mask = torch.ones(
-                logits.shape[0], 1, *logits.shape[2:],
-                device=logits.device, dtype=torch.float32,
-            )
-            return probs, class_labels.float(), valid_mask
+            return probs, class_labels.float(), None
 
         safe = class_labels.clone().long()
         neg = safe < 0
@@ -134,16 +130,19 @@ class SemanticLoss(nn.Module):
 
         _, target, valid_mask = self._to_probs_and_target(logits, class_labels)
         per_pixel = self.ce_loss(logits, target)                   # [B, C, *spatial]
-        per_pixel = per_pixel * valid_mask
-        n_valid = valid_mask.sum().clamp(min=1.0) * per_pixel.shape[1]
-        return per_pixel.sum() / n_valid
+        if valid_mask is not None:
+            per_pixel = per_pixel * valid_mask
+            n_valid = valid_mask.sum().clamp(min=1.0) * per_pixel.shape[1]
+        else:
+            n_valid = max(per_pixel.numel(), 1)
+        return per_pixel.float().sum() / n_valid
 
     @staticmethod
     def _iou_from_probs(probs, target, eps=1e-4):
         """1 - mean(IoU) over present classes from pre-computed probs/target."""
         inter = reduce(probs * target, "b c ... -> b c", "sum")
         union = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum") - inter
-        iou_per_class = (inter + eps) / (union + eps)              # [B, C]
+        iou_per_class = (inter.float() + eps) / (union.float() + eps)  # [B, C]
         present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
         n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
         return 1.0 - reduce(iou_per_class * present, "b c -> ", "sum") / n_present
@@ -153,7 +152,7 @@ class SemanticLoss(nn.Module):
         """1 - mean(Dice) over present classes from pre-computed probs/target."""
         inter = reduce(probs * target, "b c ... -> b c", "sum")
         card = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum")
-        dice_per_class = (2.0 * inter + eps) / (card + eps)       # [B, C]
+        dice_per_class = (2.0 * inter.float() + eps) / (card.float() + eps)  # [B, C]
         present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
         n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
         return 1.0 - reduce(dice_per_class * present, "b c -> ", "sum") / n_present
