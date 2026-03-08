@@ -408,7 +408,7 @@ class BaseCosmosModule(pl.LightningModule):
         lr = self.optimizer_config.get("lr", 1e-4)
         wd = self.optimizer_config.get("weight_decay", 1e-5)
 
-        backbone_lr = self.optimizer_config.get("backbone_lr") or lr
+        backbone_lr = self.optimizer_config.get("dit_backbone_lr") or lr
         backbone_decay, backbone_no_decay = [], []
         head_decay, head_no_decay = [], []
         for name, param in self.named_parameters():
