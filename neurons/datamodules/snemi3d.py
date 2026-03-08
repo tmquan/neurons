@@ -108,7 +108,7 @@ class SNEMI3DDataModule(CircuitDataModule):
                 volumes=val_vols,
                 patch_size=patch_size,
                 transform=self.get_val_transforms(),
-                num_samples=min(num_samples // 10, 500),
+                num_samples=num_samples,
             )
 
         if stage == "test" or stage is None:
@@ -118,7 +118,7 @@ class SNEMI3DDataModule(CircuitDataModule):
                 volumes=test_vols,
                 patch_size=patch_size,
                 transform=self.get_val_transforms(),
-                num_samples=min(num_samples // 10, 500),
+                num_samples=num_samples,
             )
 
         logger.info(

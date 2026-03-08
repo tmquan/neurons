@@ -18,7 +18,6 @@ from monai.transforms import (
     RandRotate90d,
     RandSpatialCropd,
     Resized,
-    ScaleIntensityd,
     SpatialPadd,
 )
 
