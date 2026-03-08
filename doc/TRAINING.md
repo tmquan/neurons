@@ -445,3 +445,175 @@ gradients.  The training script automatically sets
 `find_unused_parameters=True` and `static_graph=False` for this case.
 When both `automatic` and `proofread` modes are enabled, all parameters
 are used and `static_graph=True` is set for better DDP performance.
+
+---
+
+## 9. Cosmos Freeze Strategy
+
+When using CosmosPredict3D or CosmosTransfer3D with pretrained weights
+from natural video generation, a phased freeze strategy produces better
+results than training everything end-to-end from step 1.
+
+### 9.1 The Domain Gap
+
+Cosmos was pretrained on **natural RGB video** (diverse scenes, textures,
+motion).  Connectomics EM data is fundamentally different:
+
+| Property | Natural video | Connectomics EM |
+|---|---|---|
+| Channels | 3-ch RGB | 1-ch grayscale |
+| Content | Diverse objects, scenes | Repetitive ultrastructure (membranes, vesicles) |
+| Resolution | Isotropic frames | Anisotropic (Z is 5--10x coarser than XY) |
+| Boundaries | Sparse object edges | Dense instance boundaries (thousands of touching neurons) |
+
+The DiT backbone's low/mid-level features (edges, textures, spatial
+relationships) transfer well across domains.  The high-level features and
+all task-specific outputs must be learned from scratch.
+
+### 9.2 Three-Phase Training
+
+#### Phase 1: Frozen backbone -- train heads only
+
+```yaml
+model:
+  freeze_encoder: true       # VAE encoder (tokenizer) -- frozen
+  freeze_backbone: true      # DiT backbone -- frozen
+  freeze_decoder: false      # VAE decoder -- trainable
+
+optimizer:
+  lr: 1.0e-4
+  scheduler:
+    type: cosine
+    T_max: 40
+
+training:
+  max_epochs: 40
+```
+
+**What trains**: input adapter, feature projector, VAE decoder, task heads,
+point encoder (~5M parameters).
+
+**Rationale**: The randomly initialized heads produce noisy gradients.
+If these flow into the pretrained DiT from step 1, they can damage the
+good pretrained features.  By freezing the backbone first, the heads
+converge to reasonable outputs cheaply and quickly.
+
+**Duration**: 20--40 epochs, until head losses plateau.
+
+#### Phase 2: Unfreeze backbone with differential LR
+
+Resume from the Phase 1 checkpoint:
+
+```yaml
+model:
+  freeze_encoder: true       # VAE encoder -- still frozen
+  freeze_backbone: false     # DiT backbone -- now trainable at lower LR
+  freeze_decoder: false      # VAE decoder -- trainable
+
+optimizer:
+  lr: 1.0e-4                 # head + decoder learning rate
+  backbone_lr: 1.0e-5        # 10x lower for pretrained DiT
+  scheduler:
+    type: cosine_warmup       # warm up the backbone slowly
+    warmup_epochs: 5
+    T_max: 160
+
+training:
+  max_epochs: 160
+```
+
+**What trains**: everything except the VAE encoder.  The DiT backbone
+receives gradients at 10x lower learning rate via the `backbone_lr`
+parameter (already supported by all Cosmos modules).
+
+**Rationale**: Once the heads have converged, the backbone can be
+fine-tuned to produce better features for EM data specifically.  The
+lower LR prevents catastrophic forgetting of the pretrained
+representations.  The warmup avoids large gradient shocks to the
+pretrained weights in the first few epochs.
+
+**Duration**: 100--160 epochs for full convergence.
+
+**Resuming from Phase 1**: Point the training script at the Phase 1
+checkpoint via Hydra or PyTorch Lightning's `ckpt_path` mechanism:
+
+```bash
+PYTHONPATH=$(pwd) python scripts/train.py \
+    --config-name snemi3d_microns \
+    model.freeze_backbone=false \
+    optimizer.backbone_lr=1.0e-5 \
+    optimizer.scheduler.type=cosine_warmup \
+    training.max_epochs=160 \
+    +ckpt_path=outputs/checkpoints/phase1-last.ckpt
+```
+
+#### Phase 3 (optional): Unfreeze VAE encoder
+
+Only attempt this if Phase 2 plateaus and you suspect the VAE tokenizer's
+latent space is too coarse for EM data.
+
+```yaml
+model:
+  freeze_encoder: false      # VAE encoder -- fine-tune the tokenizer
+  freeze_backbone: false
+  freeze_decoder: false
+
+optimizer:
+  lr: 1.0e-5
+  backbone_lr: 1.0e-6        # very conservative for both backbone and encoder
+```
+
+**Warning**: The VAE encoder defines the latent space that the DiT was
+pretrained on.  Changing it shifts the input distribution the DiT
+expects, which can destabilize training.  Use a very small learning rate
+(1e-6) and monitor closely.
+
+### 9.3 Component Freeze Reference
+
+| Component | Phase 1 | Phase 2 | Phase 3 | Notes |
+|---|---|---|---|---|
+| VAE encoder | Frozen | Frozen | Trainable | Defines latent space; almost always frozen |
+| DiT backbone | **Frozen** | **Trainable** (low LR) | Trainable | Main feature extractor |
+| VAE decoder | Trainable | Trainable | Trainable | Adapts upsampling to EM |
+| Input adapter | Trainable | Trainable | Trainable | Bridges 1-ch EM to 3-ch RGB |
+| Feature projector | Trainable | Trainable | Trainable | Fuses DiT multi-layer features |
+| Task heads | Trainable | Trainable | Trainable | Randomly initialized, EM-specific |
+| Point encoder | Trainable | Trainable | Trainable | Starts near-zero, learned from scratch |
+
+### 9.4 Config Flags
+
+All freeze decisions are controlled by three config keys under `model:`:
+
+```yaml
+model:
+  freeze_encoder: true     # VAE encoder  (default true)
+  freeze_backbone: false   # DiT backbone (default false)
+  freeze_decoder: false    # VAE decoder  (default false)
+```
+
+These flags are identical across all four Cosmos models
+(CosmosPredict2D, CosmosPredict3D, CosmosTransfer2D, CosmosTransfer3D).
+
+The `backbone_lr` differential learning rate is set under `optimizer:`:
+
+```yaml
+optimizer:
+  lr: 1.0e-4               # default LR for heads, decoder, adapter, projector
+  backbone_lr: 1.0e-5      # separate LR for DiT backbone (omit to use same as lr)
+```
+
+### 9.5 Cosmos-Transfer vs Cosmos-Predict
+
+Both model families share the same architecture and freeze interface.
+The difference is in pretraining:
+
+| | Predict2.5 | Transfer2.5 |
+|---|---|---|
+| Pretraining task | Unconditional video generation | Conditioned generation (edge/depth maps) |
+| Domain gap to EM | Larger | Smaller (already learned structure-preserving features) |
+| Recommendation | Phase 1 is more important (features are less aligned) | Can be more aggressive with Phase 2 (lower warmup) |
+
+Transfer2.5 was pretrained with spatial conditioning signals (edge maps,
+depth maps), giving it a stronger prior for boundary-sensitive dense
+prediction.  This makes it a better starting point for connectomics tasks
+that depend on membrane fidelity (neurite tracing, synapse detection).

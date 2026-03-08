@@ -689,9 +689,8 @@ class CosmosPredict3DWrapper(nn.Module):
             return False
 
         try:
-            revision = f"diffusers/base/{checkpoint_variant}"
+            revision = self.cfg.hf_revision
 
-            # TODO: Subfolder layout may vary across diffusers versions.
             transformer = CosmosTransformer3DModel.from_pretrained(
                 self.cfg.hf_repo_id,
                 subfolder="transformer",
@@ -774,7 +773,7 @@ class CosmosPredict3DWrapper(nn.Module):
         try:
             local_path = _download_from_hf(
                 self.cfg.hf_repo_id,
-                revision=f"diffusers/base/{checkpoint_variant}",
+                revision=self.cfg.hf_revision,
                 cache_dir=cache_dir,
                 token=hf_token,
             )

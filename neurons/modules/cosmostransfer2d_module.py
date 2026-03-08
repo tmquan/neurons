@@ -81,7 +81,6 @@ class CosmosTransfer2DModule(pl.LightningModule):
             emb_dim=model_config.get("emb_dim", 16),
             feature_size=model_config.get("feature_size", 64),
             variant=model_config.get("variant", "2B"),
-            checkpoint_variant=model_config.get("checkpoint_variant", "post-trained"),
             dtype=model_config.get("dtype", "bf16"),
             freeze_backbone=model_config.get("freeze_backbone", False),
             freeze_decoder=model_config.get("freeze_decoder", False),
