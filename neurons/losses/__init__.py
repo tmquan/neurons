@@ -9,9 +9,7 @@ Three standalone losses (each in its own module):
 Combined losses:
 - Vista3DLoss: composes all three for volumetric training
 - Vista2DLoss: composes all three for image training
-- CosmosPredict2DLoss: composes all three + optional flow-consistency (2D)
 - CosmosPredict3DLoss: composes all three + optional flow-consistency (3D)
-- CosmosTransfer2DLoss: composes all three + optional flow-consistency (2D)
 - CosmosTransfer3DLoss: composes all three + optional flow-consistency (3D)
 
 Legacy embedding losses (``losses.discriminative``):
@@ -24,9 +22,7 @@ from neurons.losses.instance import InstanceLoss
 from neurons.losses.geometry import GeometryLoss
 from neurons.losses.vista3d_losses import Vista3DLoss
 from neurons.losses.vista2d_losses import Vista2DLoss
-from neurons.losses.cosmospredict2d_losses import CosmosPredict2DLoss
 from neurons.losses.cosmospredict3d_losses import CosmosPredict3DLoss
-from neurons.losses.cosmostransfer2d_losses import CosmosTransfer2DLoss
 from neurons.losses.cosmostransfer3d_losses import CosmosTransfer3DLoss
 from neurons.losses.discriminative import (
     CentroidEmbeddingLoss,
@@ -43,9 +39,7 @@ __all__ = [
     # Combined losses
     "Vista3DLoss",
     "Vista2DLoss",
-    "CosmosPredict2DLoss",
     "CosmosPredict3DLoss",
-    "CosmosTransfer2DLoss",
     "CosmosTransfer3DLoss",
     # Legacy embedding losses
     "CentroidEmbeddingLoss",

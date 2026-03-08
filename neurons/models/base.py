@@ -72,12 +72,28 @@ class BaseModel(nn.Module, ABC):
             return sum(p.numel() for p in self.parameters() if p.requires_grad)
         return sum(p.numel() for p in self.parameters())
 
-    def freeze_encoder(self) -> None:
-        """Freeze encoder/backbone parameters. Override in subclasses."""
+    def freeze_dit_backbone(self) -> None:
+        """Freeze backbone parameters. Override in subclasses."""
         pass
 
-    def unfreeze_encoder(self) -> None:
-        """Unfreeze encoder/backbone parameters. Override in subclasses."""
+    def unfreeze_dit_backbone(self) -> None:
+        """Unfreeze backbone parameters. Override in subclasses."""
+        pass
+
+    def freeze_vae_encoder(self) -> None:
+        """Freeze VAE encoder parameters. Override in subclasses."""
+        pass
+
+    def unfreeze_vae_encoder(self) -> None:
+        """Unfreeze VAE encoder parameters. Override in subclasses."""
+        pass
+
+    def freeze_vae_decoder(self) -> None:
+        """Freeze VAE decoder parameters. Override in subclasses."""
+        pass
+
+    def unfreeze_vae_decoder(self) -> None:
+        """Unfreeze VAE decoder parameters. Override in subclasses."""
         pass
 
     def __repr__(self) -> str:

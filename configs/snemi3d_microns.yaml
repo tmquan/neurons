@@ -54,9 +54,9 @@ data:
 #   feature_size: 64
 #   variant: "2B"
 #   dtype: "bf16"
-#   freeze_encoder: true         # VAE encoder  (default true; set false to fine-tune)
-#   freeze_backbone: false        # DiT backbone (default false; set true to freeze)
-#   freeze_decoder: false        # VAE decoder  (default false; set true to freeze body, last block stays trainable)
+#   freeze_vae_encoder: true      # VAE encoder  (true = always frozen; int N = freeze for N epochs)
+#   freeze_dit_backbone: false    # DiT backbone (default false; int N = freeze for N epochs then unfreeze)
+#   freeze_vae_decoder: false     # VAE decoder  (default false; set true to freeze body)
 #   dropout: 0.0
 
 # --- cosmostransfer3d ---
@@ -68,10 +68,24 @@ model:
   feature_size: 64
   variant: "2B"
   dtype: "bf16"
-  freeze_encoder: true           # VAE encoder  (default true; set false to fine-tune)
-  freeze_backbone: false          # DiT backbone (default false; set true to freeze)
-  freeze_decoder: false          # VAE decoder  (default false; set true to freeze body, last block stays trainable)
+  freeze_vae_encoder: true        # VAE encoder  (true = always frozen; int N = freeze for N epochs)
+  freeze_dit_backbone: 20         # DiT backbone (true = always frozen; int N = freeze for N epochs then unfreeze)
+  freeze_vae_decoder: false       # VAE decoder  (true = always frozen; int N = freeze for N epochs)
   dropout: 0.0
+
+training:
+  max_epochs: 200
+  accelerator: auto
+  devices: auto
+  strategy: ddp
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  limit_val_batches: 100
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+  benchmark: true
+  training_modes:
+    - automatic
 
 optimizer:
   type: adamw
@@ -106,17 +120,3 @@ loss:
   loss_cov: l1
   loss_raw: l1
   ignore_index: -100
-
-training:
-  max_epochs: 200
-  accelerator: auto
-  devices: auto
-  strategy: ddp
-  precision: bf16-mixed
-  gradient_clip_val: 1.0
-  limit_val_batches: 100
-  num_sanity_val_steps: 2
-  log_every_n_steps: 50
-  benchmark: true
-  training_modes:
-    - automatic

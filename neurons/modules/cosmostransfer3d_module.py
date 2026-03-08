@@ -82,9 +82,9 @@ class CosmosTransfer3DModule(pl.LightningModule):
             feature_size=model_config.get("feature_size", 64),
             variant=model_config.get("variant", "2B"),
             dtype=model_config.get("dtype", "bf16"),
-            freeze_backbone=model_config.get("freeze_backbone", False),
-            freeze_decoder=model_config.get("freeze_decoder", False),
-            freeze_encoder=model_config.get("freeze_encoder", True),
+            freeze_dit_backbone=model_config.get("freeze_dit_backbone", False),
+            freeze_vae_decoder=model_config.get("freeze_vae_decoder", False),
+            freeze_vae_encoder=model_config.get("freeze_vae_encoder", True),
             feature_layers=model_config.get("feature_layers"),
             cache_dir=model_config.get("cache_dir"),
             hf_token=model_config.get("hf_token"),
@@ -130,6 +130,44 @@ class CosmosTransfer3DModule(pl.LightningModule):
         self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
 
         self._variant = model_config.get("variant", "2B")
+
+        self._freeze_schedule = {
+            "vae_encoder": model_config.get("freeze_vae_encoder", True),
+            "dit_backbone": model_config.get("freeze_dit_backbone", False),
+            "vae_decoder": model_config.get("freeze_vae_decoder", False),
+        }
+
+    # ------------------------------------------------------------------
+    # Phased freeze / unfreeze
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _should_freeze(value: "bool | int", epoch: int) -> bool:
+        if isinstance(value, bool):
+            return value
+        return epoch < int(value)
+
+    def on_train_epoch_start(self) -> None:
+        epoch = self.current_epoch
+        _METHODS = {
+            "vae_encoder": (self.model.freeze_vae_encoder, self.model.unfreeze_vae_encoder),
+            "dit_backbone": (self.model.freeze_dit_backbone, self.model.unfreeze_dit_backbone),
+            "vae_decoder": (self.model.freeze_vae_decoder, self.model.unfreeze_vae_decoder),
+        }
+        _FLAGS = {
+            "vae_encoder": "_freeze_vae_encoder",
+            "dit_backbone": "_freeze_dit_backbone",
+            "vae_decoder": "_freeze_vae_decoder",
+        }
+        for name, value in self._freeze_schedule.items():
+            if isinstance(value, bool):
+                continue
+            want_frozen = self._should_freeze(value, epoch)
+            is_frozen = getattr(self.model, _FLAGS[name])
+            if want_frozen and not is_frozen:
+                _METHODS[name][0]()
+            elif not want_frozen and is_frozen:
+                _METHODS[name][1]()
 
     # ------------------------------------------------------------------
     # Forward
@@ -456,7 +494,7 @@ class CosmosTransfer3DModule(pl.LightningModule):
             )
 
         result["checks"]["backbone_loaded"] = self.model._backbone_loaded
-        result["checks"]["backbone_frozen"] = self.model._freeze_backbone
+        result["checks"]["backbone_frozen"] = self.model._freeze_dit_backbone
         result["checks"]["training_modes"] = self.training_modes
         result["checks"]["variant"] = self._variant
         return result

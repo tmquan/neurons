@@ -36,6 +36,7 @@ tensorboard==2.20.0
 
 # Visualization
 matplotlib==3.10.8
+plotly>=5.24.0
 
 # Cosmos-Predict2.5 backbone
 diffusers==0.37.0

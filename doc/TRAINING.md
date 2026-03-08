@@ -476,9 +476,9 @@ all task-specific outputs must be learned from scratch.
 
 ```yaml
 model:
-  freeze_encoder: true       # VAE encoder (tokenizer) -- frozen
-  freeze_backbone: true      # DiT backbone -- frozen
-  freeze_decoder: false      # VAE decoder -- trainable
+  freeze_vae_encoder: true       # VAE encoder (tokenizer) -- frozen
+  freeze_dit_backbone: true      # DiT backbone -- frozen
+  freeze_vae_decoder: false      # VAE decoder -- trainable
 
 optimizer:
   lr: 1.0e-4
@@ -506,9 +506,9 @@ Resume from the Phase 1 checkpoint:
 
 ```yaml
 model:
-  freeze_encoder: true       # VAE encoder -- still frozen
-  freeze_backbone: false     # DiT backbone -- now trainable at lower LR
-  freeze_decoder: false      # VAE decoder -- trainable
+  freeze_vae_encoder: true       # VAE encoder -- still frozen
+  freeze_dit_backbone: false     # DiT backbone -- now trainable at lower LR
+  freeze_vae_decoder: false      # VAE decoder -- trainable
 
 optimizer:
   lr: 1.0e-4                 # head + decoder learning rate
@@ -540,7 +540,7 @@ checkpoint via Hydra or PyTorch Lightning's `ckpt_path` mechanism:
 ```bash
 PYTHONPATH=$(pwd) python scripts/train.py \
     --config-name snemi3d_microns \
-    model.freeze_backbone=false \
+    model.freeze_dit_backbone=false \
     optimizer.backbone_lr=1.0e-5 \
     optimizer.scheduler.type=cosine_warmup \
     training.max_epochs=160 \
@@ -554,9 +554,9 @@ latent space is too coarse for EM data.
 
 ```yaml
 model:
-  freeze_encoder: false      # VAE encoder -- fine-tune the tokenizer
-  freeze_backbone: false
-  freeze_decoder: false
+  freeze_vae_encoder: false      # VAE encoder -- fine-tune the tokenizer
+  freeze_dit_backbone: false
+  freeze_vae_decoder: false
 
 optimizer:
   lr: 1.0e-5
@@ -586,9 +586,9 @@ All freeze decisions are controlled by three config keys under `model:`:
 
 ```yaml
 model:
-  freeze_encoder: true     # VAE encoder  (default true)
-  freeze_backbone: false   # DiT backbone (default false)
-  freeze_decoder: false    # VAE decoder  (default false)
+  freeze_vae_encoder: true     # VAE encoder  (default true; int N = freeze for N epochs)
+  freeze_dit_backbone: false   # DiT backbone (default false; int N = freeze for N epochs)
+  freeze_vae_decoder: false    # VAE decoder  (default false; int N = freeze for N epochs)
 ```
 
 These flags are identical across all four Cosmos models

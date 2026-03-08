@@ -154,17 +154,17 @@ class TestSegResNetWrapper:
         )
         assert model.get_output_channels() == 5
 
-    def test_freeze_unfreeze_encoder(self) -> None:
+    def test_freeze_unfreeze_dit_backbone(self) -> None:
         model = SegResNetWrapper(
             in_channels=1, out_channels=2, spatial_dims=2,
             init_filters=8, feature_dim=16,
             blocks_down=(1, 1), blocks_up=(1,),
         )
-        model.freeze_encoder()
+        model.freeze_dit_backbone()
         frozen = sum(1 for p in model.backbone.parameters() if not p.requires_grad)
         assert frozen > 0
 
-        model.unfreeze_encoder()
+        model.unfreeze_dit_backbone()
         unfrozen = sum(1 for p in model.backbone.parameters() if not p.requires_grad)
         assert unfrozen == 0
 

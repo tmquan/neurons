@@ -201,9 +201,7 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
     from neurons.modules import (
         Vista3DModule,
         Vista2DModule,
-        CosmosPredict2DModule,
         CosmosPredict3DModule,
-        CosmosTransfer2DModule,
         CosmosTransfer3DModule,
     )
 
@@ -216,14 +214,8 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
 
     _MODULE_MAP = {
         "vista2d": Vista2DModule,
-        "cosmospredict2d": CosmosPredict2DModule,
-        "cosmos_predict25": CosmosPredict2DModule,
-        "cosmos_predict25_2d": CosmosPredict2DModule,
         "cosmospredict3d": CosmosPredict3DModule,
         "cosmos_predict25_3d": CosmosPredict3DModule,
-        "cosmostransfer2d": CosmosTransfer2DModule,
-        "cosmos_transfer25": CosmosTransfer2DModule,
-        "cosmos_transfer25_2d": CosmosTransfer2DModule,
         "cosmostransfer3d": CosmosTransfer3DModule,
         "cosmos_transfer25_3d": CosmosTransfer3DModule,
     }

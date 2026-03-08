@@ -133,13 +133,13 @@ class SegResNetWrapper(BaseModel):
     def get_output_channels(self) -> int:
         return self.out_channels
 
-    def freeze_encoder(self) -> None:
+    def freeze_dit_backbone(self) -> None:
         """Freeze backbone encoder layers."""
         for name, param in self.backbone.named_parameters():
             if "down" in name or "conv_initial" in name:
                 param.requires_grad = False
 
-    def unfreeze_encoder(self) -> None:
+    def unfreeze_dit_backbone(self) -> None:
         """Unfreeze backbone encoder layers."""
         for param in self.backbone.parameters():
             param.requires_grad = True

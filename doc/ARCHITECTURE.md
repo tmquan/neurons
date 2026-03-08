@@ -285,7 +285,7 @@ Three loading strategies are tried in order:
 | ------------------------- | ----------------- | ------------------------------------------------------ |
 | Input adapter             | **Trainable**     | Learns EM → RGB mapping                                |
 | VAE encoder               | **Always frozen** | `requires_grad_(False)` + `.eval()`                    |
-| DiT backbone              | **Trainable**     | `freeze_backbone=False` by default                     |
+| DiT backbone              | **Trainable**     | `freeze_dit_backbone=False` by default                 |
 | Feature projector         | **Trainable**     | Randomly initialized                                   |
 | `to_latent` projection    | **Trainable**     | Only exists when pretrained VAE decoder is loaded       |
 | VAE decoder body          | **Mostly frozen** | All params frozen except last up-block and output norm |
@@ -375,7 +375,7 @@ Identical to CosmosPredict3D (Section 6.5):
 | ---------------------- | ----------------------------------------------- |
 | Input adapter          | **Trainable**                                   |
 | VAE encoder            | **Always frozen**                               |
-| DiT backbone           | **Trainable** (`freeze_backbone=False`)         |
+| DiT backbone           | **Trainable** (`freeze_dit_backbone=False`)     |
 | Feature projector      | **Trainable**                                   |
 | `to_latent` projection | **Trainable** (only when pretrained VAE loaded)  |
 | VAE decoder body       | **Mostly frozen** (except last up-block + norm) |
@@ -455,7 +455,7 @@ Point prompts Sparse → Conv3d        Same mechanism
 
 | Feature                         | Vista3D           | CosmosPredict3D         | CosmosTransfer3D        |
 | ------------------------------- | ----------------- | ----------------------- | ----------------------- |
-| `freeze_backbone` default       | N/A (no pretrain) | `False`                 | `False`                 |
+| `freeze_dit_backbone` default   | N/A (no pretrain) | `False`                 | `False`                 |
 | Differential LR (`backbone_lr`) | No                | Yes                     | Yes                     |
 | `cosine_warmup` scheduler       | No                | Yes                     | Yes                     |
 | Feature-consistency loss        | No                | Optional                | Optional                |

@@ -410,7 +410,7 @@ class _DecoderAdapter3D(nn.Module):
         spatial_compression: int,
         temporal_compression: int,
         dropout: float = 0.0,
-        freeze_decoder: bool = False,
+        freeze_vae_decoder: bool = False,
     ) -> None:
         super().__init__()
         self._has_pretrained = vae_decoder is not None
@@ -419,7 +419,7 @@ class _DecoderAdapter3D(nn.Module):
             self.to_latent = _PointwiseLinear(feature_size, latent_channels)
             self.decoder_body = vae_decoder
             self._hidden_ch = self._replace_conv_out()
-            if freeze_decoder:
+            if freeze_vae_decoder:
                 self._freeze_body()
         else:
             self.to_latent = None
@@ -484,6 +484,10 @@ class _DecoderAdapter3D(nn.Module):
                     p.requires_grad = True
                 break
 
+    def _unfreeze_body(self) -> None:
+        for p in self.decoder_body.parameters():
+            p.requires_grad = True
+
     def forward(
         self, features: torch.Tensor, target_size: tuple,
     ) -> Dict[str, torch.Tensor]:
@@ -532,7 +536,7 @@ class CosmosPredict3DWrapper(nn.Module):
         variant: ``"2B"`` or ``"14B"`` model variant.
         checkpoint_variant: HuggingFace revision string.
         dtype: Weight dtype (``"bf16"``, ``"fp16"``, ``"fp32"``).
-        freeze_backbone: Whether to freeze the pretrained DiT backbone.
+        freeze_dit_backbone: Whether to freeze the pretrained DiT backbone.
         feature_layers: DiT block indices to extract features from.
         cache_dir: HuggingFace download cache directory.
         hf_token: HuggingFace authentication token.
@@ -559,9 +563,9 @@ class CosmosPredict3DWrapper(nn.Module):
         variant: str = "2B",
         checkpoint_variant: str = "post-trained",
         dtype: str = "bf16",
-        freeze_backbone: bool = False,
-        freeze_decoder: bool = False,
-        freeze_encoder: bool = True,
+        freeze_dit_backbone: bool = False,
+        freeze_vae_decoder: bool = False,
+        freeze_vae_encoder: bool = True,
         feature_layers: Optional[List[int]] = None,
         cache_dir: Optional[str] = None,
         hf_token: Optional[str] = None,
@@ -594,9 +598,9 @@ class CosmosPredict3DWrapper(nn.Module):
             "fp16": torch.float16,
             "fp32": torch.float32,
         }[dtype]
-        self._freeze_backbone = freeze_backbone
-        self._freeze_decoder = freeze_decoder
-        self._freeze_encoder = freeze_encoder
+        self._freeze_dit_backbone = freeze_dit_backbone
+        self._freeze_vae_decoder = freeze_vae_decoder
+        self._freeze_vae_encoder = freeze_vae_encoder
 
         if feature_layers is not None:
             self._feature_layers = sorted(feature_layers)
@@ -625,7 +629,7 @@ class CosmosPredict3DWrapper(nn.Module):
             spatial_compression=self.cfg.spatial_compression,
             temporal_compression=self.cfg.temporal_compression,
             dropout=dropout,
-            freeze_decoder=freeze_decoder,
+            freeze_vae_decoder=freeze_vae_decoder,
         )
 
         self.point_encoder = PointPromptEncoder(
@@ -634,12 +638,12 @@ class CosmosPredict3DWrapper(nn.Module):
             spatial_dims=_SPATIAL_DIMS,
         )
 
-        if self.vae_encoder is not None and freeze_encoder:
+        if self.vae_encoder is not None and freeze_vae_encoder:
             self.vae_encoder.requires_grad_(False)
             self.vae_encoder.eval()
 
-        if freeze_backbone:
-            self.freeze_encoder()
+        if freeze_dit_backbone:
+            self.freeze_dit_backbone()
 
         self._make_params_contiguous()
 
@@ -648,7 +652,7 @@ class CosmosPredict3DWrapper(nn.Module):
             "feature_layers=%s, backbone_loaded=%s, frozen=%s, "
             "params=%s (trainable=%s)",
             variant, self._feature_layers, self._backbone_loaded,
-            freeze_backbone,
+            freeze_dit_backbone,
             f"{self.get_num_parameters(trainable_only=False):,}",
             f"{self.get_num_parameters(trainable_only=True):,}",
         )
@@ -1118,15 +1122,41 @@ class CosmosPredict3DWrapper(nn.Module):
     # Freeze / unfreeze
     # ------------------------------------------------------------------
 
-    def freeze_encoder(self) -> None:
-        """Freeze the DiT backbone (VAE encoder is always frozen)."""
+    def freeze_dit_backbone(self) -> None:
         self.dit.requires_grad_(False)
-        logger.debug("DiT backbone frozen.")
+        self._freeze_dit_backbone = True
+        logger.info("DiT backbone frozen (%s trainable params).",
+                     f"{self.get_num_parameters(True):,}")
 
-    def unfreeze_encoder(self) -> None:
-        """Unfreeze the DiT backbone for fine-tuning."""
+    def unfreeze_dit_backbone(self) -> None:
         self.dit.requires_grad_(True)
-        logger.debug("DiT backbone unfrozen.")
+        self._freeze_dit_backbone = False
+        logger.info("DiT backbone unfrozen (%s trainable params).",
+                     f"{self.get_num_parameters(True):,}")
+
+    def freeze_vae_encoder(self) -> None:
+        if self.vae_encoder is not None:
+            self.vae_encoder.requires_grad_(False)
+            self.vae_encoder.eval()
+            self._freeze_vae_encoder = True
+            logger.info("VAE encoder frozen.")
+
+    def unfreeze_vae_encoder(self) -> None:
+        if self.vae_encoder is not None:
+            self.vae_encoder.requires_grad_(True)
+            self.vae_encoder.train()
+            self._freeze_vae_encoder = False
+            logger.info("VAE encoder unfrozen.")
+
+    def freeze_vae_decoder(self) -> None:
+        self.decoder_adapter._freeze_body()
+        self._freeze_vae_decoder = True
+        logger.info("VAE decoder frozen.")
+
+    def unfreeze_vae_decoder(self) -> None:
+        self.decoder_adapter._unfreeze_body()
+        self._freeze_vae_decoder = False
+        logger.info("VAE decoder unfrozen.")
 
     # ------------------------------------------------------------------
     # Utilities
