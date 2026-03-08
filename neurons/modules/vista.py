@@ -109,6 +109,9 @@ class BaseVistaModule(pl.LightningModule):
         self._num_neg_points: int = training_config.get("num_neg_points", 5)
         self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
 
+        if "proofread" not in self.training_modes:
+            self.model.point_encoder.requires_grad_(False)
+
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------

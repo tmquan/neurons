@@ -376,11 +376,9 @@ def main(cfg: DictConfig) -> None:
     training_cfg = cfg.training
     strategy_name = training_cfg.get("strategy", "auto")
     if strategy_name == "ddp":
-        training_modes = list(training_cfg.get("training_modes", ["automatic"]))
-        has_unused_params = "proofread" in training_modes
         strategy = DDPStrategy(
-            find_unused_parameters=has_unused_params,
-            static_graph=not has_unused_params,
+            find_unused_parameters=True,
+            static_graph=False,
             gradient_as_bucket_view=True,
         )
     elif strategy_name == "fsdp":

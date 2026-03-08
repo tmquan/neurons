@@ -125,6 +125,11 @@ class BaseCosmosModule(pl.LightningModule):
             "vae_decoder": model_config.get("freeze_vae_decoder", False),
         }
 
+        if "proofread" not in self.training_modes:
+            self.model.point_encoder.requires_grad_(False)
+        if self.model._backbone_loaded and self.model.vae_encoder is not None:
+            self.model._fallback_down.requires_grad_(False)
+
     # ------------------------------------------------------------------
     # Phased freeze / unfreeze
     # ------------------------------------------------------------------
