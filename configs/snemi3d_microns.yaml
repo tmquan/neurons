@@ -78,7 +78,7 @@ training:
   accelerator: auto
   devices: auto
   strategy: ddp
-  precision: 32-true
+  precision: bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 2
   limit_val_batches: 100
