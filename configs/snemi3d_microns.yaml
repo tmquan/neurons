@@ -18,20 +18,23 @@ data:
   num_samples: 16000
   patch_size: [48, 256, 256]
 
-  # Train: SNEMI3D AC4 + MICRONS train crop
+  # Train: SNEMI3D AC4 + 4 MICRONS train crops
   train_volumes:
     - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: minnie65_mip0_1024_x120000_y90000_z20000_volume, seg: minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: minnie65_mip0_1024_x124100_y90000_z20000_volume, seg: minnie65_mip0_1024_x124100_y90000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: minnie65_mip0_1024_x120000_y93100_z20000_volume, seg: minnie65_mip0_1024_x120000_y93100_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: minnie65_mip0_1024_x124100_y93100_z20000_volume, seg: minnie65_mip0_1024_x124100_y93100_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
 
   # Val: held-out SNEMI3D AC3 + MICRONS test crop
   val_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
 
   # Test: same as val
   test_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
 
 # # --- vista3d ---
 # model:
@@ -105,7 +108,7 @@ loss:
   ignore_index: -100
 
 training:
-  max_epochs: 160
+  max_epochs: 200
   accelerator: auto
   devices: auto
   strategy: ddp

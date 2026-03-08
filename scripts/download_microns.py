@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Download a representative sub-volume of the MICrONS minnie65 dataset.
+Download representative sub-volumes of the MICrONS minnie65 dataset.
 
 Downloads:
 - EM imagery (proofread minnie65)
@@ -35,9 +35,16 @@ Crop size estimates (mip0, uint8 EM + uint64 seg, uncompressed):
   2048³ =   8 GB EM +  64 GB seg  =   72 GB total
   4096³ =  64 GB EM + 512 GB seg  =  576 GB total
 
-Default crop origin: (120000, 90000, 20000) — dense neuropil near segmentation center.
-Train split: 1024^3 at (120000, 90000, 20000) — ~1 GB EM + ~8 GB seg.
-Test split:  1024^3 at (122000, 92000, 20000) — ~1 GB EM + ~8 GB seg. Disjoint (976 voxel gap).
+Pre-defined splits (all 1024^3, disjoint):
+  train1: (120000, 90000, 20000)
+  train2: (124100, 90000, 20000)  -- +4100 X from train1
+  train3: (120000, 93100, 20000)  -- +3100 Y from train1
+  train4: (124100, 93100, 20000)  -- diagonal from train1
+  test1:  (122000, 92000, 20000)  -- disjoint from all train crops
+
+File naming encodes coordinates:
+  minnie65_mip0_1024_x120000_y90000_z20000_volume.h5
+  minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation.h5
 
 Uses cloud-volume to fetch from AWS / Google Cloud public buckets.
 
@@ -48,16 +55,16 @@ Usage:
     # Custom size and version
     python scripts/download_microns.py --size 1024 1024 1024 --seg-version 1300
 
-    # Download multiple segmentation versions
-    python scripts/download_microns.py --seg-version 117 943 1300
+    # Download all 5 pre-defined splits (4 train + 1 test)
+    python scripts/download_microns.py --split
 
-    # All four versions
+    # All four segmentation versions
     python scripts/download_microns.py --seg-version all
 """
 
 import argparse
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import h5py
 import numpy as np
@@ -91,23 +98,20 @@ SEG_VERSIONS: Dict[int, str] = {
 
 DEFAULT_SEG_VERSION = 1300
 
-# Pre-defined train/test splits in disjoint regions of the minnie65 volume.
-# Coordinates are (X, Y, Z) in mip0 voxels.
-# Both crops sit near the center of the segmentation volume.
+# Pre-defined splits in disjoint regions of the minnie65 volume.
+# Coordinates are (X, Y, Z) in mip0 voxels.  All 1024^3.
 # EM bounds:  X=[13824,226816]  Y=[13824,194048]  Z=[14816,27904]
 # Seg bounds: X=[26385,218809]  Y=[30308,161359]  Z=[14850,27858]
-# Train: 1024³ at (120000, 90000, 20000).
-# Test:  1024³ at (122000, 92000, 20000) — 976 voxel gap, disjoint.
-SPLITS = {
-    "train": {
-        "start": (120000, 90000, 20000),
-        "size": (1024, 1024, 1024),
-    },
-    "test": {
-        "start": (122000, 92000, 20000),
-        "size": (1024, 1024, 1024),
-    },
+SPLITS: Dict[str, Dict[str, Tuple[int, int, int]]] = {
+    "train1": {"start": (120000, 90000, 20000), "size": (1024, 1024, 1024)},
+    "train2": {"start": (124100, 90000, 20000), "size": (1024, 1024, 1024)},
+    "train3": {"start": (120000, 93100, 20000), "size": (1024, 1024, 1024)},
+    "train4": {"start": (124100, 93100, 20000), "size": (1024, 1024, 1024)},
+    "test1":  {"start": (122000, 92000, 20000), "size": (1024, 1024, 1024)},
 }
+
+TRAIN_SPLITS = ["train1", "train2", "train3", "train4"]
+TEST_SPLITS = ["test1"]
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +158,26 @@ def save_h5(arr: np.ndarray, path: Path) -> None:
         f.create_dataset("main", data=arr, compression="gzip")
 
 
-def make_name(prefix: str, mip: int, crop_size: int, suffix: str = "") -> str:
-    """Build standardised file name."""
-    base = f"minnie65_mip{mip}_crop_{crop_size}"
-    if suffix:
-        base = f"{base}_{suffix}"
+def make_name(
+    prefix: str,
+    mip: int,
+    crop_size: int,
+    start: Tuple[int, int, int],
+    seg_version: int = 0,
+) -> str:
+    """Build coordinate-based file name.
+
+    Examples:
+        make_name("volume", 0, 1024, (120000, 90000, 20000))
+        -> "minnie65_mip0_1024_x120000_y90000_z20000_volume.h5"
+
+        make_name("segmentation", 0, 1024, (120000, 90000, 20000), seg_version=1300)
+        -> "minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation.h5"
+    """
+    x, y, z = start
+    base = f"minnie65_mip{mip}_{crop_size}_x{x}_y{y}_z{z}"
+    if seg_version:
+        base = f"{base}_v{seg_version}"
     return f"{base}_{prefix}.h5"
 
 
@@ -196,10 +215,8 @@ def main() -> None:
     parser.add_argument(
         "--split", action="store_true",
         help=(
-            "Download pre-defined train + test splits from disjoint regions. "
-            "Train: 1024^3 at (120000,90000,20000). "
-            "Test:  1024^3 at (122000,92000,20000). "
-            "Ignores --size and --start when set."
+            "Download all 5 pre-defined splits (4 train + 1 test) from "
+            "disjoint 1024^3 regions. Ignores --size and --start when set."
         ),
     )
     args = parser.parse_args()
@@ -222,12 +239,12 @@ def main() -> None:
     # Build list of crops to download
     if args.split:
         crops = [
-            ("train", SPLITS["train"]["start"], SPLITS["train"]["size"]),
-            ("test",  SPLITS["test"]["start"],  SPLITS["test"]["size"]),
+            (name, sp["start"], sp["size"])
+            for name, sp in SPLITS.items()
         ]
     else:
         crops = [
-            ("", tuple(args.start), tuple(args.size)),
+            ("custom", tuple(args.start), tuple(args.size)),
         ]
 
     print("=" * 60)
@@ -245,52 +262,48 @@ def main() -> None:
         seg_gb = (sx * sy * sz * 8) / 1e9
         crop_gb = em_gb + seg_gb * len(versions)
         total_gb_all += crop_gb
-        tag = f" ({label})" if label else ""
-        print(f"  Crop{tag:8s}: start={start}  size={size}  ~{crop_gb:.1f} GB")
+        print(f"  {label:8s}: start={start}  size={size}  ~{crop_gb:.1f} GB")
 
     print(f"  Total est.  : {total_gb_all:.1f} GB (uncompressed)")
     print()
 
     for label, bbox_start, bbox_size in crops:
         crop_size = bbox_size[0]
-        tag = f"_{label}" if label else ""
 
-        if label:
-            print(f"--- {label.upper()} split ---")
-            print(f"  start: {bbox_start}  size: {bbox_size}")
-            print()
+        print(f"--- {label} ---")
+        print(f"  start: {bbox_start}  size: {bbox_size}")
+        print()
 
         # -- EM imagery --
-        em_file = out_dir / make_name("volume", mip, crop_size, label)
+        em_file = out_dir / make_name("volume", mip, crop_size, bbox_start)
         if em_file.exists():
-            print(f"EM imagery{tag}: SKIP (already exists: {em_file.name})")
+            print(f"  EM: SKIP (already exists: {em_file.name})")
         else:
-            print(f"Downloading EM imagery{tag} ...")
-            print(f"  source: {EM_PATH}")
+            print(f"  Downloading EM imagery ...")
+            print(f"    source: {EM_PATH}")
             em_vol = download_subvolume(EM_PATH, bbox_start, bbox_size, mip=mip)
-            print(f"  shape : {em_vol.shape}  dtype={em_vol.dtype}")
+            print(f"    shape : {em_vol.shape}  dtype={em_vol.dtype}")
             save_h5(em_vol, em_file)
-            print(f"  saved : {em_file}")
+            print(f"    saved : {em_file}")
         print()
 
         # -- Segmentation versions --
         for ver in versions:
             seg_cloud = SEG_VERSIONS[ver]
-            suffix = f"{label}_v{ver}" if label else f"v{ver}"
-            seg_file = out_dir / make_name("segmentation", mip, crop_size, suffix)
+            seg_file = out_dir / make_name("segmentation", mip, crop_size, bbox_start, seg_version=ver)
 
             if seg_file.exists():
-                print(f"Seg v{ver}{tag}: SKIP (already exists: {seg_file.name})")
+                print(f"  Seg v{ver}: SKIP (already exists: {seg_file.name})")
                 continue
 
-            print(f"Downloading segmentation v{ver}{tag} ...")
-            print(f"  source: {seg_cloud}")
+            print(f"  Downloading segmentation v{ver} ...")
+            print(f"    source: {seg_cloud}")
             seg_vol = download_subvolume(seg_cloud, bbox_start, bbox_size, mip=mip)
-            print(f"  shape : {seg_vol.shape}  dtype={seg_vol.dtype}")
+            print(f"    shape : {seg_vol.shape}  dtype={seg_vol.dtype}")
             n_ids = len(np.unique(seg_vol))
-            print(f"  unique: {n_ids} segment IDs")
+            print(f"    unique: {n_ids} segment IDs")
             save_h5(seg_vol, seg_file)
-            print(f"  saved : {seg_file}")
+            print(f"    saved : {seg_file}")
             print()
 
     # -- Summary --

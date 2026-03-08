@@ -1,9 +1,14 @@
 # MICRONS Configuration
 # Large-scale cortical connectomics (minnie65, 8x8x40 nm)
 #
-# Download: python scripts/download_microns.py --split --seg-version 1300
-# Train: 2048^3 at (140000, 100000, 20000)
-# Test:  1024^3 at (143000, 103000, 20000)
+# Download all splits: python scripts/download_microns.py --split --seg-version 1300
+#
+# Splits (all 1024^3, disjoint):
+#   train1: (120000, 90000, 20000)
+#   train2: (124100, 90000, 20000)
+#   train3: (120000, 93100, 20000)
+#   train4: (124100, 93100, 20000)
+#   test1:  (122000, 92000, 20000)
 
 defaults:
   - default
@@ -22,9 +27,12 @@ data:
   find_boundaries: 0.5
   patch_size: [48, 256, 256]
   train_volumes:
-    - {vol: minnie65_mip0_crop_1024_train_volume, seg: minnie65_mip0_crop_1024_train_v1300_segmentation}
+    - {vol: minnie65_mip0_1024_x120000_y90000_z20000_volume, seg: minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024_x124100_y90000_z20000_volume, seg: minnie65_mip0_1024_x124100_y90000_z20000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024_x120000_y93100_z20000_volume, seg: minnie65_mip0_1024_x120000_y93100_z20000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024_x124100_y93100_z20000_volume, seg: minnie65_mip0_1024_x124100_y93100_z20000_v1300_segmentation}
   test_volumes:
-    - {vol: minnie65_mip0_crop_1024_test_volume, seg: minnie65_mip0_crop_1024_test_v1300_segmentation}
+    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation}
 
 model:
   type: vista3d
