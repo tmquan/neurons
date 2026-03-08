@@ -142,7 +142,7 @@ def _download_from_hf(
             revision=revision,
             cache_dir=cache_dir,
             token=token,
-            ignore_patterns=["*.md", "*.txt", "*.json", "examples/*", "docs/*"],
+            ignore_patterns=["*.md", "*.txt", "examples/*", "docs/*"],
         )
         logger.info("Downloaded %s (rev=%s) -> %s", repo_id, revision, local_path)
         return Path(local_path)
@@ -589,23 +589,26 @@ class CosmosPredict2DWrapper(nn.Module):
             return False
 
         try:
-            revision = self.cfg.hf_revision
-
-            transformer = CosmosTransformer3DModel.from_pretrained(
+            local_path = _download_from_hf(
                 self.cfg.hf_repo_id,
-                subfolder="transformer",
-                revision=revision,
-                torch_dtype=self._dtype,
+                revision=self.cfg.hf_revision,
                 cache_dir=cache_dir,
                 token=hf_token,
             )
-            vae = AutoencoderKLCosmos.from_pretrained(
-                self.cfg.hf_repo_id,
-                subfolder="vae",
-                revision=revision,
+        except Exception as exc:
+            logger.debug("HuggingFace download failed: %s", exc)
+            return False
+
+        try:
+            transformer = CosmosTransformer3DModel.from_pretrained(
+                str(local_path),
+                subfolder="transformer",
                 torch_dtype=self._dtype,
-                cache_dir=cache_dir,
-                token=hf_token,
+            )
+            vae = AutoencoderKLCosmos.from_pretrained(
+                str(local_path),
+                subfolder="vae",
+                torch_dtype=self._dtype,
             )
 
             self.vae_encoder = vae.encoder
@@ -613,7 +616,7 @@ class CosmosPredict2DWrapper(nn.Module):
             self.dit = transformer
             self._backbone_loaded = True
             self._backend = "diffusers"
-            logger.info("Loaded backbone via diffusers (revision=%s).", revision)
+            logger.info("Loaded 2-D backbone + VAE via diffusers (local snapshot).")
             return True
 
         except Exception as exc:
@@ -682,9 +685,46 @@ class CosmosPredict2DWrapper(nn.Module):
         except Exception:
             return False
 
+        local_path = Path(local_path)
+
+        # --- Load VAE encoder from snapshot via diffusers ---
+        try:
+            from diffusers import AutoencoderKLCosmos  # type: ignore[import-untyped]
+
+            vae = AutoencoderKLCosmos.from_pretrained(
+                str(local_path), subfolder="vae",
+                torch_dtype=self._dtype,
+            )
+            self.vae_encoder = vae.encoder
+            logger.info("Loaded VAE encoder from snapshot.")
+        except Exception as exc:
+            logger.warning("Could not load VAE from snapshot: %s", exc)
+
+        # --- Load DiT: try diffusers first, then raw weights ---
+        try:
+            from diffusers import CosmosTransformer3DModel  # type: ignore[import-untyped]
+
+            self.dit = CosmosTransformer3DModel.from_pretrained(
+                str(local_path), subfolder="transformer",
+                torch_dtype=self._dtype,
+            )
+            self._backbone_loaded = True
+            self._backend = "diffusers"
+            logger.info("Loaded DiT transformer from snapshot via diffusers.")
+            return True
+        except Exception as exc:
+            logger.debug("diffusers DiT load from snapshot failed: %s", exc)
+
         self._build_standalone_backbone()
 
-        ckpt_files = list(local_path.glob("**/*.safetensors")) + list(local_path.glob("**/*.pt"))
+        transformer_dir = local_path / "transformer"
+        ckpt_files = (
+            list(transformer_dir.glob("*.safetensors"))
+            + list(transformer_dir.glob("*.pt"))
+        ) if transformer_dir.is_dir() else (
+            list(local_path.glob("**/*.safetensors"))
+            + list(local_path.glob("**/*.pt"))
+        )
         if not ckpt_files:
             logger.warning("No checkpoint files found in %s.", local_path)
             return False
@@ -693,7 +733,7 @@ class CosmosPredict2DWrapper(nn.Module):
         for ckpt_file in ckpt_files:
             try:
                 if ckpt_file.suffix == ".safetensors":
-                    from safetensors.torch import load_file
+                    from safetensors.torch import load_file  # type: ignore[import-untyped]
                     state = load_file(str(ckpt_file), device="cpu")
                 else:
                     state = torch.load(str(ckpt_file), map_location="cpu", weights_only=True)
@@ -860,26 +900,34 @@ class CosmosPredict2DWrapper(nn.Module):
 
         try:
             with torch.no_grad():
-                # TODO: Forward signature for the diffusers transformer may
-                # require hidden_states + timestep + encoder_hidden_states.
-                # Using a null text conditioning tensor as placeholder.
                 if latent.dim() == 4:
                     latent_5d = rearrange(latent, "b c h w -> b c 1 h w")
                 else:
                     latent_5d = latent
 
-                null_text = torch.zeros(
-                    latent.shape[0], 1, self.cfg.hidden_dim,
-                    device=latent.device, dtype=latent.dtype,
+                B = latent.shape[0]
+                dit_cfg = getattr(self.dit, "config", None)
+                text_dim = getattr(dit_cfg, "crossattn_proj_in_channels", 1024)
+                null_text = torch.zeros(B, 1, text_dim, device=latent.device, dtype=latent.dtype)
+
+                img_dim_in = getattr(dit_cfg, "img_context_dim_in", None)
+                img_tokens = getattr(dit_cfg, "img_context_num_tokens", 256)
+                if img_dim_in:
+                    null_img = torch.zeros(B, img_tokens, img_dim_in, device=latent.device, dtype=latent.dtype)
+                    enc_hidden = (null_text, null_img)
+                else:
+                    enc_hidden = null_text
+
+                padding_mask = torch.ones(1, 1, latent.shape[-2], latent.shape[-1], device=latent.device, dtype=latent.dtype)
+                null_condition = torch.zeros(B, 1, *latent_5d.shape[2:], device=latent.device, dtype=latent.dtype)
+
+                self.dit(
+                    hidden_states=latent_5d,
+                    timestep=timestep,
+                    encoder_hidden_states=enc_hidden,
+                    condition_mask=null_condition,
+                    padding_mask=padding_mask,
                 )
-                try:
-                    self.dit(
-                        hidden_states=latent_5d,
-                        timestep=timestep,
-                        encoder_hidden_states=null_text,
-                    )
-                except TypeError:
-                    self.dit(latent_5d, timestep)
         finally:
             for h in hooks:
                 h.remove()

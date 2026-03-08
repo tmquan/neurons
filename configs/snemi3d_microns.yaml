@@ -52,7 +52,7 @@ data:
 #   variant: "2B"
 #   dtype: "bf16"
 #   freeze_encoder: true         # VAE encoder  (default true; set false to fine-tune)
-#   freeze_backbone: true        # DiT backbone (default false; set true to freeze)
+#   freeze_backbone: false        # DiT backbone (default false; set true to freeze)
 #   freeze_decoder: false        # VAE decoder  (default false; set true to freeze body, last block stays trainable)
 #   dropout: 0.0
 
@@ -66,7 +66,7 @@ model:
   variant: "2B"
   dtype: "bf16"
   freeze_encoder: true           # VAE encoder  (default true; set false to fine-tune)
-  freeze_backbone: true          # DiT backbone (default false; set true to freeze)
+  freeze_backbone: false          # DiT backbone (default false; set true to freeze)
   freeze_decoder: false          # VAE decoder  (default false; set true to freeze body, last block stays trainable)
   dropout: 0.0
 
