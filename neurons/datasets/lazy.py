@@ -214,13 +214,17 @@ class LazyVolDataset(Dataset):
     def _compute_norm_params(self) -> None:
         """Compute per-volume min/max by sampling a few slices — not full load."""
         for h in self._handles:
-            z_dim = h.shape[0]
+            spatial = self._spatial_shape(h)
+            z_dim = spatial[0]
             sample_indices = [0, z_dim // 4, z_dim // 2, 3 * z_dim // 4, z_dim - 1]
             sample_indices = sorted(set(max(0, min(i, z_dim - 1)) for i in sample_indices))
 
+            has_channel = len(h.shape) > len(spatial)
             vmin, vmax = float("inf"), float("-inf")
             for zi in sample_indices:
-                sl = (slice(zi, zi + 1),) + tuple(slice(None) for _ in h.shape[1:])
+                sl = (slice(zi, zi + 1),) + tuple(slice(None) for _ in spatial[1:])
+                if has_channel:
+                    sl = (slice(None),) + sl
                 patch = _read_patch(h.image_path, sl, h.image_key, dtype=np.float32)
                 vmin = min(vmin, float(patch.min()))
                 vmax = max(vmax, float(patch.max()))
@@ -252,11 +256,21 @@ class LazyVolDataset(Dataset):
             slices.append(slice(start, start + patch_dim))
         return tuple(slices)
 
+    def _spatial_shape(self, handle: _VolumeHandle) -> Tuple[int, ...]:
+        """Strip leading channel dim if present, returning only spatial dims."""
+        shape = handle.shape
+        if len(shape) == len(self.patch_size) + 1:
+            return shape[1:]
+        return shape
+
     def __getitem__(self, index: int) -> Dict[str, Any]:
         rng = np.random.RandomState(index + int(torch.randint(0, 2**31, (1,)).item()))
         handle = self._pick_volume(index)
 
-        crop_slices = self._random_patch_slices(handle.shape, rng)
+        spatial = self._spatial_shape(handle)
+        crop_slices = self._random_patch_slices(spatial, rng)
+        if len(handle.shape) > len(spatial):
+            crop_slices = (slice(None),) + crop_slices
 
         image = _read_patch(
             handle.image_path, crop_slices, handle.image_key, dtype=np.float32,

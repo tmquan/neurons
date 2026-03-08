@@ -21,6 +21,7 @@ A modular, extensible PyTorch Lightning-based infrastructure for connectomics re
 - **Experiment Tracking** -- Weights & Biases and TensorBoard integration
 - **EM-Specific Augmentations** -- Elastic deformation, missing sections, imaging defects
 - **Multi-Format I/O** -- HDF5, TIFF, NRRD, NIfTI with automatic format detection
+- **Lazy Volume Loading** -- `LazyVolDataset` reads patches on-demand from disk, keeping RAM usage constant regardless of volume count/size
 
 ## Installation
 
@@ -39,11 +40,11 @@ Core: PyTorch, PyTorch Lightning, MONAI, einops, Hydra, h5py, tifffile, pynrrd, 
 ```
 neurons/
 ├── neurons/
-│   ├── datasets/       # Dataset classes: SNEMI3D, CREMI3D, MICRONS, MitoEM2
+│   ├── datasets/       # Dataset classes: SNEMI3D, CREMI3D, MICRONS, MitoEM2; LazyVolDataset (lazy.py)
 │   ├── datamodules/    # Lightning DataModules + CombineDataModule
-│   ├── models/         # Model wrappers: Vista3D, Vista2D (SegResNet fallback)
-│   ├── modules/        # Lightning training modules: Vista3D, Vista2D
-│   ├── losses/         # Discriminative (centroid + skeleton), Vista2D, Vista3D
+│   ├── models/         # Model wrappers: Vista3D, Vista2D, CosmosPredict3D, CosmosTransfer3D
+│   ├── modules/        # Lightning modules: BaseVistaModule, BaseCosmosModule + per-model subclasses
+│   ├── losses/         # BaseCombinedLoss + semantic, instance, geometry sub-losses
 │   ├── metrics/        # Instance (ARI, AMI, VOI, TED) and semantic (Dice, IoU)
 │   ├── preprocessors/  # Format handlers: TIFF, HDF5, NRRD, NIfTI
 │   ├── transforms/     # EM-specific augmentations

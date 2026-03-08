@@ -4,6 +4,12 @@ The training loop supports two modes that run **in the same step** on every batc
 When both are enabled the losses are averaged and a single backward pass updates all
 weights (backbone, task heads, and point prompt encoder together).
 
+All Lightning modules inherit from `BaseVistaModule` (Vista family) or
+`BaseCosmosModule` (Cosmos family) in `modules/base.py`, which centralise the
+shared `training_step` / `validation_step` logic, target preparation, and
+scheduler configuration.  Loss composition is handled by `BaseCombinedLoss`
+in `losses/loss.py`.
+
 ```
 training_step(batch)
 │

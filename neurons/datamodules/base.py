@@ -71,6 +71,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
+        compute_geometry: bool = True,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -86,6 +87,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.val_volumes = val_volumes if val_volumes is not None else train_volumes
         self.test_volumes = test_volumes if test_volumes is not None else train_volumes
         self.persistent_workers = persistent_workers and num_workers > 0
+        self.compute_geometry = compute_geometry
 
         self.train_dataset: Optional[CircuitDataset] = None
         self.val_dataset: Optional[CircuitDataset] = None
@@ -132,8 +134,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         """Direction and covariance targets for the geometry loss head.
 
         Runs after all spatial augmentations so the targets are
-        consistent with the augmented label layout.
+        consistent with the augmented label layout.  Skipped when
+        ``compute_geometry=False`` to save CPU time.
         """
+        if not self.compute_geometry:
+            return []
         return [
             Directiond(keys=["label"], spatial_dims=spatial_dims),
             Covarianced(keys=["label"], spatial_dims=spatial_dims),
@@ -145,7 +150,10 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
 
     def _output_keys(self) -> list:
         """All keys that must pass through ``EnsureTyped``."""
-        return ["image", "label", "label_direction", "label_covariance"]
+        keys = ["image", "label"]
+        if self.compute_geometry:
+            keys.extend(["label_direction", "label_covariance"])
+        return keys
 
     def get_train_transforms(self) -> Compose:
         io_keys = ["image", "label"]

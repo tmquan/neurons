@@ -41,8 +41,8 @@ Einops is used consistently in:
 
 ### 2.2 Transform Pipeline
 
-- **Fast crop path**: Skips EnsureChannelFirstd, SpatialPadd, RandSpatialCropd (data already cropped).
-- **Dataset normalization**: SNEMI3D/MICRONS normalize per volume in `_prepare_data`; no ScaleIntensityd in transforms when using fast crop. Documented implicitly by dataset-specific logic.
+- **`LazyVolDataset` path**: Skips EnsureChannelFirstd, SpatialPadd, RandSpatialCropd (data already cropped on read).
+- **Dataset normalization**: SNEMI3D/MICRONS normalize per volume in `_prepare_data`; `LazyVolDataset` computes per-volume min/max from sampled slices. No ScaleIntensityd in transforms when using lazy loading. Documented implicitly by dataset-specific logic.
 
 ### 2.3 Semantic Metrics
 
@@ -105,7 +105,7 @@ Einops is used consistently in:
 
 | Change | File(s) |
 |--------|---------|
-| Einops for unsqueeze in _fast_crop | `datasets/base.py` |
+| Einops for unsqueeze in LazyVolDataset | `datasets/lazy.py` |
 | Einops for view in cluster_embeddings | `utils/labels.py` |
 | Docstring for num_classes in semantic metrics | `metrics/semantic.py` |
 | ARCHITECTURE.md | `doc/ARCHITECTURE.md` |

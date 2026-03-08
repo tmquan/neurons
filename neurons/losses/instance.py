@@ -20,7 +20,7 @@ from einops import rearrange, reduce
 from neurons.utils.parallel import pmap
 
 
-def _edt_worker(args):
+def _edt_worker(args: Tuple[np.ndarray, int]) -> Tuple[int, np.ndarray]:
     """Per-instance normalised EDT for pmap subprocesses (CPU/scipy)."""
     from scipy.ndimage import distance_transform_edt
     label_np_b, uid = args
@@ -283,13 +283,13 @@ class InstanceLoss(nn.Module):
 
             centers = self._scatter_weighted_mean(emb_b, remap, wgt_b, K)  # [K, E]
 
-            center_per_pixel = centers[inverse]        # [M, E] float32
-            emb_fg = emb_b[:, fg].T.float()            # [M, E]
+            center_per_pixel = centers[inverse]        # [M, E]
+            emb_fg = emb_b[:, fg].T                    # [M, E]
 
             dist = ((emb_fg - center_per_pixel) ** 2).sum(dim=1).clamp(min=1e-12).sqrt()  # [M]
             pull_per_pixel = F.relu(dist - self.delta_v) ** 2
             if wgt_b is not None:
-                pull_per_pixel = pull_per_pixel * wgt_b[fg].float()
+                pull_per_pixel = pull_per_pixel * wgt_b[fg]
 
             pull_sum = torch.zeros(K, device=device, dtype=torch.float32)
             pull_sum.scatter_add_(0, inverse, pull_per_pixel)

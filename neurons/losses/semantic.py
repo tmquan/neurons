@@ -135,14 +135,14 @@ class SemanticLoss(nn.Module):
             n_valid = valid_mask.sum().clamp(min=1.0) * per_pixel.shape[1]
         else:
             n_valid = max(per_pixel.numel(), 1)
-        return per_pixel.float().sum() / n_valid
+        return per_pixel.sum() / n_valid
 
     @staticmethod
     def _iou_from_probs(probs, target, eps=1e-4):
         """1 - mean(IoU) over present classes from pre-computed probs/target."""
         inter = reduce(probs * target, "b c ... -> b c", "sum")
         union = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum") - inter
-        iou_per_class = (inter.float() + eps) / (union.float() + eps)  # [B, C]
+        iou_per_class = (inter + eps) / (union + eps)                   # [B, C]
         present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
         n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
         return 1.0 - reduce(iou_per_class * present, "b c -> ", "sum") / n_present
@@ -152,7 +152,7 @@ class SemanticLoss(nn.Module):
         """1 - mean(Dice) over present classes from pre-computed probs/target."""
         inter = reduce(probs * target, "b c ... -> b c", "sum")
         card = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum")
-        dice_per_class = (2.0 * inter.float() + eps) / (card.float() + eps)  # [B, C]
+        dice_per_class = (2.0 * inter + eps) / (card + eps)                   # [B, C]
         present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
         n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
         return 1.0 - reduce(dice_per_class * present, "b c -> ", "sum") / n_present

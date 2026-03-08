@@ -520,11 +520,13 @@ class _DecoderAdapter3D(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         if self._has_pretrained:
             latent = self.to_latent(features)
-            decoded = self.decoder_body(latent)
+            body_dtype = next(self.decoder_body.parameters()).dtype
+            decoded = self.decoder_body(latent.to(body_dtype))
             if isinstance(decoded, (tuple, list)):
                 decoded = decoded[0]
             if hasattr(decoded, "sample"):
                 decoded = decoded.sample
+            decoded = decoded.to(features.dtype)
         else:
             decoded = self.decoder_body(features)
         if decoded.shape[-3:] != target_size:
@@ -714,15 +716,20 @@ class CosmosTransfer3DWrapper(nn.Module):
         self.vae_decoder: Optional[nn.Module] = None
         self.dit: nn.Module
 
-        loaded = (
-            self._try_load_diffusers(cache_dir, hf_token, checkpoint_variant)
-            or self._try_load_cosmos_package(
-                cache_dir, hf_token, checkpoint_variant,
+        _saved_dtype = torch.get_default_dtype()
+        try:
+            loaded = (
+                self._try_load_diffusers(cache_dir, hf_token, checkpoint_variant)
+                or self._try_load_cosmos_package(
+                    cache_dir, hf_token, checkpoint_variant,
+                )
+                or self._try_load_raw_checkpoint(
+                    cache_dir, hf_token, checkpoint_variant,
+                )
             )
-            or self._try_load_raw_checkpoint(
-                cache_dir, hf_token, checkpoint_variant,
-            )
-        )
+        finally:
+            torch.set_default_dtype(_saved_dtype)
+
         if not loaded:
             logger.warning(
                 "No pretrained weights loaded -- using randomly initialised "
@@ -769,10 +776,10 @@ class CosmosTransfer3DWrapper(nn.Module):
                 torch_dtype=self._dtype,
             )
 
-            self.vae_encoder = vae.encoder
-            self.vae_decoder = vae.decoder
+            self.vae_encoder = vae.encoder.to(self._dtype)
+            self.vae_decoder = vae.decoder.to(self._dtype)
 
-            self.dit = transformer
+            self.dit = transformer.to(self._dtype)
             self._backbone_loaded = True
             self._backend = "diffusers"
             logger.info(
@@ -803,15 +810,15 @@ class CosmosTransfer3DWrapper(nn.Module):
                 token=hf_token,
             )
             if hasattr(pipe, "vae") and hasattr(pipe.vae, "encoder"):
-                self.vae_encoder = pipe.vae.encoder
+                self.vae_encoder = pipe.vae.encoder.to(self._dtype)
 
             if hasattr(pipe, "vae") and hasattr(pipe.vae, "decoder"):
-                self.vae_decoder = pipe.vae.decoder
+                self.vae_decoder = pipe.vae.decoder.to(self._dtype)
 
             if hasattr(pipe, "dit"):
-                self.dit = pipe.dit
+                self.dit = pipe.dit.to(self._dtype)
             elif hasattr(pipe, "transformer"):
-                self.dit = pipe.transformer
+                self.dit = pipe.transformer.to(self._dtype)
             else:
                 logger.warning(
                     "Could not locate DiT module on cosmos_transfer2 pipeline."
@@ -852,8 +859,8 @@ class CosmosTransfer3DWrapper(nn.Module):
                 str(local_path), subfolder="vae",
                 torch_dtype=self._dtype,
             )
-            self.vae_encoder = vae.encoder
-            self.vae_decoder = vae.decoder
+            self.vae_encoder = vae.encoder.to(self._dtype)
+            self.vae_decoder = vae.decoder.to(self._dtype)
             logger.info("Loaded VAE encoder + decoder from snapshot.")
         except Exception as exc:
             logger.warning("Could not load VAE from snapshot: %s", exc)
@@ -865,7 +872,7 @@ class CosmosTransfer3DWrapper(nn.Module):
             self.dit = CosmosTransformer3DModel.from_pretrained(
                 str(local_path), subfolder="transformer",
                 torch_dtype=self._dtype,
-            )
+            ).to(self._dtype)
             self._backbone_loaded = True
             self._backend = "diffusers"
             logger.info("Loaded DiT transformer from snapshot via diffusers.")
@@ -998,6 +1005,7 @@ class CosmosTransfer3DWrapper(nn.Module):
             if not feat_list:
                 final, _ = self.dit(latent, timestep=timestep)
                 feat_list = [final]
+            feat_list = [f.float() for f in feat_list]
             features = self.feature_projector(
                 feat_list, d_tok, h_tok, w_tok,
             )
@@ -1032,7 +1040,7 @@ class CosmosTransfer3DWrapper(nn.Module):
                 "Returning conv-downsampled latent features.",
                 type(self.dit).__name__,
             )
-            fallback = rearrange(latent, "b c d h w -> b (d h w) c")
+            fallback = rearrange(latent, "b c d h w -> b (d h w) c").float()
             return self.feature_projector(
                 [fallback] * len(self._feature_layers),
                 d_tok, h_tok, w_tok,
@@ -1090,6 +1098,7 @@ class CosmosTransfer3DWrapper(nn.Module):
             fallback = rearrange(latent, "b c d h w -> b (d h w) c")
             collected = [fallback] * len(self._feature_layers)
 
+        collected = [f.float() for f in collected]
         return self.feature_projector(collected, d_tok, h_tok, w_tok)
 
     # ------------------------------------------------------------------

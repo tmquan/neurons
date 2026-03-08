@@ -244,6 +244,23 @@ class BaseCosmosModule(pl.LightningModule):
         return targets
 
     # ------------------------------------------------------------------
+    # Batch sanitisation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_meta_tensor(batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert MONAI MetaTensors to plain torch.Tensors.
+
+        MetaTensor's ``__torch_function__`` override can interfere with
+        mixed-dtype backward passes.  Stripping it at the batch boundary
+        keeps the entire computation graph on plain Tensors.
+        """
+        return {
+            k: v.as_subclass(torch.Tensor) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
+
+    # ------------------------------------------------------------------
     # Per-mode forward + loss
     # ------------------------------------------------------------------
 
@@ -259,6 +276,7 @@ class BaseCosmosModule(pl.LightningModule):
         sub_mode = self._get_proofread_sub_mode(targets)
         if sub_mode == "fractionary":
             targets = self._resolve_fractionary_labels(targets)
+            targets.pop("_cached_weights", None)
             predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         else:
             point_prompts = sample_point_prompts(
@@ -276,6 +294,7 @@ class BaseCosmosModule(pl.LightningModule):
     # ------------------------------------------------------------------
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        batch = self._strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
@@ -334,23 +353,28 @@ class BaseCosmosModule(pl.LightningModule):
         self.log(f"{prefix}/sem_dice", sem_dice, sync_dist=True, batch_size=bs)
 
         fg_mask = targets["labels"] > 0
-        ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
-        ins_gt = targets["labels"]
+        if fg_mask.any():
+            ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
+            ins_gt = targets["labels"]
 
-        ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
-        ins_ami = compute_per_batch_ami(ins_pred, ins_gt)
-        ins_voi = compute_per_batch_voi(ins_pred, ins_gt)
-        ins_ted = compute_per_batch_ted(ins_pred, ins_gt)
+            ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
+            ins_ami = compute_per_batch_ami(ins_pred, ins_gt)
+            ins_voi = compute_per_batch_voi(ins_pred, ins_gt)
+            ins_ted = compute_per_batch_ted(ins_pred, ins_gt)
 
-        self.log(f"{prefix}/ins_ari", ins_ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_ami", ins_ami, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_voi", ins_voi.total, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_ari", ins_ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_ami", ins_ami, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_voi", ins_voi.total, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
+        else:
+            for m in ("ins_ari", "ins_ami", "ins_voi", "ins_voi_split", "ins_voi_merge", "ins_ted"):
+                self.log(f"{prefix}/{m}", 0.0, sync_dist=True, batch_size=bs)
 
     def _eval_step(self, batch: Dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         """Shared evaluation logic for validation and test steps."""
+        batch = self._strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
@@ -384,39 +408,22 @@ class BaseCosmosModule(pl.LightningModule):
         lr = self.optimizer_config.get("lr", 1e-4)
         wd = self.optimizer_config.get("weight_decay", 1e-5)
 
-        backbone_lr = self.optimizer_config.get("backbone_lr")
-        if backbone_lr is not None and backbone_lr != lr:
-            backbone_decay, backbone_no_decay = [], []
-            head_decay, head_no_decay = [], []
-            for name, param in self.named_parameters():
-                if not param.requires_grad:
-                    continue
-                is_backbone = name.startswith("model.dit.")
-                if param.dim() <= 1 or name.endswith(".bias"):
-                    (backbone_no_decay if is_backbone else head_no_decay).append(param)
-                else:
-                    (backbone_decay if is_backbone else head_decay).append(param)
-            param_groups = [
-                {"params": backbone_decay, "lr": backbone_lr, "weight_decay": wd},
-                {"params": backbone_no_decay, "lr": backbone_lr, "weight_decay": 0.0},
-                {"params": head_decay, "lr": lr, "weight_decay": wd},
-                {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
-            ]
-            optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
-        else:
-            decay, no_decay = [], []
-            for name, param in self.named_parameters():
-                if not param.requires_grad:
-                    continue
-                if param.dim() <= 1 or name.endswith(".bias"):
-                    no_decay.append(param)
-                else:
-                    decay.append(param)
-            param_groups = [
-                {"params": decay, "weight_decay": wd},
-                {"params": no_decay, "weight_decay": 0.0},
-            ]
-            optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
+        backbone_lr = self.optimizer_config.get("backbone_lr") or lr
+        backbone_decay, backbone_no_decay = [], []
+        head_decay, head_no_decay = [], []
+        for name, param in self.named_parameters():
+            is_backbone = name.startswith("model.dit.")
+            if param.dim() <= 1 or name.endswith(".bias"):
+                (backbone_no_decay if is_backbone else head_no_decay).append(param)
+            else:
+                (backbone_decay if is_backbone else head_decay).append(param)
+        param_groups = [
+            {"params": backbone_decay, "lr": backbone_lr, "weight_decay": wd},
+            {"params": backbone_no_decay, "lr": backbone_lr, "weight_decay": 0.0},
+            {"params": head_decay, "lr": lr, "weight_decay": wd},
+            {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
+        ]
+        optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
 
         sched_cfg = self.optimizer_config.get("scheduler", {})
         stype = sched_cfg.get("type", "cosine").lower()

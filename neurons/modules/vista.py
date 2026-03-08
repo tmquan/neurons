@@ -215,6 +215,7 @@ class BaseVistaModule(pl.LightningModule):
         sub_mode = self._get_proofread_sub_mode(targets)
         if sub_mode == "fractionary":
             targets = self._resolve_fractionary_labels(targets)
+            targets.pop("_cached_weights", None)
             predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         else:
             point_prompts = sample_point_prompts(
@@ -256,7 +257,7 @@ class BaseVistaModule(pl.LightningModule):
             for k, v in losses.items():
                 all_losses[f"train/{mode}/{k}"] = v
 
-        total_loss = torch.stack(mode_losses).mean()
+        total_loss = torch.stack(mode_losses).mean().float()
 
         bs = images.shape[0]
         for name, val in all_losses.items():
@@ -290,20 +291,24 @@ class BaseVistaModule(pl.LightningModule):
         self.log(f"{prefix}/sem_dice", sem_dice, sync_dist=True, batch_size=bs)
 
         fg_mask = targets["labels"] > 0
-        ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
-        ins_gt = targets["labels"]
+        if fg_mask.any():
+            ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
+            ins_gt = targets["labels"]
 
-        ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
-        ins_ami = compute_per_batch_ami(ins_pred, ins_gt)
-        ins_voi = compute_per_batch_voi(ins_pred, ins_gt)
-        ins_ted = compute_per_batch_ted(ins_pred, ins_gt)
+            ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
+            ins_ami = compute_per_batch_ami(ins_pred, ins_gt)
+            ins_voi = compute_per_batch_voi(ins_pred, ins_gt)
+            ins_ted = compute_per_batch_ted(ins_pred, ins_gt)
 
-        self.log(f"{prefix}/ins_ari", ins_ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_ami", ins_ami, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_voi", ins_voi.total, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_ari", ins_ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_ami", ins_ami, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_voi", ins_voi.total, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
+            self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
+        else:
+            for m in ("ins_ari", "ins_ami", "ins_voi", "ins_voi_split", "ins_voi_merge", "ins_ted"):
+                self.log(f"{prefix}/{m}", 0.0, sync_dist=True, batch_size=bs)
 
     def _eval_step(self, batch: Dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         """Shared evaluation logic for validation and test steps."""

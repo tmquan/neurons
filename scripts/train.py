@@ -220,16 +220,16 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
         "cosmos_transfer25_3d": CosmosTransfer3DModule,
     }
 
+    _MODULE_MAP["vista3d"] = Vista3DModule
+
     module_cls = _MODULE_MAP.get(model_type)
-    if module_cls is not None:
-        return module_cls(
-            model_config=model_cfg,
-            optimizer_config=optimizer_cfg,
-            loss_config=loss_cfg,
-            training_config=training_cfg,
+    if module_cls is None:
+        raise ValueError(
+            f"Unknown model type: '{model_type}'. "
+            f"Choose from: {sorted(_MODULE_MAP)}"
         )
 
-    return Vista3DModule(
+    return module_cls(
         model_config=model_cfg,
         optimizer_config=optimizer_cfg,
         loss_config=loss_cfg,

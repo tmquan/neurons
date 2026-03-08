@@ -10,11 +10,11 @@ concept appears in code and documentation.
 
 **Semantic segmentation** -- Classify every voxel into a category
 (background, neuron, cleft, mitochondria).  Produces a class label map.
-See `SemanticLoss` in `losses/vista3d_losses.py`.
+See `SemanticLoss` in `losses/semantic.py`.
 
 **Instance segmentation** -- Assign a unique integer ID to each
 individual object (e.g. each neuron gets a different ID).
-See `InstanceLoss` in `losses/vista3d_losses.py`.
+See `InstanceLoss` in `losses/instance.py`.
 
 **Foreground / background** -- Foreground = any voxel with instance
 label > 0.  Background = label 0.  Many losses and metrics ignore

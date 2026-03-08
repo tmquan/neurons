@@ -186,16 +186,33 @@ combine = CombineDataModule(
 
 ## Memory-Efficient Volume Loading
 
+Two complementary strategies keep memory usage manageable:
+
+### 1. `LazyVolDataset` — on-demand patch I/O (`datasets/lazy.py`)
+
+`LazyVolDataset` stores only file paths and volume shapes (~bytes per
+volume).  Each `__getitem__` reads a random `patch_size` crop directly from
+disk using HDF5 chunked reads or TIFF memory-mapped reads — no full-volume
+caching at all.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  _discover_volumes()  scans files, stores metadata only  │
+│  __getitem__(i)       reads patch from disk on demand    │
+│  Memory: O(num_volumes × metadata) ≈ negligible          │
+│  vs. CacheDataset: O(num_volumes × volume_size) ≈ GBs   │
+└──────────────────────────────────────────────────────────┘
+```
+
+This is the recommended path for large-scale or DDP training where each
+rank would otherwise duplicate full volumes in RAM.
+
+### 2. `CircuitDataset` virtual-length scheme (`datasets/base.py`)
+
 All datasets inherit from `CircuitDataset` (which wraps MONAI's `CacheDataset`).
 When operating in 3D volume mode (`slice_mode=False`), samples are random crops
-from the same underlying volume.  A naive implementation would store N copies of
-the full volume dict in the data list — one per sample — causing `CacheDataset`
-to cache each entry independently and consume `N ×` the volume's memory.
-
-### Virtual length mechanism
-
-`CircuitDataset` uses a **virtual length** scheme to decouple epoch length from
-the number of unique cached entries:
+from the same underlying volume.  `CircuitDataset` uses a **virtual length**
+scheme to decouple epoch length from the number of unique cached entries:
 
 ```
 ┌──────────────────────────────────────────────────────────┐

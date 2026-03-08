@@ -81,6 +81,7 @@ class BaseCombinedLoss(nn.Module):
         labels: torch.Tensor,
         targets: Optional[Dict[str, torch.Tensor]] = None,
     ):
+        """Derive instance weights and geometry targets from label maps."""
         ins_weights = self.instance_loss.compute_weights(labels)
 
         if (

@@ -37,15 +37,18 @@ Trainer.fit(module, datamodule)
 
 | Module                               | Role                                                               |
 | ------------------------------------ | ------------------------------------------------------------------ |
-| `datasets/base.py`                   | `CircuitDataset` base; `_fast_crop` for early patch extraction     |
+| `datasets/base.py`                   | `CircuitDataset` base for MONAI-backed datasets                    |
+| `datasets/lazy.py`                   | `LazyVolDataset` — memory-efficient on-demand patch loading        |
 | `datamodules/base.py`                | `CircuitDataModule`; setup, DataLoader creation                    |
 | `datamodules/combine.py`             | `CombineDataModule`; multi-dataset training with union label space |
 | `models/vista3d_model.py`            | SegResNet backbone + semantic/instance/geometry heads              |
 | `models/cosmospredict3d_model.py`    | Cosmos-Predict2.5 DiT backbone + VAE decoder adapter               |
 | `models/cosmostransfer3d_model.py`   | Cosmos-Transfer2.5 DiT backbone + VAE decoder adapter              |
+| `modules/base.py`                    | `BaseVistaModule` / `BaseCosmosModule` — shared training logic     |
 | `modules/vista3d_module.py`          | Lightning module for Vista3D training                              |
 | `modules/cosmospredict3d_module.py`  | Lightning module for CosmosPredict3D training                      |
 | `modules/cosmostransfer3d_module.py` | Lightning module for CosmosTransfer3D training                     |
+| `losses/loss.py`                     | `BaseCombinedLoss` — shared semantic + instance + geometry loss     |
 | `losses/vista3d_losses.py`           | Vista3DLoss: L_sem + L_ins + L_geom                                |
 | `losses/cosmospredict3d_losses.py`   | CosmosPredict3DLoss: same + optional L_flow_consistency            |
 | `losses/cosmostransfer3d_losses.py`  | CosmosTransfer3DLoss: same + optional L_flow_consistency           |
@@ -516,13 +519,14 @@ Regression on three channel groups (foreground-only):
 
 ## 10. Transform Pipeline (SNEMI3D, patch_mode)
 
-**With `_fast_crop` (patch_size set, slice_mode=False):**
+**With `LazyVolDataset` (patch_size set, slice_mode=False):**
 
-- Dataset: `_fast_crop` → crop in `__getitem_`_ before transforms.
+- Dataset: `LazyVolDataset` reads only the requested patch from disk
+  on each `__getitem__` call — no full-volume caching.
 - Transforms: no EnsureChannelFirstd / SpatialPadd / RandSpatialCropd;
 only `_label_post_crop` + augmentations.
 
-**Without `_fast_crop`:**
+**Without `LazyVolDataset` (CacheDataset path):**
 
 - Transforms: EnsureChannelFirstd → SpatialPadd → RandSpatialCropd →
 Labeld (connected-component relabel) → RandFlip → RandRotate90 →
@@ -537,7 +541,7 @@ Directiond + Covarianced → intensity augmentations → ToTensord.
 1. `scripts/train.py` → `get_datamodule`, `get_module`
 2. `datamodules/base.py` → `setup`, DataLoader
 3. `datamodules/snemi3d.py` → `get_train_transforms`, `_get_dataset_kwargs`
-4. `datasets/base.py` → `_fast_crop`, `CircuitDataset`
+4. `datasets/base.py` → `CircuitDataset`; `datasets/lazy.py` → `LazyVolDataset`
 5. `models/vista3d_model.py` → backbone + three heads
 6. `modules/vista3d_module.py` → `training_step`, `_prepare_targets`
 7. `losses/vista3d_losses.py` → Vista3DLoss branches

@@ -1,5 +1,4 @@
-# TODO: 2D Cosmos-Transfer losses not yet implemented.
-# See cosmostransfer3d_losses.py for the 3D reference implementation.
+"""2D variant not yet implemented. See the 3D reference."""
 
 
 class CosmosTransfer2DLoss:

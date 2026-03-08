@@ -107,16 +107,16 @@ class GeometryLoss(nn.Module):
         n_fg = fg.sum().float().clamp(min=1.0)
         numel = n_fg * pred.shape[0]
 
+        p, t = pred[:, fg], target[:, fg]
+
         if loss_type == "mse":
-            diff = pred[:, fg] - target[:, fg]
+            diff = p - t
             return (diff ** 2).sum() / numel
         elif loss_type == "l1":
-            diff = pred[:, fg] - target[:, fg]
-            return diff.abs().sum() / numel
+            return (p - t).abs().sum() / numel
         else:
             return F.smooth_l1_loss(
-                pred[:, fg], target[:, fg],
-                beta=self.smooth_l1_beta, reduction="sum",
+                p, t, beta=self.smooth_l1_beta, reduction="sum",
             ) / numel
 
     # ------------------------------------------------------------------
@@ -240,8 +240,15 @@ class GeometryLoss(nn.Module):
 
             if self.weight_raw > 0 and raw_image is not None:
                 img_flat = rearrange(raw_image[b].detach(), "c ... -> c (...)").clamp(0.0, 1.0)
+                c_in = img_flat.shape[0]
+                if c_in == 1:
+                    rgb = repeat(img_flat, "1 n -> 3 n")
+                elif c_in >= 3:
+                    rgb = img_flat[:3]
+                else:
+                    rgb = img_flat.expand(3, -1)[:3]
                 rgba_tgt = torch.cat([
-                    repeat(img_flat, "1 n -> 3 n"),
+                    rgb,
                     rearrange(fg.float(), "n -> 1 n"),
                 ], dim=0)
                 L_raw = L_raw + self._fg_loss(
