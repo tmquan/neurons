@@ -25,15 +25,14 @@ References:
 
 import logging
 import math
-import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat, reduce, einsum
+from einops import rearrange, repeat
 
 from neurons.models.point_prompt_encoder import PointPromptEncoder
 
@@ -46,6 +45,20 @@ _CONV = nn.Conv2d
 def _NORM(ch: int) -> nn.GroupNorm:
     num_groups = max(g for g in (1, 2, 4, 8, 16, 32) if ch % g == 0)
     return nn.GroupNorm(num_groups, ch)
+
+
+class _PointwiseLinear(nn.Module):
+    """Drop-in replacement for Conv{2,3}d(k=1) using nn.Linear.
+
+    Avoids non-contiguous gradient strides that cause DDP warnings.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, bias: bool = True) -> None:
+        super().__init__()
+        self.linear = nn.Linear(in_channels, out_channels, bias=bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return rearrange(self.linear(rearrange(x, "b c ... -> b ... c")), "b ... c -> b c ...")
 
 
 # ---------------------------------------------------------------------------
@@ -146,19 +159,16 @@ def _download_from_hf(
 # Input channel adapter
 # ---------------------------------------------------------------------------
 
-class _InputAdapter(nn.Module):
-    """Project arbitrary input channels to 3-ch RGB expected by Cosmos."""
+def _adapt_to_rgb(x: torch.Tensor) -> torch.Tensor:
+    """Adapt input channels to 3-ch RGB expected by Cosmos.
 
-    def __init__(self, in_channels: int) -> None:
-        super().__init__()
-        if in_channels == 3:
-            self.proj: nn.Module = nn.Identity()
-        else:
-            self.proj = nn.Conv2d(in_channels, 3, kernel_size=1, bias=False)
-            nn.init.kaiming_normal_(self.proj.weight)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.proj(x)
+    For single-channel EM images, repeats grayscale to 3 channels.
+    This preserves the VAE encoder's pretrained input distribution
+    without introducing learnable parameters.
+    """
+    if x.shape[1] == 3:
+        return x
+    return repeat(x, "b 1 ... -> b 3 ...")
 
 
 # ---------------------------------------------------------------------------
@@ -330,10 +340,10 @@ class _FeatureProjector(nn.Module):
         super().__init__()
         total_in = hidden_dim * num_feature_layers
         self.proj = nn.Sequential(
-            _CONV(total_in, out_dim * 2, 1),
+            _PointwiseLinear(total_in, out_dim * 2),
             _NORM(out_dim * 2),
             nn.GELU(),
-            _CONV(out_dim * 2, out_dim, 1),
+            _PointwiseLinear(out_dim * 2, out_dim),
         )
 
     def forward(
@@ -472,8 +482,6 @@ class CosmosPredict2DWrapper(nn.Module):
             n = self.cfg.num_layers
             self._feature_layers = sorted({n // 4, n // 2, 3 * n // 4, n - 1})
 
-        self.input_adapter = _InputAdapter(in_channels)
-
         self._backbone_loaded = False
         self._build_backbone(cache_dir, hf_token, checkpoint_variant)
 
@@ -520,6 +528,8 @@ class CosmosPredict2DWrapper(nn.Module):
         if freeze_backbone:
             self.freeze_encoder()
 
+        self._make_params_contiguous()
+
         logger.info(
             "CosmosPredict2DWrapper initialised: variant=%s, "
             "feature_layers=%s, backbone_loaded=%s, frozen=%s, "
@@ -529,6 +539,12 @@ class CosmosPredict2DWrapper(nn.Module):
             f"{self.get_num_parameters(trainable_only=False):,}",
             f"{self.get_num_parameters(trainable_only=True):,}",
         )
+
+    def _make_params_contiguous(self) -> None:
+        """Ensure all parameter data tensors are contiguous for DDP."""
+        for p in self.parameters():
+            if not p.data.is_contiguous():
+                p.data = p.data.contiguous()
 
     # ------------------------------------------------------------------
     # Backbone construction
@@ -899,7 +915,7 @@ class CosmosPredict2DWrapper(nn.Module):
         original_dtype = x.dtype
         H_in, W_in = x.shape[-2], x.shape[-1]
 
-        rgb = self.input_adapter(x)
+        rgb = _adapt_to_rgb(x)
 
         s = self.cfg.spatial_compression
         pad_h = (s - H_in % s) % s

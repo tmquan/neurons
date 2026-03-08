@@ -25,8 +25,8 @@ def _prepare_flat_labels(
     ignore_background: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Flatten and filter label tensors for metric computation."""
-    pred_flat = pred_labels.detach().cpu().numpy().ravel()
-    true_flat = true_labels.detach().cpu().numpy().ravel()
+    pred_flat = pred_labels.cpu().numpy().ravel()
+    true_flat = true_labels.cpu().numpy().ravel()
 
     if ignore_background:
         fg_mask = (pred_flat > 0) | (true_flat > 0)

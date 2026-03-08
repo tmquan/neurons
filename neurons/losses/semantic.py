@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, reduce
 
 
 class SemanticLoss(nn.Module):
@@ -146,13 +146,12 @@ class SemanticLoss(nn.Module):
         """
         logits, class_labels = self._slice_active(logits, class_labels)
         probs, target, _ = self._to_probs_and_target(logits, class_labels)
-        spatial = tuple(range(2, probs.dim()))
-        inter = (probs * target).sum(dim=spatial)                  # [B, C]
-        union = probs.sum(dim=spatial) + target.sum(dim=spatial) - inter
+        inter = reduce(probs * target, "b c ... -> b c", "sum")
+        union = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum") - inter
         iou_per_class = (inter + eps) / (union + eps)              # [B, C]
-        present = target.sum(dim=spatial) > 0                      # [B, C]
-        n_present = present.sum().clamp(min=1.0)
-        return 1.0 - (iou_per_class * present).sum() / n_present
+        present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
+        n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
+        return 1.0 - reduce(iou_per_class * present, "b c -> ", "sum") / n_present
 
     def _dice_loss(self, logits, class_labels, eps=1e-5):
         """1 - mean(Dice) over present classes, ignoring invalid pixels.
@@ -162,13 +161,12 @@ class SemanticLoss(nn.Module):
         """
         logits, class_labels = self._slice_active(logits, class_labels)
         probs, target, _ = self._to_probs_and_target(logits, class_labels)
-        spatial = tuple(range(2, probs.dim()))
-        inter = (probs * target).sum(dim=spatial)                  # [B, C]
-        card = probs.sum(dim=spatial) + target.sum(dim=spatial)
+        inter = reduce(probs * target, "b c ... -> b c", "sum")
+        card = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum")
         dice_per_class = (2.0 * inter + eps) / (card + eps)       # [B, C]
-        present = target.sum(dim=spatial) > 0                      # [B, C]
-        n_present = present.sum().clamp(min=1.0)
-        return 1.0 - (dice_per_class * present).sum() / n_present
+        present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
+        n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
+        return 1.0 - reduce(dice_per_class * present, "b c -> ", "sum") / n_present
 
     # ------------------------------------------------------------------
     # Forward

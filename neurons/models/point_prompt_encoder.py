@@ -6,7 +6,7 @@ into a dense spatial feature map that is added (residual) to backbone
 features before the task heads.
 """
 
-from typing import List
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
@@ -80,7 +80,7 @@ class PointPromptEncoder(nn.Module):
         neg_points: List[torch.Tensor],
         target_semantic_ids: torch.Tensor,
         target_instance_ids: torch.Tensor,
-        spatial_shape: tuple,
+        spatial_shape: Tuple[int, ...],
     ) -> torch.Tensor:
         """Scatter points into a dense indicator volume.
 
@@ -102,7 +102,7 @@ class PointPromptEncoder(nn.Module):
 
             # Unified 2D / 3D indexing: convert [N, S] coords to a tuple
             # of 1-D index tensors for advanced indexing.
-            def _scatter(channel, idx, value):
+            def _scatter(channel: int, idx: torch.Tensor, value: float) -> None:
                 """Write *value* at spatial positions *idx* into vol[b, channel]."""
                 coords = tuple(idx[:, d] for d in range(self.spatial_dims))
                 vol[(b, channel) + coords] = value
@@ -126,7 +126,7 @@ class PointPromptEncoder(nn.Module):
         neg_points: List[torch.Tensor],
         target_semantic_ids: torch.Tensor,
         target_instance_ids: torch.Tensor,
-        spatial_shape: tuple,
+        spatial_shape: Tuple[int, ...],
     ) -> torch.Tensor:
         """Encode point prompts into a dense feature volume.
 

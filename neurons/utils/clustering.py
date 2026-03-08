@@ -85,7 +85,7 @@ def cluster_embeddings_meanshift(
 
     labels_full = torch.zeros(emb_flat.shape[0], device=device, dtype=torch.long)
     labels_full[fg_idx] = labels_fg
-    return labels_full.view(spatial_shape)
+    return labels_full.reshape(spatial_shape)
 
 
 def cluster_embeddings_soft(

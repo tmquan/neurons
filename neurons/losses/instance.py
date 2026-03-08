@@ -165,7 +165,7 @@ class InstanceLoss(nn.Module):
                     if not remaining.any():
                         break
 
-                max_d = dt.flatten(2).amax(dim=2).clamp(min=1.0)
+                max_d = reduce(dt, "k c ... -> k c", "max").clamp(min=1.0)
                 dt = dt / rearrange(max_d, reshape_pattern)
 
                 for i, uid in enumerate(chunk_ids):

@@ -47,6 +47,20 @@ def _NORM(ch: int) -> nn.GroupNorm:
     return nn.GroupNorm(num_groups, ch)
 
 
+class _PointwiseLinear(nn.Module):
+    """Drop-in replacement for Conv{2,3}d(k=1) using nn.Linear.
+
+    Avoids non-contiguous gradient strides that cause DDP warnings.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, bias: bool = True) -> None:
+        super().__init__()
+        self.linear = nn.Linear(in_channels, out_channels, bias=bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return rearrange(self.linear(rearrange(x, "b c ... -> b ... c")), "b ... c -> b c ...")
+
+
 # ---------------------------------------------------------------------------
 # Variant configuration  (shared with the 2D model)
 # ---------------------------------------------------------------------------
@@ -141,19 +155,16 @@ def _download_from_hf(
 # 3-D input channel adapter
 # ---------------------------------------------------------------------------
 
-class _InputAdapter3D(nn.Module):
-    """Project arbitrary input channels to 3-ch expected by Cosmos."""
+def _adapt_to_rgb(x: torch.Tensor) -> torch.Tensor:
+    """Adapt input channels to 3-ch RGB expected by Cosmos.
 
-    def __init__(self, in_channels: int) -> None:
-        super().__init__()
-        if in_channels == 3:
-            self.proj: nn.Module = nn.Identity()
-        else:
-            self.proj = _CONV(in_channels, 3, kernel_size=1, bias=False)
-            nn.init.kaiming_normal_(self.proj.weight)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.proj(x)
+    For single-channel EM volumes, repeats grayscale to 3 channels.
+    This preserves the VAE encoder's pretrained input distribution
+    without introducing learnable parameters.
+    """
+    if x.shape[1] == 3:
+        return x
+    return repeat(x, "b 1 ... -> b 3 ...")
 
 
 # ---------------------------------------------------------------------------
@@ -319,10 +330,10 @@ class _FeatureProjector3D(nn.Module):
         super().__init__()
         total_in = hidden_dim * num_feature_layers
         self.proj = nn.Sequential(
-            _CONV(total_in, out_dim * 2, 1),
+            _PointwiseLinear(total_in, out_dim * 2),
             _NORM(out_dim * 2),
             nn.GELU(),
-            _CONV(out_dim * 2, out_dim, 1),
+            _PointwiseLinear(out_dim * 2, out_dim),
         )
 
     def forward(
@@ -405,7 +416,7 @@ class _DecoderAdapter3D(nn.Module):
         self._has_pretrained = vae_decoder is not None
 
         if vae_decoder is not None:
-            self.to_latent = _CONV(feature_size, latent_channels, 1)
+            self.to_latent = _PointwiseLinear(feature_size, latent_channels)
             self.decoder_body = vae_decoder
             self._hidden_ch = self._replace_conv_out()
             if freeze_decoder:
@@ -455,7 +466,7 @@ class _DecoderAdapter3D(nn.Module):
         logger.warning(
             "Could not find decoder final conv; using latent_channels as hidden_ch."
         )
-        return self.to_latent.out_channels
+        return self.to_latent.linear.out_features
 
     def _freeze_body(self) -> None:
         for p in self.decoder_body.parameters():
@@ -595,8 +606,6 @@ class CosmosPredict3DWrapper(nn.Module):
                 {n // 4, n // 2, 3 * n // 4, n - 1}
             )
 
-        self.input_adapter = _InputAdapter3D(in_channels)
-
         self._backbone_loaded = False
         self._build_backbone(cache_dir, hf_token, checkpoint_variant)
 
@@ -632,6 +641,8 @@ class CosmosPredict3DWrapper(nn.Module):
         if freeze_backbone:
             self.freeze_encoder()
 
+        self._make_params_contiguous()
+
         logger.info(
             "CosmosPredict3DWrapper initialised: variant=%s, "
             "feature_layers=%s, backbone_loaded=%s, frozen=%s, "
@@ -641,6 +652,12 @@ class CosmosPredict3DWrapper(nn.Module):
             f"{self.get_num_parameters(trainable_only=False):,}",
             f"{self.get_num_parameters(trainable_only=True):,}",
         )
+
+    def _make_params_contiguous(self) -> None:
+        """Ensure all parameter data tensors are contiguous for DDP."""
+        for p in self.parameters():
+            if not p.data.is_contiguous():
+                p.data = p.data.contiguous()
 
     # ------------------------------------------------------------------
     # Backbone construction
@@ -1011,7 +1028,7 @@ class CosmosPredict3DWrapper(nn.Module):
         original_dtype = x.dtype
         D_in, H_in, W_in = x.shape[-3], x.shape[-2], x.shape[-1]
 
-        rgb = self.input_adapter(x)
+        rgb = _adapt_to_rgb(x)
 
         s = self.cfg.spatial_compression
         t = self.cfg.temporal_compression

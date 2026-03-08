@@ -37,8 +37,8 @@ def compute_per_point_dice(
         Mean Dice in [0, 1].
     """
     from einops import rearrange as _r
-    pred_flat = _r(pred.detach().cpu().long(), "... -> (...)")
-    tgt_flat = _r(target.detach().cpu().long(), "... -> (...)")
+    pred_flat = _r(pred.cpu().long(), "... -> (...)")
+    tgt_flat = _r(target.cpu().long(), "... -> (...)")
 
     valid = tgt_flat != ignore_index
     pred_flat = pred_flat[valid]
@@ -97,8 +97,8 @@ def compute_per_point_iou(
         Mean IoU in [0, 1].
     """
     from einops import rearrange as _r
-    pred_flat = _r(pred.detach().cpu().long(), "... -> (...)")
-    tgt_flat = _r(target.detach().cpu().long(), "... -> (...)")
+    pred_flat = _r(pred.cpu().long(), "... -> (...)")
+    tgt_flat = _r(target.cpu().long(), "... -> (...)")
 
     valid = tgt_flat != ignore_index
     pred_flat = pred_flat[valid]

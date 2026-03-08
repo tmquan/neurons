@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import pytorch_lightning as pl
-from einops import rearrange
+from einops import rearrange, reduce
 
 from neurons.models.vista3d_model import Vista3DWrapper as _Model
 from neurons.losses.vista3d_losses import Vista3DLoss as _Loss
@@ -305,7 +305,7 @@ class Vista3DModule(pl.LightningModule):
         sem_pred = predictions["semantic"].argmax(dim=1)
         sem_gt = targets["semantic_labels"]
         n_cls = predictions["semantic"].shape[1]
-        sem_acc = (sem_pred == sem_gt).float().mean()
+        sem_acc = reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean")
         sem_iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls)
         sem_dice = compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls)
         self.log(f"{prefix}/sem_acc", sem_acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)

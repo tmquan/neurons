@@ -685,13 +685,13 @@ class SkeletonEmbeddingLoss(nn.Module):
         mask_flat = rearrange(gt_labels, "b ... -> b (...)")
 
         pull_diff = emb_flat - skel_flat
-        l_pull = (pull_diff ** 2).sum(dim=1)
-        l_pull = (l_pull * fg_flat.float()).sum() / N_fg
+        l_pull = reduce(pull_diff ** 2, "b s n -> b n", "sum")
+        l_pull = reduce(l_pull * fg_flat.float(), "b n -> ", "sum") / N_fg
 
         norm_off = F.normalize(off_flat, p=2, dim=1, eps=1e-5)
         norm_grad = F.normalize(grad_flat, p=2, dim=1, eps=1e-5)
-        cos_sim = (norm_off * norm_grad).sum(dim=1)
-        l_penalty = ((1.0 - cos_sim) * fg_flat.float()).sum() / N_fg
+        cos_sim = reduce(norm_off * norm_grad, "b s n -> b n", "sum")
+        l_penalty = reduce((1.0 - cos_sim) * fg_flat.float(), "b n -> ", "sum") / N_fg
 
         # Build normalised grid for F.grid_sample (works for both 2D and 3D).
         # grid_sample expects coords in (x, y[, z]) order, each in [-1, 1].
@@ -708,7 +708,7 @@ class SkeletonEmbeddingLoss(nn.Module):
             mode="bilinear", padding_mode="zeros", align_corners=True,
         )
         sampled_flat = rearrange(sampled_dt, "b 1 ... -> b (...)")
-        l_benefit = ((1.0 - sampled_flat) * fg_flat.float()).sum() / N_fg
+        l_benefit = reduce((1.0 - sampled_flat) * fg_flat.float(), "b n -> ", "sum") / N_fg
 
         l_push = torch.tensor(0.0, device=device, dtype=torch.float32)
         for b in range(B):
