@@ -199,7 +199,6 @@ class SoftMeanShift(nn.Module):
         self, labels: torch.Tensor, K: int,
     ) -> torch.Tensor:
         """Set clusters with fewer than ``min_cluster_size`` pixels to 0."""
-        """Remove clusters smaller than min_cluster_size."""
         labels = labels.clone()
         for uid in range(1, K + 1):
             mask = labels == uid
@@ -263,7 +262,7 @@ class HoughVoting(nn.Module):
         device = offsets.device
 
         coords = self._make_coords(spatial_shape, device)
-        coords = repeat(rearrange(coords, "s ... -> 1 s ..."), "1 s ... -> b s ...", b=B)
+        coords = coords.unsqueeze(0).expand(B, -1, *spatial_shape)
         votes = coords + offsets
 
         if foreground_mask is None:
@@ -288,9 +287,13 @@ class HoughVoting(nn.Module):
             acc_shape = tuple(bin_max.tolist())
             accumulator = torch.zeros(acc_shape, device=device, dtype=torch.float32)
 
-            # Accumulate votes — works for both 2D and 3D via tuple indexing
-            idx = tuple(bins_shifted[s] for s in range(S))
-            accumulator[idx] += 1.0
+            flat_idx = torch.zeros(bins_shifted.shape[1], device=device, dtype=torch.long)
+            stride = 1
+            for dim_i in range(S - 1, -1, -1):
+                flat_idx = flat_idx + bins_shifted[dim_i] * stride
+                stride *= acc_shape[dim_i]
+            ones = torch.ones(flat_idx.shape[0], device=device, dtype=torch.float32)
+            accumulator.view(-1).scatter_add_(0, flat_idx, ones)
 
             # Optional box-filter smoothing (unified 2D / 3D)
             if self.sigma > 0:

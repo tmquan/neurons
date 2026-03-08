@@ -204,6 +204,37 @@ class InstanceLoss(nn.Module):
     # Core discriminative loss
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _scatter_weighted_mean(emb, lbl, wgt, K):
+        """Compute weighted centroid per instance using scatter.
+
+        Args:
+            emb: [E, N] embeddings for one batch element.
+            lbl: [N] zero-based instance indices (0..K-1), -1 for background.
+            wgt: [N] per-pixel weights.
+            K: number of instances.
+
+        Returns:
+            centers: [K, E] weighted centroids.
+        """
+        E = emb.shape[0]
+        fg = lbl >= 0
+        emb_fg = emb[:, fg]                          # [E, M]
+        lbl_fg = lbl[fg]                              # [M]
+        wgt_fg = wgt[fg]                              # [M]
+
+        weighted_emb = emb_fg * wgt_fg.unsqueeze(0)   # [E, M]
+
+        w_sum = emb.new_zeros(K)
+        w_sum.scatter_add_(0, lbl_fg, wgt_fg)
+
+        c_sum = emb.new_zeros(E, K)
+        lbl_expand = lbl_fg.unsqueeze(0).expand(E, -1)
+        c_sum.scatter_add_(1, lbl_expand, weighted_emb)
+
+        centers = c_sum / (w_sum.unsqueeze(0) + 1e-8)  # [E, K]
+        return centers.T                                # [K, E]
+
     def _loss_single(self, embed, label, w_edge, w_bone) -> Dict[str, torch.Tensor]:
         """Pull/push/norm over all instances in the batch.
 
@@ -224,30 +255,43 @@ class InstanceLoss(nn.Module):
         n_valid = 0
 
         for b in range(embed.shape[0]):
-            ids = torch.unique(lbl_flat[b])
-            ids = ids[ids > 0]
-            if len(ids) == 0:
-                continue
-            n_valid += 1
-            K = len(ids)
+            lbl_b = lbl_flat[b]                        # [N]
+            fg = lbl_b > 0
 
-            centers = []
-            b_pull = torch.tensor(0.0, device=dev)
-            for uid in ids:
-                mask = lbl_flat[b] == uid
-                w = wgt_flat[b, mask]
-                e = emb_flat[b, :, mask]
-                c = (e * rearrange(w, "m -> 1 m")).sum(1) / (w.sum() + 1e-8)
-                centers.append(c)
-                dist = torch.norm(e - rearrange(c, "e -> e 1"), dim=0)
-                b_pull = b_pull + (F.relu(dist - self.delta_v) ** 2 * w).mean()
-            loss_pull = loss_pull + b_pull / K
+            if not fg.any():
+                continue
+
+            fg_labels = lbl_b[fg]
+            unique_ids, inverse = torch.unique(fg_labels, return_inverse=True)
+            K = unique_ids.shape[0]
+            n_valid += 1
+
+            remap = torch.full_like(lbl_b, -1, dtype=torch.long)
+            remap[fg] = inverse
+
+            emb_b = emb_flat[b]                        # [E, N]
+            wgt_b = wgt_flat[b]                        # [N]
+
+            centers = self._scatter_weighted_mean(emb_b, remap, wgt_b, K)  # [K, E]
+
+            center_per_pixel = centers[inverse]        # [M, E] where M = fg.sum()
+            emb_fg = emb_b[:, fg].T                    # [M, E]
+            wgt_fg = wgt_b[fg]                         # [M]
+
+            dist = torch.norm(emb_fg - center_per_pixel, dim=1)  # [M]
+            pull_per_pixel = F.relu(dist - self.delta_v) ** 2 * wgt_fg
+
+            pull_sum = emb_b.new_zeros(K)
+            pull_sum.scatter_add_(0, inverse, pull_per_pixel)
+            pull_count = emb_b.new_zeros(K)
+            pull_count.scatter_add_(0, inverse, torch.ones_like(pull_per_pixel))
+            b_pull = (pull_sum / pull_count.clamp(min=1)).mean()
+            loss_pull = loss_pull + b_pull
 
             if K > 1:
-                c_stack = torch.stack(centers)
                 pw = torch.norm(
-                    rearrange(c_stack, "i e -> i 1 e") -
-                    rearrange(c_stack, "j e -> 1 j e"),
+                    rearrange(centers, "i e -> i 1 e") -
+                    rearrange(centers, "j e -> 1 j e"),
                     dim=2,
                 )
                 triu = torch.triu_indices(K, K, offset=1, device=dev)
@@ -256,7 +300,7 @@ class InstanceLoss(nn.Module):
                     "n -> ", "mean",
                 )
 
-            loss_norm = loss_norm + torch.stack([c.norm() for c in centers]).mean()
+            loss_norm = loss_norm + centers.norm(dim=1).mean()
 
         n = max(n_valid, 1)
         pull = loss_pull / n

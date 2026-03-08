@@ -7,12 +7,15 @@ CREMI (Circuit Reconstruction from Electron Microscopy Images) Challenge:
 - Annotations: neurons, synaptic clefts, (optionally mitochondria)
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
 from neurons.datasets.base import CircuitDataset
+
+logger = logging.getLogger(__name__)
 
 
 class CREMI3DDataset(CircuitDataset):
@@ -60,8 +63,6 @@ class CREMI3DDataset(CircuitDataset):
         self.include_clefts = include_clefts
         self.include_mito = include_mito
         self._num_samples = num_samples
-        self._loaded_volumes: List[str] = []
-
         super().__init__(
             root_dir=str(root_dir),
             volumes=volumes,
@@ -197,7 +198,8 @@ class CREMI3DDataset(CircuitDataset):
 
                 return image.astype(np.float32), label
 
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to load volume: %s", exc)
             return None, None
 
     def _load_volume_separate_files(

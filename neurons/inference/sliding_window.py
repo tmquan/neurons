@@ -187,10 +187,9 @@ def sliding_window_inference(
                 if is_dual and ins_emb is not None:
                     if aggregation == "max":
                         mask = sem_probs[idx].max(dim=0).values > sem_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw].max(dim=0).values
-                        for e in range(emb_dim):
-                            emb_output[e, ds:ds + pd, hs:hs + ph, ws:ws + pw] = torch.where(
-                                mask, ins_emb[idx, e], emb_output[e, ds:ds + pd, hs:hs + ph, ws:ws + pw],
-                            )
+                        emb_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw] = torch.where(
+                            mask.unsqueeze(0), ins_emb[idx], emb_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw],
+                        )
                     else:
                         emb_output[sl] += ins_emb[idx] * patch_w
                         emb_weight[(slice(None),) + sl[1:]] += patch_w

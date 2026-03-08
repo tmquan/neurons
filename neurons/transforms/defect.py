@@ -97,7 +97,7 @@ class Defectd(MapTransform, Randomizable):
                 scale = float(self.R.uniform(0.8, 1.2))
                 arr = arr * scale + shift
 
-            arr = np.clip(arr, 0, 1)
+            np.clip(arr, 0, 1, out=arr)
 
             if is_tensor:
                 arr = torch.from_numpy(arr).to(device)

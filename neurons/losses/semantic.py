@@ -57,7 +57,7 @@ class SemanticLoss(nn.Module):
         self.ignore_index = ignore_index
         self.active_classes = active_classes
 
-        cw = torch.tensor(class_weights, dtype=torch.float32) if class_weights else None
+        cw = torch.tensor(class_weights, dtype=torch.float32) if class_weights is not None else None
         if mode == "softmax":
             self.ce_loss = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index)
         else:
@@ -138,14 +138,9 @@ class SemanticLoss(nn.Module):
         n_valid = valid_mask.sum().clamp(min=1.0) * per_pixel.shape[1]
         return per_pixel.sum() / n_valid
 
-    def _iou_loss(self, logits, class_labels, eps=1e-5):
-        """1 - mean(IoU) over present classes, ignoring invalid pixels.
-
-        Only classes with non-zero target mass in the batch contribute
-        to the average, avoiding gradient dilution from absent classes.
-        """
-        logits, class_labels = self._slice_active(logits, class_labels)
-        probs, target, _ = self._to_probs_and_target(logits, class_labels)
+    @staticmethod
+    def _iou_from_probs(probs, target, eps=1e-4):
+        """1 - mean(IoU) over present classes from pre-computed probs/target."""
         inter = reduce(probs * target, "b c ... -> b c", "sum")
         union = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum") - inter
         iou_per_class = (inter + eps) / (union + eps)              # [B, C]
@@ -153,20 +148,26 @@ class SemanticLoss(nn.Module):
         n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
         return 1.0 - reduce(iou_per_class * present, "b c -> ", "sum") / n_present
 
-    def _dice_loss(self, logits, class_labels, eps=1e-5):
-        """1 - mean(Dice) over present classes, ignoring invalid pixels.
-
-        Only classes with non-zero target mass in the batch contribute
-        to the average, avoiding gradient dilution from absent classes.
-        """
-        logits, class_labels = self._slice_active(logits, class_labels)
-        probs, target, _ = self._to_probs_and_target(logits, class_labels)
+    @staticmethod
+    def _dice_from_probs(probs, target, eps=1e-4):
+        """1 - mean(Dice) over present classes from pre-computed probs/target."""
         inter = reduce(probs * target, "b c ... -> b c", "sum")
         card = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum")
         dice_per_class = (2.0 * inter + eps) / (card + eps)       # [B, C]
         present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
         n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
         return 1.0 - reduce(dice_per_class * present, "b c -> ", "sum") / n_present
+
+    # Keep old method signatures alive for any external callers
+    def _iou_loss(self, logits, class_labels, eps=1e-4):
+        logits, class_labels = self._slice_active(logits, class_labels)
+        probs, target, _ = self._to_probs_and_target(logits, class_labels)
+        return self._iou_from_probs(probs, target, eps)
+
+    def _dice_loss(self, logits, class_labels, eps=1e-4):
+        logits, class_labels = self._slice_active(logits, class_labels)
+        probs, target, _ = self._to_probs_and_target(logits, class_labels)
+        return self._dice_from_probs(probs, target, eps)
 
     # ------------------------------------------------------------------
     # Forward
@@ -175,7 +176,18 @@ class SemanticLoss(nn.Module):
     def forward(self, logits, class_labels) -> Dict[str, torch.Tensor]:
         dev = logits.device
         ce = self._compute_ce(logits, class_labels)
-        iou = self._iou_loss(logits, class_labels) if self.weight_iou > 0 else torch.tensor(0.0, device=dev)
-        dice = self._dice_loss(logits, class_labels) if self.weight_dice > 0 else torch.tensor(0.0, device=dev)
+
+        need_iou = self.weight_iou > 0
+        need_dice = self.weight_dice > 0
+
+        if need_iou or need_dice:
+            sliced_logits, sliced_labels = self._slice_active(logits, class_labels)
+            probs, target, _ = self._to_probs_and_target(sliced_logits, sliced_labels)
+            iou = self._iou_from_probs(probs, target) if need_iou else torch.tensor(0.0, device=dev)
+            dice = self._dice_from_probs(probs, target) if need_dice else torch.tensor(0.0, device=dev)
+        else:
+            iou = torch.tensor(0.0, device=dev)
+            dice = torch.tensor(0.0, device=dev)
+
         loss = self.weight_ce * ce + self.weight_iou * iou + self.weight_dice * dice
         return {"loss": loss, "ce": ce, "iou": iou, "dice": dice}

@@ -6,14 +6,20 @@ Includes:
 - Vista2DModule: 2D Vista with semantic + instance + geometry heads
 - CosmosPredict3DModule: 3D Cosmos-Predict2.5 DiT volumetric segmentation module
 - CosmosTransfer3DModule: 3D Cosmos-Transfer2.5 DiT volumetric segmentation module
+- BaseVistaModule: Shared base for Vista 2D / 3D modules
+- BaseCosmosModule: Shared base for Cosmos Predict / Transfer 3D modules
 """
 
+from neurons.modules.vista import BaseVistaModule
+from neurons.modules.cosmos import BaseCosmosModule
 from neurons.modules.vista3d_module import Vista3DModule
 from neurons.modules.vista2d_module import Vista2DModule
 from neurons.modules.cosmospredict3d_module import CosmosPredict3DModule
 from neurons.modules.cosmostransfer3d_module import CosmosTransfer3DModule
 
 __all__ = [
+    "BaseVistaModule",
+    "BaseCosmosModule",
     "Vista3DModule",
     "Vista2DModule",
     "CosmosPredict3DModule",

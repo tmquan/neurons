@@ -44,18 +44,20 @@ def compute_per_point_dice(
     pred_flat = pred_flat[valid]
     tgt_flat = tgt_flat[valid]
 
-    dice_sum, n = 0.0, 0
-    for c in range(num_classes):
-        p = pred_flat == c
-        t = tgt_flat == c
-        if t.sum() == 0 and p.sum() == 0:
-            continue
-        intersection = (p & t).sum().float()
-        dice = (2.0 * intersection + eps) / (p.sum().float() + t.sum().float() + eps)
-        dice_sum += dice.item()
-        n += 1
+    classes = torch.arange(num_classes, device=pred_flat.device)
+    pred_onehot = pred_flat.unsqueeze(0) == classes.unsqueeze(1)
+    tgt_onehot = tgt_flat.unsqueeze(0) == classes.unsqueeze(1)
 
-    return dice_sum / n if n > 0 else 0.0
+    intersection = (pred_onehot & tgt_onehot).sum(dim=1).float()
+    pred_sum = pred_onehot.sum(dim=1).float()
+    tgt_sum = tgt_onehot.sum(dim=1).float()
+
+    present = (pred_sum > 0) | (tgt_sum > 0)
+    if not present.any():
+        return 0.0
+
+    dice = (2.0 * intersection + eps) / (pred_sum + tgt_sum + eps)
+    return dice[present].mean().item()
 
 
 def compute_per_batch_dice(
@@ -104,19 +106,19 @@ def compute_per_point_iou(
     pred_flat = pred_flat[valid]
     tgt_flat = tgt_flat[valid]
 
-    iou_sum, n = 0.0, 0
-    for c in range(num_classes):
-        p = pred_flat == c
-        t = tgt_flat == c
-        if t.sum() == 0 and p.sum() == 0:
-            continue
-        intersection = (p & t).sum().float()
-        union = (p | t).sum().float()
-        iou = (intersection + eps) / (union + eps)
-        iou_sum += iou.item()
-        n += 1
+    classes = torch.arange(num_classes, device=pred_flat.device)
+    pred_onehot = pred_flat.unsqueeze(0) == classes.unsqueeze(1)
+    tgt_onehot = tgt_flat.unsqueeze(0) == classes.unsqueeze(1)
 
-    return iou_sum / n if n > 0 else 0.0
+    intersection = (pred_onehot & tgt_onehot).sum(dim=1).float()
+    union = (pred_onehot | tgt_onehot).sum(dim=1).float()
+
+    present = (pred_onehot.sum(dim=1) > 0) | (tgt_onehot.sum(dim=1) > 0)
+    if not present.any():
+        return 0.0
+
+    iou = (intersection + eps) / (union + eps)
+    return iou[present].mean().item()
 
 
 def compute_per_batch_iou(

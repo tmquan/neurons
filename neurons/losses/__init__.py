@@ -20,6 +20,7 @@ Legacy embedding losses (``losses.discriminative``):
 from neurons.losses.semantic import SemanticLoss
 from neurons.losses.instance import InstanceLoss
 from neurons.losses.geometry import GeometryLoss
+from neurons.losses.loss import BaseCombinedLoss, BaseCombinedLossWithConsistency
 from neurons.losses.vista3d_losses import Vista3DLoss
 from neurons.losses.vista2d_losses import Vista2DLoss
 from neurons.losses.cosmospredict3d_losses import CosmosPredict3DLoss
@@ -36,6 +37,9 @@ __all__ = [
     "SemanticLoss",
     "InstanceLoss",
     "GeometryLoss",
+    # Base combined losses
+    "BaseCombinedLoss",
+    "BaseCombinedLossWithConsistency",
     # Combined losses
     "Vista3DLoss",
     "Vista2DLoss",

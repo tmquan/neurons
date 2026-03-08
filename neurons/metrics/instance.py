@@ -51,6 +51,7 @@ def _contingency_table(
     n = len(pred)
     cont = coo_matrix(
         (np.ones(n, dtype=np.float64), (true.astype(np.int64), pred.astype(np.int64))),
+        shape=(true.max() + 1, pred.max() + 1),
     ).toarray()
     true_counts = cont.sum(axis=1)
     pred_counts = cont.sum(axis=0)
@@ -208,29 +209,15 @@ def compute_per_point_voi(
     cont, pred_counts, true_counts = _contingency_table(pred_flat, true_flat)
     n = float(len(pred_flat))
 
+    nz = cont > 0
+
     # H(true|pred) -- split error
-    h_true_given_pred = 0.0
-    for j in range(cont.shape[1]):
-        pj = pred_counts[j]
-        if pj == 0:
-            continue
-        for i in range(cont.shape[0]):
-            nij = cont[i, j]
-            if nij == 0:
-                continue
-            h_true_given_pred -= (nij / n) * np.log2(nij / pj)
+    pred_counts_broadcast = np.broadcast_to(pred_counts[np.newaxis, :], cont.shape)
+    h_true_given_pred = -np.sum((cont[nz] / n) * np.log2(cont[nz] / pred_counts_broadcast[nz]))
 
     # H(pred|true) -- merge error
-    h_pred_given_true = 0.0
-    for i in range(cont.shape[0]):
-        pi = true_counts[i]
-        if pi == 0:
-            continue
-        for j in range(cont.shape[1]):
-            nij = cont[i, j]
-            if nij == 0:
-                continue
-            h_pred_given_true -= (nij / n) * np.log2(nij / pi)
+    true_counts_broadcast = np.broadcast_to(true_counts[:, np.newaxis], cont.shape)
+    h_pred_given_true = -np.sum((cont[nz] / n) * np.log2(cont[nz] / true_counts_broadcast[nz]))
 
     return VOIResult(
         split=float(h_true_given_pred),

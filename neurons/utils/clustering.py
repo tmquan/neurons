@@ -24,6 +24,8 @@ def _cluster_with_sklearn(
     try:
         from sklearn.cluster import MeanShift
     except ImportError:
+        import warnings
+        warnings.warn("sklearn not available, returning single cluster")
         return np.ones(len(emb_fg), dtype=np.int64)
 
     try:
@@ -41,9 +43,10 @@ def _cluster_with_sklearn(
     remaining = remaining[remaining > 0]
     label_map = {int(old): new + 1 for new, old in enumerate(remaining)}
     label_map[0] = 0
-    labels_fg = np.array(
-        [label_map.get(int(l), 0) for l in labels_fg], dtype=np.int64,
-    )
+    remap = np.zeros(int(labels_fg.max()) + 1, dtype=np.int64)
+    for old, new in label_map.items():
+        remap[int(old)] = new
+    labels_fg = remap[labels_fg]
     return labels_fg
 
 

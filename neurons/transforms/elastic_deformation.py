@@ -7,6 +7,8 @@ import torch
 from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
+from neurons.utils.gpu_ndimage import gaussian_filter
+
 
 class ElasticDeformationd(MapTransform, Randomizable):
     """Apply elastic deformation to simulate tissue deformation artifacts.
@@ -49,22 +51,21 @@ class ElasticDeformationd(MapTransform, Randomizable):
         ref_key = self.keys[0]
         shape = d[ref_key].shape[-2:]  # H, W
 
-        from neurons.utils.gpu_ndimage import gaussian_filter
-
         dx = gaussian_filter(
-            (self.R.random(shape) * 2 - 1).astype(np.float64),
+            self.R.random(shape).astype(np.float32) * 2 - 1,
             self.sigma,
         ) * self.alpha
         dy = gaussian_filter(
-            (self.R.random(shape) * 2 - 1).astype(np.float64),
+            self.R.random(shape).astype(np.float32) * 2 - 1,
             self.sigma,
         ) * self.alpha
 
         y, x = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]), indexing="ij")
-        indices = (
-            np.clip(y + dy, 0, shape[0] - 1).astype(np.int32),
-            np.clip(x + dx, 0, shape[1] - 1).astype(np.int32),
-        )
+        map_y = y + dy
+        map_x = x + dx
+        np.clip(map_y, 0, shape[0] - 1, out=map_y)
+        np.clip(map_x, 0, shape[1] - 1, out=map_x)
+        indices = (map_y.astype(np.int32), map_x.astype(np.int32))
 
         for key in self.key_iterator(d):
             arr = d[key]

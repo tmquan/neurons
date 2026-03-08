@@ -22,17 +22,8 @@ from einops import rearrange
 from monai.config import KeysCollection
 from monai.transforms import MapTransform
 
+from neurons.transforms._utils import _cached_coordinate_grid, _to_numpy_labels
 from neurons.utils.gpu_ndimage import center_of_mass as _center_of_mass
-
-
-def _to_numpy_labels(labels) -> np.ndarray:
-    """Convert labels to a contiguous int64 numpy array.
-
-    Accepts ``torch.Tensor``, MONAI ``MetaTensor``, or ``np.ndarray``.
-    """
-    if isinstance(labels, np.ndarray):
-        return np.ascontiguousarray(labels).astype(np.int64, copy=False)
-    return labels.detach().cpu().numpy().astype(np.int64, copy=False)
 
 
 def compute_covariance_field(labels, normalized: bool = True) -> torch.Tensor:
@@ -72,7 +63,7 @@ def compute_covariance_field(labels, normalized: bool = True) -> torch.Tensor:
     if not isinstance(centers, list):
         centers = [centers]
 
-    coords = np.indices(spatial_shape, dtype=np.float32)
+    coords = _cached_coordinate_grid(spatial_shape)
 
     for uid, center in zip(unique_ids, centers):
         mask = labels_np == uid

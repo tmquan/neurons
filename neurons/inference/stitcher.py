@@ -147,11 +147,14 @@ class EmbeddingStitcher:
             split = merged
 
         if self.min_instance_size > 0:
-            for uid in torch.unique(split):
-                if uid == 0:
-                    continue
-                if (split == uid).sum() < self.min_instance_size:
-                    split[split == uid] = 0
+            counts = torch.bincount(split.view(-1).long())
+            small_ids = torch.where(
+                (counts < self.min_instance_size)
+                & (torch.arange(len(counts), device=device) > 0)
+            )[0]
+            if small_ids.numel() > 0:
+                mask = torch.isin(split.long(), small_ids)
+                split[mask] = 0
 
         return relabel_sequential(split)
 

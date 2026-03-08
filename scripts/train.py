@@ -381,7 +381,7 @@ def main(cfg: DictConfig) -> None:
         strategy = DDPStrategy(
             find_unused_parameters=has_unused_params,
             static_graph=not has_unused_params,
-            gradient_as_bucket_view=False,
+            gradient_as_bucket_view=True,
         )
     elif strategy_name == "fsdp":
         strategy = FSDPStrategy(

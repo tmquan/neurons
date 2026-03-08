@@ -8,8 +8,10 @@ from typing import Dict, List, Optional, Tuple, Type, Union
 import torch
 import pytorch_lightning as pl
 from monai.transforms import (
+    CenterSpatialCropd,
     Compose,
     EnsureChannelFirstd,
+    EnsureTyped,
     RandAdjustContrastd,
     RandFlipd,
     RandGaussianNoised,
@@ -18,7 +20,6 @@ from monai.transforms import (
     Resized,
     ScaleIntensityd,
     SpatialPadd,
-    ToTensord,
 )
 
 from neurons.datasets.base import CircuitDataset
@@ -39,7 +40,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
 
         EnsureChannelFirst → [Pad + Crop + instance_transforms]
         → spatial augmentations → geometry_transforms
-        → semantic_transforms → intensity augmentations → ToTensor
+        → semantic_transforms → intensity augmentations → EnsureType
 
     Args:
         data_root: Path to the data directory.
@@ -143,7 +144,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
     # ------------------------------------------------------------------
 
     def _output_keys(self) -> list:
-        """All keys that must pass through ``ToTensord``."""
+        """All keys that must pass through ``EnsureTyped``."""
         return ["image", "label", "label_direction", "label_covariance"]
 
     def get_train_transforms(self) -> Compose:
@@ -174,7 +175,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             *self._semantic_transforms(sd),
             RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
             RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
-            ToTensord(keys=self._output_keys()),
+            EnsureTyped(keys=self._output_keys()),
         ])
 
         return Compose(transforms)
@@ -190,7 +191,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         if self.patch_size is not None:
             transforms.extend([
                 SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
-                RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
+                CenterSpatialCropd(keys=io_keys, roi_size=self.patch_size),
                 *self._instance_transforms(sd),
             ])
         elif self.image_size is not None:
@@ -201,7 +202,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         transforms.extend([
             *self._geometry_transforms(sd),
             *self._semantic_transforms(sd),
-            ToTensord(keys=self._output_keys()),
+            EnsureTyped(keys=self._output_keys()),
         ])
         return Compose(transforms)
 
@@ -246,6 +247,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
             prefetch_factor=2 if self.num_workers > 0 else None,
+            multiprocessing_context="forkserver" if self.num_workers > 0 else None,
             drop_last=True,
         )
 
@@ -258,6 +260,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
             prefetch_factor=2 if self.num_workers > 0 else None,
+            multiprocessing_context="forkserver" if self.num_workers > 0 else None,
         )
 
     def test_dataloader(self) -> torch.utils.data.DataLoader:
@@ -267,6 +270,9 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
+            prefetch_factor=2 if self.num_workers > 0 else None,
+            multiprocessing_context="forkserver" if self.num_workers > 0 else None,
         )
 
     def predict_dataloader(self) -> torch.utils.data.DataLoader:

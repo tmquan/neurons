@@ -67,11 +67,11 @@ class TIFFPreprocessor(BasePreprocessor):
 
         try:
             if self.memmap:
-                with tifffile.TiffFile(str(file_path)) as tif:
-                    if key is not None:
+                if key is not None:
+                    with tifffile.TiffFile(str(file_path)) as tif:
                         return tif.pages[key].asarray()
-                    else:
-                        return tif.asarray(series=series)
+                else:
+                    return tifffile.memmap(str(file_path))
             else:
                 if key is not None:
                     return tifffile.imread(str(file_path), key=key, **kwargs)

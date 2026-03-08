@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat, reduce
+from einops import rearrange, repeat
 
 from neurons.models.point_prompt_encoder import PointPromptEncoder
 
@@ -120,7 +120,11 @@ def _download_from_hf(
     cache_dir: Optional[str] = None,
     token: Optional[str] = None,
 ) -> Path:
-    """Download model snapshot from HuggingFace Hub."""
+    """Download model snapshot from HuggingFace Hub.
+
+    In DDP training, rank 0 downloads first while other ranks wait at a
+    barrier, then all ranks resolve the cached path without re-downloading.
+    """
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
@@ -129,26 +133,49 @@ def _download_from_hf(
             "download.  Install with: pip install huggingface_hub"
         )
 
+    import torch.distributed as dist
+
     cache_dir = cache_dir or str(
         Path.home() / ".cache" / "neurons" / "cosmos_predict25"
     )
-    try:
+    is_distributed = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if is_distributed else 0
+
+    if rank == 0:
+        try:
+            local_path = snapshot_download(
+                repo_id=repo_id,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                ignore_patterns=["*.md", "*.txt", "examples/*", "docs/*"],
+            )
+            logger.info("Downloaded %s (rev=%s) -> %s", repo_id, revision, local_path)
+        except Exception as exc:
+            logger.warning(
+                "HuggingFace download failed for %s (rev=%s): %s.  "
+                "Falling back to random initialisation.",
+                repo_id, revision, exc,
+            )
+            if is_distributed:
+                dist.barrier()
+            raise
+
+    if is_distributed:
+        dist.barrier()
+
+    if rank != 0:
         local_path = snapshot_download(
             repo_id=repo_id,
             revision=revision,
             cache_dir=cache_dir,
             token=token,
+            local_files_only=True,
             ignore_patterns=["*.md", "*.txt", "examples/*", "docs/*"],
         )
         logger.info("Downloaded %s (rev=%s) -> %s", repo_id, revision, local_path)
-        return Path(local_path)
-    except Exception as exc:
-        logger.warning(
-            "HuggingFace download failed for %s (rev=%s): %s.  "
-            "Falling back to random initialisation.",
-            repo_id, revision, exc,
-        )
-        raise
+
+    return Path(local_path)
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +637,16 @@ class CosmosPredict3DWrapper(nn.Module):
                 {n // 4, n // 2, 3 * n // 4, n - 1}
             )
 
+        s = self.cfg.spatial_compression
+        t = self.cfg.temporal_compression
+        lc = self.cfg.latent_channels
+        self._fallback_down = nn.Sequential(
+            nn.Conv3d(3, lc * 2, kernel_size=(t, s, s), stride=(t, s, s)),
+            _NORM(lc * 2),
+            nn.GELU(),
+            nn.Conv3d(lc * 2, lc, kernel_size=1),
+        )
+
         self._backbone_loaded = False
         self._build_backbone(cache_dir, hf_token, checkpoint_variant)
 
@@ -894,8 +931,8 @@ class CosmosPredict3DWrapper(nn.Module):
     def _encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
         """Encode pixel-space volume ``[B, 3, D, H, W]`` to latent grid."""
         if self.vae_encoder is not None:
-            with torch.no_grad():
-                # TODO: VAE encoder API may return .latent_dist or tensor.
+            ctx = torch.no_grad() if self._freeze_vae_encoder else torch.enable_grad()
+            with ctx:
                 enc = self.vae_encoder(x)
                 if hasattr(enc, "latent_dist"):
                     latent = enc.latent_dist.mode()
@@ -908,17 +945,7 @@ class CosmosPredict3DWrapper(nn.Module):
         return self._conv_downsample(x)
 
     def _conv_downsample(self, x: torch.Tensor) -> torch.Tensor:
-        if not hasattr(self, "_fallback_down"):
-            s = self.cfg.spatial_compression
-            t = self.cfg.temporal_compression
-            lc = self.cfg.latent_channels
-            self._fallback_down = nn.Sequential(
-                nn.Conv3d(3, lc * 2, kernel_size=(t, s, s), stride=(t, s, s)),
-                _NORM(lc * 2),
-                nn.GELU(),
-                nn.Conv3d(lc * 2, lc, kernel_size=1),
-            ).to(x.device, x.dtype)
-        return self._fallback_down(x)
+        return self._fallback_down.to(device=x.device, dtype=x.dtype)(x)
 
     # ------------------------------------------------------------------
     # Feature extraction
@@ -1013,12 +1040,12 @@ class CosmosPredict3DWrapper(nn.Module):
         def _make_hook(_idx: int):
             def hook_fn(_module: nn.Module, _input: Any, output: Any) -> None:
                 out = output[0] if isinstance(output, tuple) else output
+                if self._freeze_dit_backbone:
+                    out = out.detach()
                 if out.dim() == 3:
-                    collected.append(out.detach())
+                    collected.append(out)
                 else:
-                    collected.append(
-                        rearrange(out.detach(), "b ... d -> b (...) d")
-                    )
+                    collected.append(rearrange(out, "b ... d -> b (...) d"))
             return hook_fn
 
         for idx in self._feature_layers:
@@ -1029,7 +1056,8 @@ class CosmosPredict3DWrapper(nn.Module):
                 hooks.append(h)
 
         try:
-            with torch.no_grad():
+            ctx = torch.no_grad() if self._freeze_dit_backbone else torch.enable_grad()
+            with ctx:
                 B = latent.shape[0]
                 dit_cfg = getattr(self.dit, "config", None)
                 text_dim = getattr(dit_cfg, "crossattn_proj_in_channels", 1024)

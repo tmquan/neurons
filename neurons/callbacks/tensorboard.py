@@ -87,8 +87,9 @@ def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
 
     try:
         U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
-        proj = Vh[:, :n_components]                                # [B, 3, N]
-    except torch._C._LinAlgError:
+        proj = U[:, :, :n_components] * S[:, None, :n_components]  # [B, N, 3]
+        proj = rearrange(proj, "b n c -> b c n")                   # [B, 3, N]
+    except (torch._C._LinAlgError, RuntimeError):
         proj = centered[:, :n_components]                          # [B, 3, N]
 
     proj = rearrange(proj, "b c (h w) -> b c h w", h=H, w=W)
@@ -421,7 +422,7 @@ def _log_predictions(
     ch_dir = S
     ch_cov = S * S
 
-    img_gray = repeat(_normalise(images), "b 1 h w -> b 3 h w")
+    img_gray = _normalise(images).expand(-1, 3, -1, -1).contiguous()
     lbl_rgb = _label_to_rgb(labels.long())
     sem_ids = sem.argmax(dim=1)
     sem_rgb = _label_to_rgb(sem_ids)

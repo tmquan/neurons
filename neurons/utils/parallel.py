@@ -1,6 +1,6 @@
 """Persistent process pool for parallelizing per-instance CPU-bound operations.
 
-Uses ``torch.multiprocessing`` with ``fork`` to share memory.  Worker
+Uses ``torch.multiprocessing`` with ``forkserver`` to share memory.  Worker
 functions receive and return numpy arrays to avoid pickling torch tensors.
 
 Usage::
@@ -31,7 +31,7 @@ def _get_pool(n_workers: Optional[int] = None) -> ProcessPoolExecutor:
     if _POOL is None or _POOL_SIZE != n_workers:
         if _POOL is not None:
             _POOL.shutdown(wait=False)
-        ctx = mp.get_context("fork")
+        ctx = mp.get_context("forkserver")
         _POOL = ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx)
         _POOL_SIZE = n_workers
 
@@ -67,5 +67,7 @@ def pmap(
         pool = _get_pool(n_workers)
         futures = [pool.submit(fn, a) for a in args_list]
         return [f.result() for f in futures]
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).debug("pmap failed, falling back to sequential: %s", exc)
         return [fn(a) for a in args_list]

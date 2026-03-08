@@ -177,27 +177,37 @@ def center_of_mass(
 
 def cupy_edt(mask_cp):
     """EDT on a cupy array, returns cupy array. No host transfer."""
+    if not _use_gpu():
+        raise RuntimeError("cupy_edt requires cupy and a visible CUDA device")
     return _cp_edt(mask_cp)
 
 
 def cupy_gaussian(input_cp, sigma, order=0, mode="reflect", truncate=4.0):
     """Gaussian filter on cupy array, returns cupy array."""
+    if not _use_gpu():
+        raise RuntimeError("cupy_gaussian requires cupy and a visible CUDA device")
     return _cp_gaussian(input_cp, sigma=sigma, order=order,
                         mode=mode, truncate=truncate)
 
 
 def cupy_label(input_cp, structure_cp=None):
     """Connected-component labelling on cupy array, returns (cupy, int)."""
+    if not _use_gpu():
+        raise RuntimeError("cupy_label requires cupy and a visible CUDA device")
     return _cp_label(input_cp, structure=structure_cp)
 
 
 def cupy_gen_struct(rank: int, connectivity: int):
     """Generate structuring element as cupy array."""
+    if not _use_gpu():
+        raise RuntimeError("cupy_gen_struct requires cupy and a visible CUDA device")
     return _cp_gen_struct(rank, connectivity)
 
 
 def cupy_center_of_mass(input_cp, labels_cp=None, index=None):
     """Centre-of-mass on cupy arrays."""
+    if not _use_gpu():
+        raise RuntimeError("cupy_center_of_mass requires cupy and a visible CUDA device")
     return _cp_center_of_mass(input_cp, labels=labels_cp, index=index)
 
 

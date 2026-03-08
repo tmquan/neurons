@@ -68,27 +68,21 @@ class MissingSectiond(MapTransform, Randomizable):
             if arr.ndim < 3:
                 continue
 
-            is_np = isinstance(arr, np.ndarray)
-            arr = arr.copy() if is_np else arr.clone()
             idx = self._missing_idx
             is_label = key in self.label_keys
 
             if arr.ndim == 4:
-                if is_label:
+                if is_label or self.fill_mode == "zero":
                     arr[:, idx] = 0
                 elif self.fill_mode == "interpolate":
                     arr[:, idx] = (arr[:, idx - 1] + arr[:, idx + 1]) / 2
-                elif self.fill_mode == "zero":
-                    arr[:, idx] = 0
                 elif self.fill_mode == "copy":
                     arr[:, idx] = arr[:, idx - 1]
             else:
-                if is_label:
+                if is_label or self.fill_mode == "zero":
                     arr[idx] = 0
                 elif self.fill_mode == "interpolate":
                     arr[idx] = (arr[idx - 1] + arr[idx + 1]) / 2
-                elif self.fill_mode == "zero":
-                    arr[idx] = 0
                 elif self.fill_mode == "copy":
                     arr[idx] = arr[idx - 1]
 

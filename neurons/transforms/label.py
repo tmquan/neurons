@@ -118,10 +118,10 @@ def relabel_connected_components(
         if num_features == 0:
             continue
         lut = np.zeros(num_features + 1, dtype=result.dtype)
-        for i in range(1, num_features + 1):
-            lut[i] = next_label
-            next_label += 1
-        result[mask.astype(bool)] = lut[labeled[mask.astype(bool)]]
+        lut[np.arange(1, num_features + 1)] = np.arange(next_label, next_label + num_features)
+        next_label += num_features
+        bool_mask = mask.astype(bool)
+        result[bool_mask] = lut[labeled[bool_mask]]
 
     return torch.from_numpy(result).to(device=device, dtype=dtype)
 
