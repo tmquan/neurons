@@ -9,6 +9,7 @@ All datasets inherit from CircuitDataset and implement:
 """
 
 from neurons.datasets.base import CircuitDataset
+from neurons.datasets.lazy import LazyVolDataset
 from neurons.datasets.snemi3d import SNEMI3DDataset
 from neurons.datasets.cremi3d import CREMI3DDataset
 from neurons.datasets.microns import MICRONSDataset
@@ -16,6 +17,7 @@ from neurons.datasets.mitoem2 import MitoEM2Dataset
 
 __all__ = [
     "CircuitDataset",
+    "LazyVolDataset",
     "SNEMI3DDataset",
     "CREMI3DDataset",
     "MICRONSDataset",

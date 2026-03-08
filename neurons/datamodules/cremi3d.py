@@ -1,16 +1,25 @@
 """
 CREMI3D DataModule for PyTorch Lightning.
+
+Uses :class:`LazyVolDataset` for 3D patch mode and the legacy
+:class:`CREMI3DDataset` for full-volume access.
 """
 
+import logging
 from typing import Dict, List, Optional, Tuple, Union
 
-from neurons.datamodules import CircuitDataModule
+from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets import CREMI3DDataset
+
+logger = logging.getLogger(__name__)
 
 
 class CREMI3DDataModule(CircuitDataModule):
     """
     PyTorch Lightning DataModule for CREMI3D dataset.
+
+    In 3D patch mode (``patch_size`` set), uses :class:`LazyVolDataset`
+    for on-demand disk reads with constant RAM usage.
 
     Args:
         train_volumes: e.g. ``[{"vol": "A"}, {"vol": "B"}, {"vol": "C"}]``
@@ -55,6 +64,10 @@ class CREMI3DDataModule(CircuitDataModule):
             persistent_workers=persistent_workers,
         )
 
+    @property
+    def _use_lazy(self) -> bool:
+        return self.patch_size is not None
+
     def _get_dataset_kwargs(self) -> dict:
         kwargs: dict = {
             "include_clefts": self.include_clefts,
@@ -66,3 +79,43 @@ class CREMI3DDataModule(CircuitDataModule):
 
     def _get_spatial_dims(self) -> int:
         return 3
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if not self._use_lazy:
+            return super().setup(stage)
+
+        from neurons.datasets.lazy import LazyVolDataset
+
+        num_samples = self.num_samples or 16000
+        patch_size = self.patch_size
+
+        if stage == "fit" or stage is None:
+            train_vols = self.train_volumes or [{"vol": "A"}, {"vol": "B"}, {"vol": "C"}]
+            self.train_dataset = LazyVolDataset(
+                root_dir=self.data_root,
+                volumes=train_vols,
+                patch_size=patch_size,
+                transform=self.get_train_transforms(),
+                num_samples=num_samples,
+            )
+            val_vols = self.val_volumes or train_vols
+            self.val_dataset = LazyVolDataset(
+                root_dir=self.data_root,
+                volumes=val_vols,
+                patch_size=patch_size,
+                transform=self.get_val_transforms(),
+                num_samples=min(num_samples // 10, 500),
+            )
+
+        if stage == "test" or stage is None:
+            test_vols = self.test_volumes or self.train_volumes or []
+            if test_vols:
+                self.test_dataset = LazyVolDataset(
+                    root_dir=self.data_root,
+                    volumes=test_vols,
+                    patch_size=patch_size,
+                    transform=self.get_val_transforms(),
+                    num_samples=min(num_samples // 10, 500),
+                )
+
+        logger.info("CREMI3DDataModule: using LazyVolDataset (~0 MB base RAM per rank)")

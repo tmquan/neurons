@@ -1,20 +1,29 @@
 """
 MitoEM2 DataModule for PyTorch Lightning.
+
+Uses :class:`LazyVolDataset` for 3D patch mode and the legacy
+:class:`MitoEM2Dataset` for 2D slice mode.
 """
 
+import logging
 from typing import Dict, List, Optional, Tuple, Union
 
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets.mitoem2 import MitoEM2Dataset
+
+logger = logging.getLogger(__name__)
 
 
 class MitoEM2DataModule(CircuitDataModule):
     """
     PyTorch Lightning DataModule for MitoEM2 dataset.
 
+    In 3D patch mode (``slice_mode=False`` with ``patch_size``), uses
+    :class:`LazyVolDataset` for on-demand disk reads.
+
     Args:
         train_volumes: e.g. ``[{"subdataset": "Dataset001_ME2-Beta"}]``
-        test_volumes: e.g. ``[{"subdataset": "Dataset001_ME2-Beta", "img_dir": "imagesTs", "lbl_dir": "labelsTs"}]``
+        test_volumes: e.g. ``[{"subdataset": "Dataset001_ME2-Beta", "img_dir": "imagesTs"}]``
         slice_mode: Return 2D slices if True (default: True).
     """
 
@@ -52,6 +61,10 @@ class MitoEM2DataModule(CircuitDataModule):
             persistent_workers=persistent_workers,
         )
 
+    @property
+    def _use_lazy(self) -> bool:
+        return not self.slice_mode and self.patch_size is not None
+
     def _get_dataset_kwargs(self) -> dict:
         kwargs: dict = {"slice_mode": self.slice_mode}
         if self.num_samples is not None:
@@ -60,3 +73,45 @@ class MitoEM2DataModule(CircuitDataModule):
 
     def _get_spatial_dims(self) -> int:
         return 2 if self.slice_mode else 3
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if not self._use_lazy:
+            return super().setup(stage)
+
+        from neurons.datasets.lazy import LazyVolDataset
+
+        num_samples = self.num_samples or 16000
+        patch_size = self.patch_size
+
+        if stage == "fit" or stage is None:
+            train_vols = self.train_volumes or []
+            if train_vols:
+                self.train_dataset = LazyVolDataset(
+                    root_dir=self.data_root,
+                    volumes=train_vols,
+                    patch_size=patch_size,
+                    transform=self.get_train_transforms(),
+                    num_samples=num_samples,
+                )
+            val_vols = self.val_volumes or train_vols
+            if val_vols:
+                self.val_dataset = LazyVolDataset(
+                    root_dir=self.data_root,
+                    volumes=val_vols,
+                    patch_size=patch_size,
+                    transform=self.get_val_transforms(),
+                    num_samples=min(num_samples // 10, 500),
+                )
+
+        if stage == "test" or stage is None:
+            test_vols = self.test_volumes or self.train_volumes or []
+            if test_vols:
+                self.test_dataset = LazyVolDataset(
+                    root_dir=self.data_root,
+                    volumes=test_vols,
+                    patch_size=patch_size,
+                    transform=self.get_val_transforms(),
+                    num_samples=min(num_samples // 10, 500),
+                )
+
+        logger.info("MitoEM2DataModule: using LazyVolDataset (~0 MB base RAM per rank)")

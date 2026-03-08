@@ -1,16 +1,32 @@
 """
 SNEMI3D DataModule for PyTorch Lightning.
+
+Uses :class:`LazyVolDataset` for 3D patch mode (reads patches from
+disk on demand — constant memory regardless of volume count) and
+the legacy :class:`SNEMI3DDataset` for 2D slice mode.
 """
 
+import logging
 from typing import Dict, List, Optional, Tuple, Union
 
-from neurons.datamodules import CircuitDataModule
+import torch
+from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets import SNEMI3DDataset
+
+logger = logging.getLogger(__name__)
 
 
 class SNEMI3DDataModule(CircuitDataModule):
     """
     PyTorch Lightning DataModule for SNEMI3D dataset.
+
+    In 3D patch mode (``slice_mode=False`` with ``patch_size`` set), uses
+    :class:`LazyVolDataset` which reads only the requested patch from
+    disk per sample — keeping system RAM usage constant regardless of
+    how many volumes are configured.
+
+    In 2D slice mode (``slice_mode=True``), falls back to the legacy
+    :class:`SNEMI3DDataset` which loads volumes into memory.
 
     Args:
         data_root: Path to SNEMI3D data directory.
@@ -55,6 +71,10 @@ class SNEMI3DDataModule(CircuitDataModule):
             persistent_workers=persistent_workers,
         )
 
+    @property
+    def _use_lazy(self) -> bool:
+        return not self.slice_mode and self.patch_size is not None
+
     def _get_dataset_kwargs(self) -> dict:
         kwargs: dict = {"slice_mode": self.slice_mode}
         if self.num_samples is not None:
@@ -63,3 +83,45 @@ class SNEMI3DDataModule(CircuitDataModule):
 
     def _get_spatial_dims(self) -> int:
         return 2 if self.slice_mode else 3
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if not self._use_lazy:
+            return super().setup(stage)
+
+        from neurons.datasets.lazy import LazyVolDataset
+
+        num_samples = self.num_samples or 16000
+        patch_size = self.patch_size
+
+        if stage == "fit" or stage is None:
+            train_vols = self.train_volumes or [{"vol": "AC4_inputs", "seg": "AC4_labels"}]
+            self.train_dataset = LazyVolDataset(
+                root_dir=self.data_root,
+                volumes=train_vols,
+                patch_size=patch_size,
+                transform=self.get_train_transforms(),
+                num_samples=num_samples,
+            )
+            val_vols = self.val_volumes or train_vols
+            self.val_dataset = LazyVolDataset(
+                root_dir=self.data_root,
+                volumes=val_vols,
+                patch_size=patch_size,
+                transform=self.get_val_transforms(),
+                num_samples=min(num_samples // 10, 500),
+            )
+
+        if stage == "test" or stage is None:
+            test_vols = self.test_volumes or self.train_volumes or [{"vol": "AC4_inputs", "seg": "AC4_labels"}]
+            self.test_dataset = LazyVolDataset(
+                root_dir=self.data_root,
+                volumes=test_vols,
+                patch_size=patch_size,
+                transform=self.get_val_transforms(),
+                num_samples=min(num_samples // 10, 500),
+            )
+
+        logger.info(
+            "SNEMI3DDataModule: using LazyVolumeDataset (on-demand disk reads, "
+            "~0 MB base RAM per rank)"
+        )
