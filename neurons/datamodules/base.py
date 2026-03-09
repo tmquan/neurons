@@ -112,6 +112,31 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
     # Label-target transform hooks  (override to customise)
     # ------------------------------------------------------------------
 
+    def _original_transforms(self, spatial_dims: int) -> list:
+        """Spatial augmentations applied to both image and label.
+
+        Flips and rotations.  Override to customise augmentation strategy.
+        """
+        io_keys = ["image", "label"]
+        rot_axes = (0, 1) if spatial_dims == 2 else (1, 2)
+        return [
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=0),
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=2 if spatial_dims == 3 else 1),
+            RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
+        ]
+
+    def _semantic_transforms(self, spatial_dims: int) -> list:
+        """Image intensity augmentations and semantic-level label transforms.
+
+        Runs after spatial augmentations.  Override to add semantic
+        targets (e.g. boundary maps, class maps).
+        """
+        return [
+            RandGaussianNoised(keys=["image"], prob=0.1, mean=0.0, std=0.1),
+            RandAdjustContrastd(keys=["image"], prob=0.1, gamma=(0.7, 1.3)),
+        ]
+
     def _instance_transforms(self, spatial_dims: int) -> list:
         """Post-crop connected-component relabeling.
 
@@ -120,21 +145,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         """
         return [Labeld(keys=["label"], spatial_dims=spatial_dims)]
 
-    def _semantic_transforms(self, spatial_dims: int) -> list:
-        """Semantic-level label transforms.
-
-        Override to derive semantic segmentation targets from instance
-        labels (e.g. boundary maps, class maps).  Runs after geometry
-        transforms and before intensity augmentations.
-        """
-        return []
-
     def _geometry_transforms(self, spatial_dims: int) -> list:
         """Direction and covariance targets for the geometry loss head.
 
-        Runs after all spatial augmentations so the targets are
-        consistent with the augmented label layout.  Skipped when
-        ``compute_geometry=False`` to save CPU time.
+        Runs after spatial augmentations so targets are consistent with
+        the augmented label layout.  Skipped when ``compute_geometry=False``.
         """
         if not self.compute_geometry:
             return []
@@ -161,7 +176,6 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
     def get_train_transforms(self) -> Compose:
         io_keys = ["image", "label"]
         sd = self._get_spatial_dims()
-        rot_axes = (0, 1) if sd == 2 else (1, 2)
 
         transforms: list = [
             EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
@@ -171,7 +185,6 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             transforms.extend([
                 SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
-                *self._instance_transforms(sd),
             ])
         elif self.image_size is not None:
             transforms.append(
@@ -179,16 +192,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             )
 
         transforms.extend([
-            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=0),
-            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
-            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=2 if sd == 3 else 1),
-            RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
-            InstanceWeightsd(keys=["label"], spatial_dims=sd),
-            *self._geometry_transforms(sd),
+            *self._original_transforms(sd),
             *self._semantic_transforms(sd),
-            RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
-            RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
-            EnsureTyped(keys=self._train_output_keys(), allow_missing_keys=True),
+            *self._instance_transforms(sd),
+            *self._geometry_transforms(sd),
+            EnsureTyped(keys=self._output_keys()),
         ])
 
         return Compose(transforms)
@@ -205,7 +213,6 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             transforms.extend([
                 SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
                 CenterSpatialCropd(keys=io_keys, roi_size=self.patch_size),
-                *self._instance_transforms(sd),
             ])
         elif self.image_size is not None:
             transforms.append(
@@ -213,8 +220,9 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             )
 
         transforms.extend([
-            *self._geometry_transforms(sd),
             *self._semantic_transforms(sd),
+            *self._instance_transforms(sd),
+            *self._geometry_transforms(sd),
             EnsureTyped(keys=self._output_keys()),
         ])
         return Compose(transforms)

@@ -204,21 +204,6 @@ class BaseCosmosModule(pl.LightningModule):
             targets["label_direction"] = batch["label_direction"]
         if "label_covariance" in batch:
             targets["label_covariance"] = batch["label_covariance"]
-        if "weight_edge" in batch and "weight_bone" in batch:
-            w_edge = batch["weight_edge"]
-            w_bone = batch["weight_bone"]
-            if w_edge.dim() == _SPATIAL_DIMS + 2:
-                w_edge = rearrange(w_edge, _SQUEEZE_PATTERN)
-            if w_bone.dim() == _SPATIAL_DIMS + 2:
-                w_bone = rearrange(w_bone, _SQUEEZE_PATTERN)
-            geom_targets = None
-            if "label_direction" in targets and "label_covariance" in targets:
-                geom_targets = self.criterion.geometry_loss.targets_from_pipeline(
-                    targets["label_direction"], targets["label_covariance"],
-                ) if self.criterion.geometry_loss is not None else None
-            elif self.criterion.geometry_loss is not None:
-                geom_targets = self.criterion.geometry_loss.compute_targets(labels)
-            targets["_cached_weights"] = (w_edge, w_bone), geom_targets
         return targets
 
     # ------------------------------------------------------------------
