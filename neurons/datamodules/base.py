@@ -177,6 +177,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         transforms.extend([
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=0),
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=2 if sd == 3 else 1),
             RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
             *self._geometry_transforms(sd),
             *self._semantic_transforms(sd),

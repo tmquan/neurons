@@ -20,7 +20,6 @@ Usage:
     python scripts/train.py training.fast_dev_run=true
 """
 
-import sys
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional

@@ -11,7 +11,7 @@ Supports HDF5 (chunked reads) and TIFF (memory-mapped reads).
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -147,11 +147,13 @@ class LazyVolDataset(Dataset):
         transform: Optional[Callable] = None,
         num_samples: int = 16000,
         normalize: bool = True,
+        deterministic: bool = False,
     ) -> None:
         super().__init__()
         self.root_dir = Path(root_dir)
         self.patch_size = patch_size
         self.transform = transform
+        self.deterministic = deterministic
         self.num_samples = num_samples
         self.normalize = normalize
 
@@ -264,7 +266,8 @@ class LazyVolDataset(Dataset):
         return shape
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
-        rng = np.random.RandomState(index + int(torch.randint(0, 2**31, (1,)).item()))
+        seed = index if self.deterministic else index + int(torch.randint(0, 2**31, (1,)).item())
+        rng = np.random.RandomState(seed)
         handle = self._pick_volume(index)
 
         spatial = self._spatial_shape(handle)

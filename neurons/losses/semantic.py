@@ -94,8 +94,7 @@ class SemanticLoss(nn.Module):
         if self.mode == "softmax":
             probs = F.softmax(logits, dim=1)
             valid = class_labels != self.ignore_index
-            safe = class_labels.clone()
-            safe[~valid] = 0
+            safe = torch.where(valid, class_labels, 0)
             one_hot = rearrange(
                 F.one_hot(safe.long(), C).float(),
                 "b ... c -> b c ...",

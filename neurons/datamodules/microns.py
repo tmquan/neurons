@@ -47,6 +47,7 @@ class MICRONSDataModule(CircuitDataModule):
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
+        self.save_hyperparameters()
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
@@ -104,6 +105,7 @@ class MICRONSDataModule(CircuitDataModule):
                     patch_size=patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
+                    deterministic=True,
                 )
 
         if stage == "test" or stage is None:
@@ -115,6 +117,7 @@ class MICRONSDataModule(CircuitDataModule):
                     patch_size=patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
+                    deterministic=True,
                 )
 
         logger.info("MICRONSDataModule: using LazyVolDataset (~0 MB base RAM per rank)")

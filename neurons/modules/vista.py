@@ -59,7 +59,12 @@ class BaseVistaModule(pl.LightningModule):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         dims = getattr(cls, "_SPATIAL_DIMS", None)
-        if dims is not None and dims in _SPATIAL_AXES:
+        if dims is not None:
+            if dims not in _SPATIAL_AXES:
+                raise ValueError(
+                    f"{cls.__name__}._SPATIAL_DIMS={dims} is invalid. "
+                    f"Must be one of {sorted(_SPATIAL_AXES)}."
+                )
             axes = _SPATIAL_AXES[dims]
             cls._EXPAND_PATTERN = f"b {axes} -> b 1 {axes}"
             cls._SQUEEZE_PATTERN = f"b 1 {axes} -> b {axes}"
@@ -229,10 +234,23 @@ class BaseVistaModule(pl.LightningModule):
         return self.criterion(predictions, targets)
 
     # ------------------------------------------------------------------
+    # Batch sanitisation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_meta_tensor(batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert MONAI MetaTensors to plain torch.Tensors."""
+        return {
+            k: v.as_subclass(torch.Tensor) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
+
+    # ------------------------------------------------------------------
     # Training step
     # ------------------------------------------------------------------
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        batch = self._strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == self._SPATIAL_DIMS + 1:
             images = rearrange(images, self._EXPAND_PATTERN)
@@ -312,6 +330,7 @@ class BaseVistaModule(pl.LightningModule):
 
     def _eval_step(self, batch: Dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         """Shared evaluation logic for validation and test steps."""
+        batch = self._strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == self._SPATIAL_DIMS + 1:
             images = rearrange(images, self._EXPAND_PATTERN)

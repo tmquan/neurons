@@ -152,6 +152,7 @@ class BaseCosmosModule(pl.LightningModule):
             "dit_backbone": "_freeze_dit_backbone",
             "vae_decoder": "_freeze_vae_decoder",
         }
+        needs_optimizer_rebuild = False
         for name, value in self._freeze_schedule.items():
             if isinstance(value, bool):
                 continue
@@ -161,6 +162,9 @@ class BaseCosmosModule(pl.LightningModule):
                 _METHODS[name][0]()
             elif not want_frozen and is_frozen:
                 _METHODS[name][1]()
+                needs_optimizer_rebuild = True
+        if needs_optimizer_rebuild and self.trainer is not None:
+            self.trainer.strategy.setup_optimizers(self.trainer)
 
     # ------------------------------------------------------------------
     # Forward
@@ -237,6 +241,7 @@ class BaseCosmosModule(pl.LightningModule):
             dtype=torch.long, device=labels.device,
         )
         remap[known_ids] = torch.arange(1, known_ids.numel() + 1, device=labels.device)
+        inst = inst.contiguous()
         flat = rearrange(inst, "... -> (...)")
         mask = flat > 0
         flat[mask] = remap[flat[mask]]
@@ -323,8 +328,8 @@ class BaseCosmosModule(pl.LightningModule):
 
         bs = images.shape[0]
         for name, val in all_losses.items():
-            self.log(name, val, on_step=False, on_epoch=True, batch_size=bs)
-        self.log("train/loss", total_loss, prog_bar=True, on_step=True, batch_size=bs)
+            self.log(name, val, on_step=False, on_epoch=True, sync_dist=True, batch_size=bs)
+        self.log("train/loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True, batch_size=bs)
 
         return total_loss
 
@@ -368,9 +373,6 @@ class BaseCosmosModule(pl.LightningModule):
             self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
             self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
             self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
-        else:
-            for m in ("ins_ari", "ins_ami", "ins_voi", "ins_voi_split", "ins_voi_merge", "ins_ted"):
-                self.log(f"{prefix}/{m}", 0.0, sync_dist=True, batch_size=bs)
 
     def _eval_step(self, batch: Dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         """Shared evaluation logic for validation and test steps."""
@@ -412,6 +414,8 @@ class BaseCosmosModule(pl.LightningModule):
         backbone_decay, backbone_no_decay = [], []
         head_decay, head_no_decay = [], []
         for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
             is_backbone = name.startswith("model.dit.")
             if param.dim() <= 1 or name.endswith(".bias"):
                 (backbone_no_decay if is_backbone else head_no_decay).append(param)
@@ -423,6 +427,7 @@ class BaseCosmosModule(pl.LightningModule):
             {"params": head_decay, "lr": lr, "weight_decay": wd},
             {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
         ]
+        param_groups = [g for g in param_groups if len(g["params"]) > 0]
         optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
 
         sched_cfg = self.optimizer_config.get("scheduler", {})

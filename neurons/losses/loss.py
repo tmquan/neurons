@@ -193,7 +193,6 @@ class BaseCombinedLossWithConsistency(BaseCombinedLoss):
         weight_dir: float = 1.0,
         weight_cov: float = 1.0,
         weight_raw: float = 1.0,
-        dir_target: str = "centroid",
         loss_dir: str = "smooth_l1",
         loss_cov: str = "mse",
         loss_raw: str = "l1",

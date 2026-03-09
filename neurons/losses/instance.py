@@ -150,10 +150,9 @@ class InstanceLoss(nn.Module):
             K = len(fg_ids)
             for start in range(0, K, _CHUNK):
                 chunk_ids = fg_ids[start:start + _CHUNK]
-                masks = rearrange(
-                    torch.stack([(label[b] == uid).float() for uid in chunk_ids]),
-                    "k ... -> k 1 ...",
-                )
+                label_expanded = label[b].unsqueeze(0)
+                ids_shape = [len(chunk_ids)] + [1] * self.spatial_dims
+                masks = (label_expanded == chunk_ids.view(ids_shape)).float().unsqueeze(1)
 
                 remaining = masks.clone()
                 dt = torch.zeros_like(masks)

@@ -310,7 +310,7 @@ class _StandaloneDiT3D(nn.Module):
         _param_dtype = self.patch_embed.weight.dtype
         latent = latent.to(dtype=_param_dtype)
 
-        B, C, D, H, W = latent.shape
+        B, _C, _D, _H, _W = latent.shape
         P = self.patch_size
 
         patches = rearrange(
@@ -658,6 +658,9 @@ class CosmosPredict3DWrapper(nn.Module):
             out_dim=feature_size,
         )
 
+        if self._backend in ("diffusers", "cosmos_predict2"):
+            self._register_persistent_hooks()
+
         self.decoder_adapter = _DecoderAdapter3D(
             vae_decoder=self.vae_decoder,
             latent_channels=self.cfg.latent_channels,
@@ -963,7 +966,7 @@ class CosmosPredict3DWrapper(nn.Module):
 
         Returns ``[B, feature_size, D_lat, H_lat, W_lat]``.
         """
-        B, C, D_lat, H_lat, W_lat = latent.shape
+        B, _C, D_lat, H_lat, W_lat = latent.shape
 
         dit_cfg = getattr(self.dit, "config", None)
         dit_ps = getattr(dit_cfg, "patch_size", None)
@@ -992,7 +995,7 @@ class CosmosPredict3DWrapper(nn.Module):
                 latent, timestep, d_tok, h_tok, w_tok,
             )
         else:
-            _, intermediates = self.dit(
+            final, intermediates = self.dit(
                 latent, timestep=timestep,
                 feature_layers=self._feature_layers,
             )
@@ -1002,7 +1005,6 @@ class CosmosPredict3DWrapper(nn.Module):
                 if i in intermediates
             ]
             if not feat_list:
-                final, _ = self.dit(latent, timestep=timestep)
                 feat_list = [final]
             feat_list = [f.float() for f in feat_list]
             features = self.feature_projector(
@@ -1014,6 +1016,38 @@ class CosmosPredict3DWrapper(nn.Module):
 
         return features
 
+    def _register_persistent_hooks(self) -> None:
+        """Register forward hooks on DiT blocks once (called from __init__)."""
+        self._hook_buffer: List[torch.Tensor] = []
+        self._hook_handles: List[Any] = []
+        self._hook_block_container = None
+
+        for attr in ("transformer_blocks", "blocks", "layers"):
+            if hasattr(self.dit, attr):
+                self._hook_block_container = getattr(self.dit, attr)
+                break
+
+        if self._hook_block_container is None:
+            return
+
+        def _make_hook(_idx: int):
+            def hook_fn(_module: nn.Module, _input: Any, output: Any) -> None:
+                out = output[0] if isinstance(output, tuple) else output
+                if self._freeze_dit_backbone:
+                    out = out.detach()
+                if out.dim() == 3:
+                    self._hook_buffer.append(out)
+                else:
+                    self._hook_buffer.append(rearrange(out, "b ... d -> b (...) d"))
+            return hook_fn
+
+        for idx in self._feature_layers:
+            if idx < len(self._hook_block_container):
+                h = self._hook_block_container[idx].register_forward_hook(
+                    _make_hook(idx),
+                )
+                self._hook_handles.append(h)
+
     def _extract_features_hook(
         self,
         latent: torch.Tensor,
@@ -1023,17 +1057,7 @@ class CosmosPredict3DWrapper(nn.Module):
         w_tok: int,
     ) -> torch.Tensor:
         """Extract intermediate features from diffusers / cosmos DiT."""
-        collected: List[torch.Tensor] = []
-        hooks: List[Any] = []
-
-        # TODO: Block container attr may differ across diffusers versions.
-        block_container = None
-        for attr in ("transformer_blocks", "blocks", "layers"):
-            if hasattr(self.dit, attr):
-                block_container = getattr(self.dit, attr)
-                break
-
-        if block_container is None:
+        if self._hook_block_container is None:
             logger.warning(
                 "Cannot find block container on DiT (%s).  "
                 "Returning conv-downsampled latent features.",
@@ -1045,57 +1069,42 @@ class CosmosPredict3DWrapper(nn.Module):
                 d_tok, h_tok, w_tok,
             )
 
-        def _make_hook(_idx: int):
-            def hook_fn(_module: nn.Module, _input: Any, output: Any) -> None:
-                out = output[0] if isinstance(output, tuple) else output
-                if self._freeze_dit_backbone:
-                    out = out.detach()
-                if out.dim() == 3:
-                    collected.append(out)
-                else:
-                    collected.append(rearrange(out, "b ... d -> b (...) d"))
-            return hook_fn
+        self._hook_buffer.clear()
 
-        for idx in self._feature_layers:
-            if idx < len(block_container):
-                h = block_container[idx].register_forward_hook(
-                    _make_hook(idx),
-                )
-                hooks.append(h)
+        ctx = torch.no_grad() if self._freeze_dit_backbone else torch.enable_grad()
+        with ctx:
+            B = latent.shape[0]
+            dit_cfg = getattr(self.dit, "config", None)
+            text_dim = getattr(dit_cfg, "crossattn_proj_in_channels", 1024)
+            null_text = torch.zeros(B, 1, text_dim, device=latent.device, dtype=latent.dtype)
 
-        try:
-            ctx = torch.no_grad() if self._freeze_dit_backbone else torch.enable_grad()
-            with ctx:
-                B = latent.shape[0]
-                dit_cfg = getattr(self.dit, "config", None)
-                text_dim = getattr(dit_cfg, "crossattn_proj_in_channels", 1024)
-                null_text = torch.zeros(B, 1, text_dim, device=latent.device, dtype=latent.dtype)
+            img_dim_in = getattr(dit_cfg, "img_context_dim_in", None)
+            img_tokens = getattr(dit_cfg, "img_context_num_tokens", 256)
+            if img_dim_in:
+                null_img = torch.zeros(B, img_tokens, img_dim_in, device=latent.device, dtype=latent.dtype)
+                enc_hidden = (null_text, null_img)
+            else:
+                enc_hidden = null_text
 
-                img_dim_in = getattr(dit_cfg, "img_context_dim_in", None)
-                img_tokens = getattr(dit_cfg, "img_context_num_tokens", 256)
-                if img_dim_in:
-                    null_img = torch.zeros(B, img_tokens, img_dim_in, device=latent.device, dtype=latent.dtype)
-                    enc_hidden = (null_text, null_img)
-                else:
-                    enc_hidden = null_text
+            padding_mask = torch.ones(1, 1, latent.shape[-2], latent.shape[-1], device=latent.device, dtype=latent.dtype)
+            null_condition = torch.zeros(B, 1, *latent.shape[2:], device=latent.device, dtype=latent.dtype)
 
-                padding_mask = torch.ones(1, 1, latent.shape[-2], latent.shape[-1], device=latent.device, dtype=latent.dtype)
-                null_condition = torch.zeros(B, 1, *latent.shape[2:], device=latent.device, dtype=latent.dtype)
+            self.dit(
+                hidden_states=latent,
+                timestep=timestep,
+                encoder_hidden_states=enc_hidden,
+                condition_mask=null_condition,
+                padding_mask=padding_mask,
+            )
 
-                self.dit(
-                    hidden_states=latent,
-                    timestep=timestep,
-                    encoder_hidden_states=enc_hidden,
-                    condition_mask=null_condition,
-                    padding_mask=padding_mask,
-                )
-        finally:
-            for h in hooks:
-                h.remove()
+        collected = list(self._hook_buffer)
+        self._hook_buffer.clear()
 
-        if not collected:
+        expected = len(self._feature_layers)
+        if len(collected) < expected:
             fallback = rearrange(latent, "b c d h w -> b (d h w) c")
-            collected = [fallback] * len(self._feature_layers)
+            while len(collected) < expected:
+                collected.append(fallback)
 
         collected = [f.float() for f in collected]
         return self.feature_projector(collected, d_tok, h_tok, w_tok)
@@ -1246,7 +1255,7 @@ def verify_fit(
         }
 
     cfg = _VARIANT_CONFIGS[variant]
-    B, C, D, H, W = input_shape
+    B, _C, D, H, W = input_shape
     results: Dict[str, Any] = {
         "variant": variant,
         "compatible": True,

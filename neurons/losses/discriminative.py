@@ -25,7 +25,6 @@ import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
 from neurons.utils.gpu_ndimage import (
     distance_transform_edt as _gpu_edt,
-    gaussian_filter as _gpu_gauss,
     _use_gpu as _cupy_available,
 )
 
@@ -63,8 +62,7 @@ def _build_instance_index(
     num = len(unique_ids)
     max_id = int(ins.max().item()) + 1
     id2idx = torch.full((max_id,), -1, device=ins.device, dtype=torch.long)
-    for i, uid in enumerate(unique_ids):
-        id2idx[uid.long()] = i
+    id2idx[unique_ids.long()] = torch.arange(num, device=ins.device)
     cluster_idx = id2idx[ins.long()]
     valid = cluster_idx >= 0
     return cluster_idx, valid, num
@@ -664,7 +662,6 @@ class SkeletonEmbeddingLoss(nn.Module):
             if gt_dt_grad is None:
                 gt_dt_grad = _dt_g
 
-        is_3d = offsets.dim() == 5
         B = offsets.shape[0]
         S = offsets.shape[1]
         spatial = offsets.shape[2:]

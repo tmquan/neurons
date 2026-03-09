@@ -9,7 +9,6 @@ the legacy :class:`SNEMI3DDataset` for 2D slice mode.
 import logging
 from typing import Dict, List, Optional, Tuple, Union
 
-import torch
 from neurons.datamodules.base import CircuitDataModule
 from neurons.datasets import SNEMI3DDataset
 
@@ -57,6 +56,7 @@ class SNEMI3DDataModule(CircuitDataModule):
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
+        self.save_hyperparameters()
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
@@ -109,6 +109,7 @@ class SNEMI3DDataModule(CircuitDataModule):
                 patch_size=patch_size,
                 transform=self.get_val_transforms(),
                 num_samples=num_samples,
+                deterministic=True,
             )
 
         if stage == "test" or stage is None:
@@ -119,6 +120,7 @@ class SNEMI3DDataModule(CircuitDataModule):
                 patch_size=patch_size,
                 transform=self.get_val_transforms(),
                 num_samples=num_samples,
+                deterministic=True,
             )
 
         logger.info(

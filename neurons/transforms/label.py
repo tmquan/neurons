@@ -78,9 +78,8 @@ def relabel_connected_components(
     """Relabel by finding per-instance connected components.
 
     Uses ``cupyx.scipy.ndimage.label`` (GPU) with scipy CPU fallback.
-
-    Two pixels are in the same component when they are neighbours **and**
-    share the same original value.
+    Runs a single connected-component pass on the full foreground mask,
+    then splits components that span different original IDs.
 
     Args:
         labels: ``[*spatial]`` or ``[batch, *spatial]`` integer labels.
@@ -106,22 +105,20 @@ def relabel_connected_components(
     struct_conn = _CONN_TO_STRUCT.get(connectivity, connectivity)
     struct = _gpu_gen_struct(rank, struct_conn)
 
-    unique_ids = np.unique(labels_np)
-    unique_ids = unique_ids[unique_ids > 0]
+    fg = (labels_np > 0).astype(np.int32)
+    if not fg.any():
+        return torch.zeros_like(labels)
 
-    result = np.zeros_like(labels_np)
-    next_label = 1
+    cc_labeled, _ = _gpu_label(fg, structure=struct)
 
-    for uid in unique_ids:
-        mask = (labels_np == uid).astype(np.int32)
-        labeled, num_features = _gpu_label(mask, structure=struct)
-        if num_features == 0:
-            continue
-        lut = np.zeros(num_features + 1, dtype=result.dtype)
-        lut[np.arange(1, num_features + 1)] = np.arange(next_label, next_label + num_features)
-        next_label += num_features
-        bool_mask = mask.astype(bool)
-        result[bool_mask] = lut[labeled[bool_mask]]
+    pair_ids = labels_np.ravel().astype(np.int64) * (int(cc_labeled.max()) + 1) + cc_labeled.ravel().astype(np.int64)
+    fg_mask = labels_np.ravel() > 0
+
+    _, inverse = np.unique(pair_ids[fg_mask], return_inverse=True)
+
+    result = np.zeros(labels_np.size, dtype=labels_np.dtype)
+    result[fg_mask] = inverse + 1
+    result = result.reshape(labels_np.shape)
 
     return torch.from_numpy(result).to(device=device, dtype=dtype)
 
