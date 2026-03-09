@@ -7,9 +7,12 @@ Designed for DDP training where each rank would otherwise load full
 volumes, exhausting system RAM.
 
 Supports HDF5 (chunked reads) and TIFF (memory-mapped reads).
+File handles are cached per worker to avoid the overhead of opening
+and closing HDF5 files on every sample.
 """
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -18,6 +21,8 @@ import torch
 from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
+
+_thread_local = threading.local()
 
 
 class _VolumeHandle:
@@ -76,6 +81,25 @@ def _get_shape(path: Path, key: Optional[str] = None) -> Tuple[int, ...]:
         raise ValueError(f"Unsupported file format: {suffix}")
 
 
+def _get_h5_handle(path: str):
+    """Return a cached HDF5 file handle for the current worker thread.
+
+    Handles are stored in thread-local storage so each DataLoader worker
+    keeps its own set of open files.  This avoids the overhead of
+    opening and parsing the HDF5 superblock on every sample.
+    """
+    import h5py
+    cache = getattr(_thread_local, "h5_cache", None)
+    if cache is None:
+        cache = {}
+        _thread_local.h5_cache = cache
+    handle = cache.get(path)
+    if handle is None:
+        handle = h5py.File(path, "r", swmr=True)
+        cache[path] = handle
+    return handle
+
+
 def _read_patch(
     path: Path,
     slices: Tuple[slice, ...],
@@ -85,11 +109,10 @@ def _read_patch(
     """Read a spatial patch from disk without loading the full volume."""
     suffix = path.suffix.lower()
     if suffix in (".h5", ".hdf5"):
-        import h5py
         if key is None:
             key = _resolve_hdf5_key(path)
-        with h5py.File(str(path), "r") as f:
-            data = f[key][slices]
+        f = _get_h5_handle(str(path))
+        data = f[key][slices]
         if dtype is not None:
             data = data.astype(dtype)
         return data

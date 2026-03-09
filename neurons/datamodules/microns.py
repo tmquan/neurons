@@ -105,7 +105,7 @@ class MICRONSDataModule(CircuitDataModule):
                     patch_size=patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
-                    deterministic=True,
+                    # deterministic=True,
                 )
 
         if stage == "test" or stage is None:
@@ -117,7 +117,7 @@ class MICRONSDataModule(CircuitDataModule):
                     patch_size=patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
-                    deterministic=True,
+                    # deterministic=True,
                 )
 
         logger.info("MICRONSDataModule: using LazyVolDataset (~0 MB base RAM per rank)")
