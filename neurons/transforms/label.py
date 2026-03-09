@@ -198,3 +198,72 @@ class Labeld(MapTransform):
 
 
 RelabelAfterCropd = Labeld
+
+
+class InstanceWeightsd(MapTransform):
+    """Precompute boundary + skeleton weights in the data pipeline.
+
+    Moves the expensive per-instance EDT / morphological erosion from the
+    GPU training loop into CPU data workers, where it runs in parallel.
+
+    Writes ``weight_edge`` and ``weight_bone`` into the sample dict.
+
+    Args:
+        keys: Keys of label tensors to compute weights from.
+        spatial_dims: 2 or 3 (default 3).
+        weight_edge: Boundary weight multiplier (1.0 = disabled).
+        weight_bone: Skeleton weight multiplier (1.0 = disabled).
+    """
+
+    def __init__(
+        self,
+        keys: KeysCollection,
+        spatial_dims: int = 3,
+        weight_edge: float = 10.0,
+        weight_bone: float = 10.0,
+    ) -> None:
+        super().__init__(keys)
+        self.spatial_dims = spatial_dims
+        self.weight_edge = weight_edge
+        self.weight_bone = weight_bone
+
+    def __call__(self, data: Dict) -> Dict:
+        from scipy.ndimage import distance_transform_edt
+
+        d = dict(data)
+        for key in self.key_iterator(d):
+            lbl = d[key]
+            if isinstance(lbl, torch.Tensor):
+                lbl_np = lbl.cpu().numpy()
+            else:
+                lbl_np = np.asarray(lbl)
+
+            has_channel = lbl_np.ndim == self.spatial_dims + 1
+            if has_channel:
+                lbl_np = lbl_np[0]
+
+            if self.weight_edge > 1.0:
+                import torch.nn.functional as F
+                lbl_t = torch.from_numpy(lbl_np.astype(np.float32)).unsqueeze(0).unsqueeze(0)
+                _pool = F.max_pool3d if self.spatial_dims == 3 else F.max_pool2d
+                _pad = (1, 1, 1, 1, 1, 1) if self.spatial_dims == 3 else (1, 1, 1, 1)
+                padded = F.pad(lbl_t, _pad, mode="replicate")
+                dilated = _pool(padded, 3, stride=1, padding=0)
+                eroded = _pool(-padded, 3, stride=1, padding=0).neg_()
+                boundary = (dilated != eroded).squeeze(0).squeeze(0).float()
+                d["weight_edge"] = 1.0 + boundary * (self.weight_edge - 1.0)
+
+            if self.weight_bone > 1.0:
+                weight = np.ones_like(lbl_np, dtype=np.float32)
+                unique_ids = np.unique(lbl_np)
+                unique_ids = unique_ids[unique_ids > 0]
+                for uid in unique_ids:
+                    mask = lbl_np == uid
+                    dt = distance_transform_edt(mask).astype(np.float32)
+                    dt_max = dt.max()
+                    if dt_max > 0:
+                        dt /= dt_max
+                    weight[mask] = 1.0 + dt[mask] * (self.weight_bone - 1.0)
+                d["weight_bone"] = torch.from_numpy(weight)
+
+        return d

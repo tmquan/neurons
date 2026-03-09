@@ -22,7 +22,7 @@ from monai.transforms import (
 )
 
 from neurons.datasets.base import CircuitDataset
-from neurons.transforms import Labeld, Directiond, Covarianced
+from neurons.transforms import Labeld, Directiond, Covarianced, InstanceWeightsd
 
 
 class CircuitDataModule(pl.LightningDataModule, ABC):
@@ -154,6 +154,10 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             keys.extend(["label_direction", "label_covariance"])
         return keys
 
+    def _train_output_keys(self) -> list:
+        """Output keys for train pipeline (includes precomputed weights)."""
+        return self._output_keys() + ["weight_edge", "weight_bone"]
+
     def get_train_transforms(self) -> Compose:
         io_keys = ["image", "label"]
         sd = self._get_spatial_dims()
@@ -179,11 +183,12 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=2 if sd == 3 else 1),
             RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
+            InstanceWeightsd(keys=["label"], spatial_dims=sd),
             *self._geometry_transforms(sd),
             *self._semantic_transforms(sd),
             RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.1),
             RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.7, 1.3)),
-            EnsureTyped(keys=self._output_keys()),
+            EnsureTyped(keys=self._train_output_keys(), allow_missing_keys=True),
         ])
 
         return Compose(transforms)

@@ -15,7 +15,7 @@ Label transforms:
 from neurons.transforms.elastic_deformation import ElasticDeformationd
 from neurons.transforms.missing_section import MissingSectiond
 from neurons.transforms.defect import Defectd
-from neurons.transforms.label import Labeld, RelabelAfterCropd
+from neurons.transforms.label import Labeld, RelabelAfterCropd, InstanceWeightsd
 from neurons.transforms.direction import Directiond
 from neurons.transforms.covariance import Covarianced
 
@@ -25,6 +25,7 @@ __all__ = [
     "Defectd",
     "Labeld",
     "RelabelAfterCropd",
+    "InstanceWeightsd",
     "Directiond",
     "Covarianced",
 ]

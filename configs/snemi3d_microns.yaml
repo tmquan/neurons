@@ -12,7 +12,7 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 8
+  num_workers: 12
   cache_rate: 0.0
   slice_mode: false
   num_samples: 16000
@@ -67,7 +67,7 @@ model:
   emb_dim: 16
   feature_size: 64
   variant: "2B"
-  dtype: "fp32"
+  dtype: "bf16"
   freeze_vae_encoder: true        # VAE encoder  (true = always frozen; int N = freeze for N epochs)
   freeze_dit_backbone: 10             # DiT backbone (true = always frozen; int N = freeze for N epochs then unfreeze)
   freeze_vae_decoder: false       # VAE decoder  (true = always frozen; int N = freeze for N epochs)
@@ -80,11 +80,12 @@ training:
   strategy: ddp
   precision: 32-true
   gradient_clip_val: 1.0
-  accumulate_grad_batches: 5
+  accumulate_grad_batches: 1
   limit_val_batches: 100
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   benchmark: true
+  compile: false
   training_modes:
     - automatic
 

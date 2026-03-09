@@ -362,6 +362,10 @@ def main(cfg: DictConfig) -> None:
     module = get_module(cfg)
     print(f"\nModule: {module.__class__.__name__}")
 
+    if cfg.get("training", {}).get("compile", False):
+        module.model = torch.compile(module.model, mode="default")
+        print("  torch.compile enabled (reduce-overhead)")
+
     callbacks = setup_callbacks(cfg)
     print(f"\nCallbacks: {len(callbacks)} registered")
 
