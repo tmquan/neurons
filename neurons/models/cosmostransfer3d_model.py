@@ -58,7 +58,8 @@ class _PointwiseLinear(nn.Module):
         self.linear = nn.Linear(in_channels, out_channels, bias=bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return rearrange(self.linear(rearrange(x, "b c ... -> b ... c")), "b ... c -> b c ...")
+        x_in = rearrange(x, "b c ... -> b ... c").to(self.linear.weight.dtype)
+        return rearrange(self.linear(x_in), "b ... c -> b c ...")
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +92,7 @@ _VARIANT_CONFIGS: Dict[str, _VariantConfig] = {
         num_heads=16,
         latent_channels=16,
         spatial_compression=8,
-        temporal_compression=8,
+        temporal_compression=4,
         estimated_vram_gb=12.0,
         max_sequence_length=32768,
     ),
@@ -103,7 +104,7 @@ _VARIANT_CONFIGS: Dict[str, _VariantConfig] = {
         num_heads=40,
         latent_channels=16,
         spatial_compression=8,
-        temporal_compression=8,
+        temporal_compression=4,
         estimated_vram_gb=48.0,
         max_sequence_length=32768,
     ),
@@ -656,7 +657,7 @@ class CosmosTransfer3DWrapper(nn.Module):
             hidden_dim=self.cfg.hidden_dim,
             num_feature_layers=len(self._feature_layers),
             out_dim=feature_size,
-        )
+        ).float()
 
         if self._backend in ("diffusers", "cosmos_transfer2"):
             self._register_persistent_hooks()
@@ -673,12 +674,16 @@ class CosmosTransfer3DWrapper(nn.Module):
             dropout=dropout,
             freeze_vae_decoder=freeze_vae_decoder,
         )
+        self.decoder_adapter.to_latent.float()
+        self.decoder_adapter.head_semantic.float()
+        self.decoder_adapter.head_instance.float()
+        self.decoder_adapter.head_geometry.float()
 
         self.point_encoder = PointPromptEncoder(
             num_classes=num_classes,
             feature_size=feature_size,
             spatial_dims=_SPATIAL_DIMS,
-        )
+        ).float()
 
         if self.vae_encoder is not None and freeze_vae_encoder:
             self.vae_encoder.requires_grad_(False)
@@ -749,9 +754,9 @@ class CosmosTransfer3DWrapper(nn.Module):
     ) -> bool:
         try:
             from diffusers import (  # type: ignore[import-untyped]
-                AutoencoderKLCosmos,
                 CosmosTransformer3DModel,
             )
+            from diffusers import AutoencoderKLWan as _VAEClass  # type: ignore[import-untyped]
         except ImportError:
             logger.debug("diffusers Cosmos classes not available.")
             return False
@@ -773,14 +778,16 @@ class CosmosTransfer3DWrapper(nn.Module):
                 subfolder="transformer",
                 torch_dtype=self._dtype,
             )
-            vae = AutoencoderKLCosmos.from_pretrained(
+            vae = _VAEClass.from_pretrained(
                 str(local_path),
                 subfolder="vae",
                 torch_dtype=self._dtype,
             )
 
-            self.vae_encoder = vae.encoder.to(self._dtype)
-            self.vae_decoder = vae.decoder.to(self._dtype)
+            vae = vae.to(self._dtype)
+            self._vae_ref = [vae]
+            self.vae_encoder = vae.encoder
+            self.vae_decoder = vae.decoder
 
             self.dit = transformer.to(self._dtype)
             self._backbone_loaded = True
@@ -856,14 +863,16 @@ class CosmosTransfer3DWrapper(nn.Module):
 
         # --- Load VAE from snapshot via diffusers ---
         try:
-            from diffusers import AutoencoderKLCosmos  # type: ignore[import-untyped]
+            from diffusers import AutoencoderKLWan  # type: ignore[import-untyped]
 
-            vae = AutoencoderKLCosmos.from_pretrained(
+            vae = AutoencoderKLWan.from_pretrained(
                 str(local_path), subfolder="vae",
                 torch_dtype=self._dtype,
             )
-            self.vae_encoder = vae.encoder.to(self._dtype)
-            self.vae_decoder = vae.decoder.to(self._dtype)
+            vae = vae.to(self._dtype)
+            self._vae_ref = [vae]
+            self.vae_encoder = vae.encoder
+            self.vae_decoder = vae.decoder
             logger.info("Loaded VAE encoder + decoder from snapshot.")
         except Exception as exc:
             logger.warning("Could not load VAE from snapshot: %s", exc)
@@ -941,6 +950,19 @@ class CosmosTransfer3DWrapper(nn.Module):
 
     def _encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
         """Encode pixel-space volume ``[B, 3, D, H, W]`` to latent grid."""
+        if hasattr(self, "_vae_ref") and self._vae_ref:
+            vae = self._vae_ref[0].to(device=x.device, dtype=x.dtype)
+            ctx = torch.no_grad() if self._freeze_vae_encoder else torch.enable_grad()
+            with ctx:
+                enc = vae.encode(x)
+                if hasattr(enc, "latent_dist"):
+                    latent = enc.latent_dist.mode()
+                elif hasattr(enc, "sample"):
+                    latent = enc.sample
+                else:
+                    latent = enc
+                return latent.to(dtype=x.dtype)
+
         if self.vae_encoder is not None:
             ctx = torch.no_grad() if self._freeze_vae_encoder else torch.enable_grad()
             with ctx:

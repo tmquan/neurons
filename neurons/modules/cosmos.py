@@ -359,7 +359,7 @@ class BaseCosmosModule(pl.LightningModule):
 
         fg_mask = targets["labels"] > 0
         if fg_mask.any():
-            ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
+            ins_pred, _, _ = self._clusterer(predictions["instance"].float(), fg_mask)
             ins_gt = targets["labels"]
 
             ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
