@@ -13,22 +13,14 @@ Label transforms:
 - ``Covarianced``                     — per-pixel spatial covariance features
 """
 
-from neurons.transforms.elastic_deformation import ElasticDeformationd
-from neurons.transforms.find_boundaries import FindBoundariesd
-from neurons.transforms.missing_section import MissingSectiond
-from neurons.transforms.defect import Defectd
-from neurons.transforms.label import Labeld, RelabelAfterCropd, InstanceWeightsd
+from neurons.transforms.label import Labeld
 from neurons.transforms.direction import Directiond
 from neurons.transforms.covariance import Covarianced
+from neurons.transforms.find_boundaries import FindBoundariesd
 
 __all__ = [
-    "ElasticDeformationd",
-    "FindBoundariesd",
-    "MissingSectiond",
-    "Defectd",
     "Labeld",
-    "RelabelAfterCropd",
-    "InstanceWeightsd",
     "Directiond",
     "Covarianced",
+    "FindBoundariesd",
 ]

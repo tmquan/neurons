@@ -1,117 +1,117 @@
-"""Direction field transform using GPU-accelerated center-of-mass.
+"""Direction field transform: per-pixel vectors toward instance centroids.
 
-For each foreground pixel, computes a unit vector pointing toward the
-center of mass of its instance.  This is a common regression target for
-instance segmentation models ("offset" or "direction" head).
+For each foreground instance in a label map, computes the vector from
+every pixel to the instance's centroid and (optionally) normalises to
+unit length.  Background pixels receive zero vectors.
 
-Uses ``cupyx.scipy.ndimage.center_of_mass`` (GPU) with scipy CPU fallback
-via ``neurons.transforms.edt``.
-
-MONAI dictionary transform
---------------------------
-- ``Directiond`` — compute per-pixel direction vectors from instance labels.
+The centroid computation is GPU-accelerated via cucim/cupy when
+available (see :mod:`neurons.transforms.edt`).
 """
 
 from typing import Dict
 
 import numpy as np
 import torch
-from einops import rearrange
 from monai.config import KeysCollection
 from monai.transforms import MapTransform
 
-from neurons.transforms._utils import _cached_coordinate_grid, _to_numpy_labels
-from neurons.transforms.edt import center_of_mass as _center_of_mass
+from neurons.transforms.edt import centroid as _centroid
 
 
-def compute_direction_field(labels, normalize: bool = True) -> torch.Tensor:
-    """Compute per-pixel direction vectors toward each instance's center of mass.
-
-    Works identically for 2-D and 3-D inputs.
+def compute_direction_field(
+    label: np.ndarray,
+    normalize: bool = True,
+) -> np.ndarray:
+    """Compute per-pixel direction vectors pointing toward instance centroids.
 
     Args:
-        labels: ``[*spatial]`` integer instance labels (0 = background).
-            Accepts ``torch.Tensor``, MONAI ``MetaTensor``, or ``np.ndarray``.
-        normalize: If True, return unit vectors; otherwise raw offsets.
+        label: Instance label array ``[*spatial]``.  Background is 0.
+        normalize: Normalise vectors to unit length.
 
     Returns:
-        ``[S, *spatial]`` direction field (``torch.float32``) where
-        ``S`` = number of spatial dims.  Background pixels are zero.
+        Direction field ``[S, *spatial]`` where ``S = label.ndim``.
+        Channels correspond to spatial axes in the same order as the
+        input dimensions (e.g. ``(z, y, x)`` for 3-D).
     """
-    labels_np = _to_numpy_labels(labels)
-    spatial_shape = labels_np.shape
-    ndim = len(spatial_shape)
+    label_np = np.asarray(label, dtype=np.int64)
+    S = label_np.ndim
+    shape = label_np.shape
+    direction = np.zeros((S,) + shape, dtype=np.float32)
 
-    unique_ids = np.unique(labels_np)
-    unique_ids = unique_ids[unique_ids > 0]
+    uids = np.unique(label_np)
+    uids = uids[uids > 0]
 
-    direction = np.zeros((ndim, *spatial_shape), dtype=np.float32)
+    if len(uids) == 0:
+        return direction
 
-    if len(unique_ids) == 0:
-        return torch.from_numpy(direction)
+    centroids = _centroid(label_np, uids)
+    if not isinstance(centroids, list):
+        centroids = [centroids]
 
-    ones = np.ones(spatial_shape, dtype=np.float32)
-    index = unique_ids.tolist()
-    centers = _center_of_mass(ones, labels=labels_np, index=index)
-    if not isinstance(centers, list):
-        centers = [centers]
+    coords = np.meshgrid(
+        *[np.arange(s, dtype=np.float32) for s in shape],
+        indexing="ij",
+    )
 
-    coords = _cached_coordinate_grid(spatial_shape)
-
-    for uid, center in zip(unique_ids, centers):
-        mask = labels_np == uid
-        for d in range(ndim):
-            direction[d][mask] = center[d] - coords[d][mask]
+    for uid, centroid in zip(uids, centroids):
+        mask = label_np == uid
+        for d in range(S):
+            direction[d][mask] = centroid[d] - coords[d][mask]
 
     if normalize:
-        mag = np.sqrt(
-            np.sum(direction ** 2, axis=0, keepdims=True),
-        ).clip(min=1e-8)
+        mag = np.sqrt(np.sum(direction ** 2, axis=0, keepdims=True))
+        np.clip(mag, 1e-8, None, out=mag)
         direction /= mag
-        bg = labels_np == 0
-        direction[:, bg] = 0.0
 
-    return torch.from_numpy(direction)
+    return direction
 
 
 class Directiond(MapTransform):
-    """Compute per-pixel direction vectors from instance label maps.
+    """Compute per-pixel direction field toward instance centroids.
 
-    For each key, reads the instance label tensor and writes the
-    direction field to ``{key}_direction`` (configurable via *suffix*).
-
-    Uses ``cupyx.scipy.ndimage.center_of_mass`` for GPU acceleration.
+    Reads instance labels from each key and stores the direction field
+    under ``{key}_direction``.  Input labels are expected in
+    ``[C, *spatial]`` format (post ``EnsureChannelFirstd``); the first
+    channel is used.
 
     Args:
-        keys: Keys of instance-label tensors.
-        spatial_dims: 2 or 3 (default 3).
-        suffix: Suffix appended to each key for the output direction field.
-        normalize: If True (default), output unit direction vectors.
+        keys: Keys of instance label maps.
+        spatial_dims: Number of spatial dimensions (2 or 3).
+        normalize: Normalise direction vectors to unit length.
     """
 
     def __init__(
         self,
         keys: KeysCollection,
         spatial_dims: int = 3,
-        suffix: str = "_direction",
         normalize: bool = True,
     ) -> None:
         super().__init__(keys)
         self.spatial_dims = spatial_dims
-        self.suffix = suffix
         self.normalize = normalize
 
     def __call__(self, data: Dict) -> Dict:
         d = dict(data)
+
         for key in self.key_iterator(d):
-            lbl = d[key]
-            if isinstance(lbl, np.ndarray):
-                if lbl.ndim == self.spatial_dims + 1:
-                    lbl = lbl[0]
+            arr = d[key]
+            is_tensor = isinstance(arr, torch.Tensor)
+
+            if is_tensor:
+                device = arr.device
+                label_np = arr.cpu().numpy()
             else:
-                if lbl.dim() == self.spatial_dims + 1:
-                    lbl = rearrange(lbl, "1 ... -> ...")
-            d[f"{key}{self.suffix}"] = compute_direction_field(
-                lbl, normalize=self.normalize,
-            )
+                label_np = np.asarray(arr)
+
+            # Strip leading non-spatial dims (channel) to get [*spatial]
+            while label_np.ndim > self.spatial_dims:
+                label_np = label_np[0]
+
+            direction = compute_direction_field(label_np, normalize=self.normalize)
+
+            if is_tensor:
+                direction = torch.from_numpy(direction).to(device)
+
+            d[f"{key}_direction"] = direction
+
         return d

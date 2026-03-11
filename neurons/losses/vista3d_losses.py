@@ -7,7 +7,7 @@ Composes three standalone losses:
 - GeometryLoss  (from ``neurons.losses.geometry``)
 """
 
-from neurons.losses.loss import BaseCombinedLoss
+from neurons.losses.cosmos import BaseCombinedLoss
 
 
 class Vista3DLoss(BaseCombinedLoss):

@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 warnings.filterwarnings("ignore", message=r".*isinstance.*LeafSpec.*is deprecated.*")
 warnings.filterwarnings("ignore", message=r".*AccumulateGrad.*stream.*mismatch.*")
+warnings.filterwarnings("ignore", message=".*lru_cache.*", category=UserWarning)
 
 import hydra
 import pytorch_lightning as pl

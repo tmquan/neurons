@@ -13,7 +13,7 @@ encouraging the backbone representations to be invariant to data
 augmentation.  This is useful when fine-tuning the frozen backbone.
 """
 
-from neurons.losses.loss import BaseCombinedLossWithConsistency
+from neurons.losses.cosmos import BaseCombinedLossWithConsistency
 
 
 class CosmosTransfer3DLoss(BaseCombinedLossWithConsistency):

@@ -1,168 +1,187 @@
-"""GPU-accelerated ndimage operations via cucim/cupy, with scipy CPU fallback.
+"""GPU-accelerated image processing utilities with cucim, scipy fallback.
 
-Provides drop-in replacements for common scipy.ndimage functions:
+Provides numpy-in / numpy-out wrappers for:
 
-- ``distance_transform_edt`` — via ``cucim.core.operations.morphology``
-- ``gaussian_filter``        — via ``cupyx.scipy.ndimage``
-- ``label``                  — via ``cupyx.scipy.ndimage``
-- ``generate_binary_structure`` — via ``cupyx.scipy.ndimage``
-- ``center_of_mass``         — via ``cupyx.scipy.ndimage``
+- Euclidean distance transform (EDT)  — ``cucim.core.operations.morphology``
+- Gaussian filter                     — ``cucim.skimage.filters``
+- Per-label centroid                  — ``cucim.skimage.measure.regionprops``
+- Connected-component labeling        — ``cucim.skimage.measure``
+- Binary structure generation         — ``scipy.ndimage`` (no cucim equivalent)
 
-Falls back to scipy on CPU-only machines or in forked DataLoader workers
-where CUDA contexts are invalid.
-
-All public functions accept **numpy arrays** and return **numpy arrays**.
+When cucim is installed and a CUDA device is available, operations run
+on the GPU.  In forked DataLoader workers the CPU path is used
+automatically since CUDA contexts do not survive ``fork()``.
 """
 
-from __future__ import annotations
-
 import os
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-try:
-    import cupy as cp
-    from cucim.core.operations.morphology import (
-        distance_transform_edt as _cucim_edt,
-    )
-    from cupyx.scipy.ndimage import (
-        center_of_mass as _cp_center_of_mass,
-        gaussian_filter as _cp_gaussian,
-        generate_binary_structure as _cp_gen_struct,
-        label as _cp_label,
-    )
+_pid_gpu_cache: dict = {}
 
-    _HAS_CUCIM = True
-except ImportError:
-    _HAS_CUCIM = False
-
-_CHECKED: Optional[bool] = None
-_MAIN_PID: Optional[int] = None
+_CUCIM_AVAILABLE: Optional[bool] = None
 
 
-def is_available() -> bool:
-    """Return True if cucim/cupy is importable and a CUDA device is visible."""
-    if not _HAS_CUCIM:
-        return False
-    try:
-        cp.cuda.Device(0).compute_capability
-        return True
-    except Exception:
-        return False
+def _cucim_available() -> bool:
+    global _CUCIM_AVAILABLE
+    if _CUCIM_AVAILABLE is None:
+        try:
+            import cucim  # noqa: F401
+            _CUCIM_AVAILABLE = True
+        except ImportError:
+            _CUCIM_AVAILABLE = False
+    return _CUCIM_AVAILABLE
 
 
 def _use_gpu() -> bool:
-    """Return True only when cucim/cupy is usable in the *current* process.
+    """Return True when the GPU (cucim/cupy) code path should be used.
 
-    CUDA contexts do not survive ``fork()``, so forked DataLoader workers
-    must not attempt GPU ops even if the main process can.
+    Checks cucim availability, the ``NEURONS_FORCE_CPU`` env var, and
+    whether CUDA is functional in the current process (handles fork).
+    Result is cached per-PID so forked workers re-probe once.
     """
-    global _CHECKED, _MAIN_PID
-
-    current_pid = os.getpid()
-
-    if _CHECKED is None:
-        _CHECKED = is_available()
-        if _CHECKED:
-            _MAIN_PID = current_pid
-        return _CHECKED
-
-    if not _CHECKED:
+    if not _cucim_available():
+        return False
+    if os.environ.get("NEURONS_FORCE_CPU", ""):
+        return False
+    pid = os.getpid()
+    if pid in _pid_gpu_cache:
+        return _pid_gpu_cache[pid]
+    try:
+        import cupy as cp
+        cp.cuda.runtime.getDevice()
+        _pid_gpu_cache[pid] = True
+        return True
+    except Exception:
+        _pid_gpu_cache[pid] = False
         return False
 
-    if _MAIN_PID is not None and current_pid != _MAIN_PID:
-        return False
 
-    return True
-
-
-# ======================================================================
-# numpy-in / numpy-out wrappers  (drop-in scipy replacements)
-# ======================================================================
-
+# ------------------------------------------------------------------
+# Euclidean distance transform
+# ------------------------------------------------------------------
 
 def distance_transform_edt(
     mask: np.ndarray,
-    sampling: Optional[Sequence[float]] = None,
-    return_distances: bool = True,
-    return_indices: bool = False,
+    sampling: Optional[Union[float, Sequence[float]]] = None,
 ) -> np.ndarray:
-    """Euclidean distance transform via cucim (GPU) or scipy (CPU)."""
-    if _use_gpu() and not return_indices:
-        mask_gpu = cp.asarray(mask)
-        dt_gpu = _cucim_edt(mask_gpu, sampling=sampling)
-        return cp.asnumpy(dt_gpu)
+    """Euclidean distance transform with cucim GPU acceleration."""
+    if _use_gpu():
+        try:
+            import cupy as cp
+            from cucim.core.operations.morphology import (
+                distance_transform_edt as _cucim_edt,
+            )
+            result = _cucim_edt(cp.asarray(mask))
+            return cp.asnumpy(result)
+        except Exception:
+            pass
+    from scipy.ndimage import distance_transform_edt as _scipy_edt
+    return _scipy_edt(mask, sampling=sampling)
 
-    from scipy.ndimage import distance_transform_edt as _sp_edt
 
-    return _sp_edt(
-        mask,
-        sampling=sampling,
-        return_distances=return_distances,
-        return_indices=return_indices,
-    )
-
+# ------------------------------------------------------------------
+# Gaussian filter
+# ------------------------------------------------------------------
 
 def gaussian_filter(
     input: np.ndarray,
     sigma: Union[float, Sequence[float]],
-    order: Union[int, Sequence[int]] = 0,
-    mode: str = "reflect",
-    truncate: float = 4.0,
+    **kwargs,
 ) -> np.ndarray:
-    """Gaussian filter via cupy (GPU) or scipy (CPU)."""
+    """Gaussian filter with cucim GPU acceleration.
+
+    GPU path uses ``cucim.skimage.filters.gaussian``; CPU fallback
+    uses ``scipy.ndimage.gaussian_filter``.
+    """
     if _use_gpu():
-        out_gpu = _cp_gaussian(
-            cp.asarray(input), sigma=sigma, order=order,
-            mode=mode, truncate=truncate,
-        )
-        return cp.asnumpy(out_gpu)
+        try:
+            import cupy as cp
+            from cucim.skimage.filters import gaussian as _cucim_gaussian
+            mode = kwargs.pop("mode", "reflect")
+            cval = kwargs.pop("cval", 0.0)
+            result = _cucim_gaussian(
+                cp.asarray(input),
+                sigma=sigma,
+                mode=mode,
+                cval=cval,
+                preserve_range=True,
+            )
+            return cp.asnumpy(result)
+        except Exception:
+            pass
+    from scipy.ndimage import gaussian_filter as _scipy_gf
+    return _scipy_gf(input, sigma, **kwargs)
 
-    from scipy.ndimage import gaussian_filter as _sp_gaussian
 
-    return _sp_gaussian(
-        input, sigma=sigma, order=order, mode=mode, truncate=truncate,
-    )
+# ------------------------------------------------------------------
+# Per-label centroid
+# ------------------------------------------------------------------
 
+def centroid(
+    labels: np.ndarray,
+    index: Optional[Union[int, Sequence[int], np.ndarray]] = None,
+) -> Union[Tuple[float, ...], list]:
+    """Compute unweighted centroids for labeled regions.
+
+    GPU path uses ``cucim.skimage.measure.regionprops``; CPU fallback
+    uses ``scipy.ndimage.center_of_mass``.
+
+    Returns the same format as ``scipy.ndimage.center_of_mass``:
+    a single tuple when *index* is scalar, or a list of tuples.
+    """
+    if _use_gpu():
+        try:
+            import cupy as cp
+            from cucim.skimage.measure import regionprops
+            props = regionprops(cp.asarray(labels))
+            prop_map = {
+                int(p.label): tuple(float(c) for c in p.centroid)
+                for p in props
+            }
+            if index is None:
+                return list(prop_map.values())
+            idx = np.atleast_1d(np.asarray(index))
+            zero = (0.0,) * labels.ndim
+            result = [prop_map.get(int(uid), zero) for uid in idx]
+            return result[0] if np.ndim(index) == 0 else result
+        except Exception:
+            pass
+    from scipy.ndimage import center_of_mass as _scipy_com
+    ones = np.ones_like(labels, dtype=np.float32)
+    return _scipy_com(ones, labels, index)
+
+
+# ------------------------------------------------------------------
+# Connected-component labeling
+# ------------------------------------------------------------------
 
 def label(
     input: np.ndarray,
     structure: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, int]:
-    """Connected-component labelling via cupy (GPU) or scipy (CPU)."""
+    """Connected-component labeling with cucim GPU acceleration.
+
+    Returns ``(labeled_array, num_features)`` matching scipy's API.
+    """
     if _use_gpu():
-        struct_gpu = cp.asarray(structure) if structure is not None else None
-        lbl_gpu, n = _cp_label(cp.asarray(input), structure=struct_gpu)
-        return cp.asnumpy(lbl_gpu), int(n)
+        try:
+            import cupy as cp
+            from cucim.skimage.measure import label as _cucim_label
+            labeled = _cucim_label(cp.asarray(input))
+            return cp.asnumpy(labeled), int(labeled.max())
+        except Exception:
+            pass
+    from scipy.ndimage import label as _scipy_label
+    return _scipy_label(input, structure=structure)
 
-    from scipy.ndimage import label as _sp_label
 
-    return _sp_label(input, structure=structure)
-
+# ------------------------------------------------------------------
+# Binary structure generation (no cucim equivalent — scipy only)
+# ------------------------------------------------------------------
 
 def generate_binary_structure(rank: int, connectivity: int) -> np.ndarray:
-    """Generate structuring element via cupy (GPU) or scipy (CPU)."""
-    if _use_gpu():
-        return cp.asnumpy(_cp_gen_struct(rank, connectivity))
-
-    from scipy.ndimage import generate_binary_structure as _sp_gen
-
-    return _sp_gen(rank, connectivity)
-
-
-def center_of_mass(
-    input: np.ndarray,
-    labels: Optional[np.ndarray] = None,
-    index: Optional[Union[int, Sequence[int]]] = None,
-) -> Union[Tuple, List[Tuple]]:
-    """Centre-of-mass via cupy (GPU) or scipy (CPU)."""
-    if _use_gpu():
-        lbl_gpu = cp.asarray(labels) if labels is not None else None
-        return _cp_center_of_mass(
-            cp.asarray(input), labels=lbl_gpu, index=index,
-        )
-
-    from scipy.ndimage import center_of_mass as _sp_com
-
-    return _sp_com(input, labels=labels, index=index)
+    """Generate binary structure element (always CPU, result is tiny)."""
+    from scipy.ndimage import generate_binary_structure as _scipy_gbs
+    return _scipy_gbs(rank, connectivity)

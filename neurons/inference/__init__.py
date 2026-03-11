@@ -9,17 +9,4 @@ Includes:
 - EmbeddingStitcher: Merge-split reconciliation of instance IDs across patches
 """
 
-from neurons.inference.soft_clustering import SoftMeanShift, HoughVoting
-from neurons.inference.sliding_window import (
-    create_gaussian_weight,
-    sliding_window_inference,
-)
-from neurons.inference.stitcher import EmbeddingStitcher
-
-__all__ = [
-    "SoftMeanShift",
-    "HoughVoting",
-    "create_gaussian_weight",
-    "sliding_window_inference",
-    "EmbeddingStitcher",
-]
+# TODO: Implement inference utilities

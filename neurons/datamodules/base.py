@@ -22,7 +22,7 @@ from monai.transforms import (
 )
 
 from neurons.datasets.base import CircuitDataset
-from neurons.transforms import Labeld, Directiond, Covarianced, InstanceWeightsd
+from neurons.transforms import Labeld, Directiond, Covarianced
 
 
 class CircuitDataModule(pl.LightningDataModule, ABC):
