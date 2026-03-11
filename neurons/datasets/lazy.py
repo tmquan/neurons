@@ -317,7 +317,7 @@ class LazyVolDataset(Dataset):
                 handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
             )
             if handle.find_boundaries > 0 and rng.random() < handle.find_boundaries:
-                from skimage.segmentation import find_boundaries
+                from neurons.transforms.find_boundaries import find_boundaries
                 label[find_boundaries(label, mode="inner")] = 0
             sample["label"] = label
 

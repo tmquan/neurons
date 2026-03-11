@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
-from skimage.segmentation import find_boundaries as _skimage_find_boundaries
+from neurons.transforms.find_boundaries import find_boundaries as _find_boundaries
 
 from neurons.datasets.base import CircuitDataset
 from neurons.preprocessors import HDF5Preprocessor, TIFFPreprocessor
@@ -119,7 +119,7 @@ class SNEMI3DDataset(CircuitDataset):
                 labels = None
 
             if labels is not None and float(vol_spec.get("find_boundaries", 0)) > 0:
-                labels[_skimage_find_boundaries(labels, mode='inner')] = 0
+                labels[_find_boundaries(labels, mode='inner')] = 0
 
             n_slices = inputs.shape[0]
             vol_name = vol_spec["vol"]

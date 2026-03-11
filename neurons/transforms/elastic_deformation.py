@@ -7,7 +7,7 @@ import torch
 from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
-from neurons.utils.gpu_ndimage import gaussian_filter
+from neurons.transforms.edt import gaussian_filter
 
 
 class ElasticDeformationd(MapTransform, Randomizable):

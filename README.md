@@ -202,18 +202,19 @@ loss:
 
 ## GPU Acceleration
 
-When [cupy](https://cupy.dev/) is installed, several expensive operations
-are automatically accelerated on GPU:
+When [cucim](https://github.com/rapidsai/cucim) is installed, several
+expensive operations are automatically accelerated on GPU:
 
-| Operation | CPU fallback | GPU (cupy) |
-|-----------|-------------|------------|
-| Distance transform (EDT) | `scipy.ndimage.distance_transform_edt` | `cupyx.scipy.ndimage.distance_transform_edt` |
+| Operation | CPU fallback | GPU (cucim) |
+|-----------|-------------|-------------|
+| Distance transform (EDT) | `scipy.ndimage.distance_transform_edt` | `cucim.core.operations.morphology.distance_transform_edt` |
 | Gaussian filter | `scipy.ndimage.gaussian_filter` | `cupyx.scipy.ndimage.gaussian_filter` |
 | Connected components | `scipy.ndimage.label` | `cupyx.scipy.ndimage.label` |
+| Boundary detection | `skimage.segmentation.find_boundaries` | `cucim.skimage.segmentation.find_boundaries` |
 
-Data transfer between PyTorch and cupy uses **DLPack zero-copy** — no
-host/device round-trips.  See `neurons/utils/gpu_ndimage.py` for the
-`torch_to_cupy()` / `cupy_to_torch()` helpers.
+All GPU-accelerated functions live in `neurons/transforms/edt.py` and
+`neurons/transforms/find_boundaries.py` with automatic scipy/skimage
+CPU fallback.
 
 DataLoader workers (forked processes) automatically fall back to the CPU
 path since CUDA contexts do not survive `fork()`.

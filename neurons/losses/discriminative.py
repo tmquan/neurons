@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
-from neurons.utils.gpu_ndimage import (
+from neurons.transforms.edt import (
     distance_transform_edt as _gpu_edt,
     _use_gpu as _cupy_available,
 )
@@ -263,8 +263,8 @@ def _compute_skeleton_offsets(
 # Covariance target: cupy-native (GPU) and scipy (CPU/pmap) paths
 # -----------------------------------------------------------------------
 
-def _covariance_one_cupy(labels_cp, uid, S, sigma):
-    """Per-instance EDT structure tensor, entirely in cupy (no host transfers).
+def _covariance_one_gpu(labels_np, uid, S, sigma):
+    """Per-instance EDT structure tensor via cucim/scipy (numpy arrays).
 
     Five phases:
     1. EDT of the binary instance mask
@@ -273,64 +273,56 @@ def _covariance_one_cupy(labels_cp, uid, S, sigma):
     4. Isotropy blending: lerp toward isotropic tensor at the medial axis
     5. EDT magnitude scaling: centre voxels carry larger tensors
 
-    Returns (uid, mask_cp, st_cp) — all cupy arrays.
+    Returns (uid, mask, st) — all numpy arrays.
     """
-    import cupy as cp
-    from cupyx.scipy.ndimage import distance_transform_edt as cp_edt
-    from cupyx.scipy.ndimage import gaussian_filter as cp_gauss
+    from neurons.transforms.edt import distance_transform_edt, gaussian_filter
 
     sigma_d = max(1.0, sigma / 3.0)
-    spatial_shape = labels_cp.shape
+    spatial_shape = labels_np.shape
 
-    mask = labels_cp == uid
+    mask = labels_np == uid
     if int(mask.sum()) < 2:
         return None
 
-    # Phase 1: Euclidean distance transform of the instance mask
-    dt = cp_edt(mask).astype(cp.float64)
-    mask_f = mask.astype(cp.float64)
+    dt = distance_transform_edt(mask).astype(np.float64)
+    mask_f = mask.astype(np.float64)
     edt_max = float(dt.max())
-    norm = cp.maximum(cp_gauss(mask_f, sigma=sigma), 1e-10)
+    norm = np.maximum(gaussian_filter(mask_f, sigma=sigma), 1e-10)
 
-    # Phase 2: smoothed spatial gradient of the EDT (one per spatial dim)
     grads = []
     for i in range(S):
         order = [0] * S
-        order[S - 1 - i] = 1                                      # derivative along dim i (reversed xy order)
-        g = cp_gauss(dt, sigma=sigma_d, order=order)
-        g = g * mask_f                                             # zero outside instance
+        order[S - 1 - i] = 1
+        g = gaussian_filter(dt, sigma=sigma_d, order=order)
+        g = g * mask_f
         grads.append(g)
 
-    # Phase 3: structure tensor = smoothed outer product of gradient vectors
-    st_inst = cp.zeros((S * S,) + spatial_shape, dtype=cp.float32)
+    st_inst = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
     idx = 0
     for i in range(S):
         for j in range(S):
-            st_inst[idx][mask] = (cp_gauss(grads[i] * grads[j], sigma=sigma) / norm)[mask]
+            st_inst[idx][mask] = (gaussian_filter(grads[i] * grads[j], sigma=sigma) / norm)[mask]
             idx += 1
 
-    # Phase 4: isotropy blending — lerp ST toward (trace/S)*I at medial axis
-    # w = 0 at boundary (preserve anisotropy), w = 1 at centre (fully isotropic)
-    w = cp.zeros_like(dt)
+    w = np.zeros_like(dt)
     if edt_max > 1e-6:
         w[mask] = (dt[mask] / edt_max) ** 2
 
     trace = sum(st_inst[i * S + i] for i in range(S))
-    iso_val = trace / S                                            # isotropic value = trace / S
+    iso_val = trace / S
 
     idx = 0
     for i in range(S):
         for j in range(S):
             if i == j:
-                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask] + w[mask] * iso_val[mask]).astype(cp.float32)
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask] + w[mask] * iso_val[mask]).astype(np.float32)
             else:
-                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(cp.float32)
+                st_inst[idx][mask] = ((1.0 - w[mask]) * st_inst[idx][mask]).astype(np.float32)
             idx += 1
 
-    # Phase 5: scale by normalised EDT so centre voxels have larger magnitude
-    edt_scale = cp.zeros_like(dt, dtype=cp.float32)
+    edt_scale = np.zeros_like(dt, dtype=np.float32)
     if edt_max > 1e-6:
-        edt_scale[mask] = (dt[mask] / edt_max).astype(cp.float32)
+        edt_scale[mask] = (dt[mask] / edt_max).astype(np.float32)
     for c in range(S * S):
         st_inst[c][mask] = st_inst[c][mask] * edt_scale[mask]
 
@@ -339,7 +331,7 @@ def _covariance_one_cupy(labels_cp, uid, S, sigma):
 
 def _covariance_worker(args):
     """Per-instance structure tensor using scipy (CPU) -- for pmap."""
-    from scipy.ndimage import distance_transform_edt, gaussian_filter
+    from neurons.transforms.edt import distance_transform_edt, gaussian_filter
     labels_np, uid, S, sigma = args
     sigma_d = max(1.0, sigma / 3.0)
     spatial_shape = labels_np.shape
@@ -402,8 +394,7 @@ def _compute_covariance(
 ) -> torch.Tensor:
     """EDT structure tensor per foreground pixel.
 
-    GPU path: cupy-native via DLPack — zero-copy torch→cupy, all per-instance
-    EDT + gaussian_filter stay in cupy, zero-copy cupy→torch at the end.
+    GPU path: cucim-backed EDT + gaussian_filter via edt.py.
     CPU path: all instances processed in parallel via pmap.
     """
     if spatial_shape is None:
@@ -413,28 +404,24 @@ def _compute_covariance(
     device = coords.device
 
     if _cupy_available():
-        import cupy as cp
-        from neurons.utils.gpu_ndimage import torch_to_cupy, cupy_to_torch
+        labels_np = lbl_flat.cpu().numpy().reshape(spatial_shape)
+        st_np = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
 
-        labels_cp = torch_to_cupy(lbl_flat).reshape(spatial_shape) # zero-copy GPU
-        st_cp = cp.zeros((S * S,) + spatial_shape, dtype=cp.float32)
-
-        uids = cp.unique(labels_cp)
+        uids = np.unique(labels_np)
         uids = uids[uids > 0]
 
         for uid in uids:
-            res = _covariance_one_cupy(labels_cp, int(uid), S, sigma)
+            res = _covariance_one_gpu(labels_np, int(uid), S, sigma)
             if res is None:
                 continue
-            _, mask_cp, st_inst_cp = res                           # cupy arrays
+            _, mask_np, st_inst_np = res
             for c in range(S * S):
-                st_cp[c][mask_cp] = st_inst_cp[c][mask_cp]
+                st_np[c][mask_np] = st_inst_np[c][mask_np]
 
         return rearrange(
-            cupy_to_torch(st_cp, device=device).float(), "c ... -> c (...)",
-        )                                                          # [S*S, N]
+            torch.from_numpy(st_np), "c ... -> c (...)",
+        ).to(device=device, dtype=torch.float32)
 
-    # CPU fallback — parallel via pmap
     labels_np = lbl_flat.cpu().numpy().reshape(spatial_shape)
     st_np = np.zeros((S * S,) + spatial_shape, dtype=np.float32)
 
@@ -455,7 +442,7 @@ def _compute_covariance(
 
     return rearrange(
         torch.from_numpy(st_np), "c ... -> c (...)",
-    ).to(device=device, dtype=torch.float32)                       # [S*S, N]
+    ).to(device=device, dtype=torch.float32)
 
 
 @torch.no_grad()
@@ -498,15 +485,9 @@ def _compute_skeleton_targets(
             for s in range(S):
                 nr_skel_flat[s, fi] = nearest_ridge[:, s]
 
-            if _cupy_available():
-                from neurons.utils.gpu_ndimage import torch_to_cupy, cupy_to_torch, cupy_edt
-                dt = cupy_to_torch(
-                    cupy_edt(torch_to_cupy(mask)), device=device,
-                ).float()
-            else:
-                dt = torch.from_numpy(
-                    _gpu_edt(mask.cpu().numpy())
-                ).to(device=device, dtype=torch.float32)
+            dt = torch.from_numpy(
+                _gpu_edt(mask.cpu().numpy())
+            ).to(device=device, dtype=torch.float32)
             dt_max = dt[mask].max()
             normed = dt / dt_max if dt_max > 0 else dt
             dt_norm[b, 0][mask] = normed[mask]

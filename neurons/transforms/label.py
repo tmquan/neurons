@@ -2,7 +2,7 @@
 
 Replaces skimage-based relabeling with ``cupyx.scipy.ndimage.label``
 (falling back to ``scipy.ndimage.label`` on CPU-only machines) via the
-``neurons.utils.gpu_ndimage`` wrapper.
+``neurons.transforms.edt`` module.
 
 Standalone helpers
 ------------------
@@ -23,7 +23,8 @@ from einops import rearrange
 from monai.config import KeysCollection
 from monai.transforms import MapTransform
 
-from neurons.utils.gpu_ndimage import (
+from neurons.transforms.edt import (
+    distance_transform_edt as _edt,
     label as _gpu_label,
     generate_binary_structure as _gpu_gen_struct,
 )
@@ -228,8 +229,6 @@ class InstanceWeightsd(MapTransform):
         self.weight_bone = weight_bone
 
     def __call__(self, data: Dict) -> Dict:
-        from scipy.ndimage import distance_transform_edt
-
         d = dict(data)
         for key in self.key_iterator(d):
             lbl = d[key]
@@ -259,7 +258,7 @@ class InstanceWeightsd(MapTransform):
                 unique_ids = unique_ids[unique_ids > 0]
                 for uid in unique_ids:
                     mask = lbl_np == uid
-                    dt = distance_transform_edt(mask).astype(np.float32)
+                    dt = _edt(mask).astype(np.float32)
                     dt_max = dt.max()
                     if dt_max > 0:
                         dt /= dt_max

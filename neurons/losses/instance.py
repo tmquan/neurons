@@ -22,7 +22,7 @@ from neurons.utils.parallel import pmap
 
 def _edt_worker(args: Tuple[np.ndarray, int]) -> Tuple[int, np.ndarray]:
     """Per-instance normalised EDT for pmap subprocesses (CPU/scipy)."""
-    from scipy.ndimage import distance_transform_edt
+    from neurons.transforms.edt import distance_transform_edt
     label_np_b, uid = args
     mask = label_np_b == uid
     dt = distance_transform_edt(mask).astype(np.float32)
@@ -96,34 +96,30 @@ class InstanceLoss(nn.Module):
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
         """Per-instance EDT skeleton weight.
 
-        GPU path (cupy): DLPack zero-copy torch->cupy, exact L2 EDT.
+        GPU path (cucim): numpy round-trip through cucim EDT.
         GPU path (torch): approximate L-inf EDT via morphological erosion.
         CPU path: all instances across batch via single pmap call.
         """
-        from neurons.utils.gpu_ndimage import _use_gpu as _cupy_ok
+        from neurons.transforms.edt import _use_gpu, distance_transform_edt
 
         B = label.shape[0]
 
-        if _cupy_ok():
-            import cupy as cp
-            from cupyx.scipy.ndimage import distance_transform_edt as cp_edt
-            from neurons.utils.gpu_ndimage import torch_to_cupy, cupy_to_torch
-
-            label_cp = torch_to_cupy(label)
-            weight_cp = cp.ones(label_cp.shape, dtype=cp.float32)
+        if _use_gpu():
+            label_np = label.cpu().numpy()
+            weight_np = np.ones(label_np.shape, dtype=np.float32)
 
             for b in range(B):
-                fg_ids = cp.unique(label_cp[b])
+                fg_ids = np.unique(label_np[b])
                 fg_ids = fg_ids[fg_ids > 0]
                 for uid in fg_ids:
-                    mask = label_cp[b] == uid
-                    dt = cp_edt(mask).astype(cp.float32)
+                    mask = label_np[b] == uid
+                    dt = distance_transform_edt(mask).astype(np.float32)
                     dt_max = dt.max()
-                    if float(dt_max) > 0:
-                        dt = dt / dt_max
-                    weight_cp[b][mask] = 1.0 + dt[mask] * (self.weight_bone - 1.0)
+                    if dt_max > 0:
+                        dt /= dt_max
+                    weight_np[b][mask] = 1.0 + dt[mask] * (self.weight_bone - 1.0)
 
-            return cupy_to_torch(weight_cp, device=label.device).float()
+            return torch.from_numpy(weight_np).to(device=label.device)
 
         if label.is_cuda:
             return self._skeleton_weight_torch(label)

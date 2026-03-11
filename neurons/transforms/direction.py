@@ -5,7 +5,7 @@ center of mass of its instance.  This is a common regression target for
 instance segmentation models ("offset" or "direction" head).
 
 Uses ``cupyx.scipy.ndimage.center_of_mass`` (GPU) with scipy CPU fallback
-via ``neurons.utils.gpu_ndimage``.
+via ``neurons.transforms.edt``.
 
 MONAI dictionary transform
 --------------------------
@@ -21,7 +21,7 @@ from monai.config import KeysCollection
 from monai.transforms import MapTransform
 
 from neurons.transforms._utils import _cached_coordinate_grid, _to_numpy_labels
-from neurons.utils.gpu_ndimage import center_of_mass as _center_of_mass
+from neurons.transforms.edt import center_of_mass as _center_of_mass
 
 
 def compute_direction_field(labels, normalize: bool = True) -> torch.Tensor:

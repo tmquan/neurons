@@ -12,7 +12,7 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 16
+  num_workers: 4
   cache_rate: 0.0
   slice_mode: false
   num_samples: 16000
@@ -84,8 +84,8 @@ training:
   limit_val_batches: 100
   num_sanity_val_steps: 2
   log_every_n_steps: 50
-  benchmark: false
-  compile: false
+  benchmark: true
+  compile: true
   training_modes:
     - automatic
 
