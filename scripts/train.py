@@ -32,7 +32,14 @@ import pytorch_lightning as pl
 from pytorch_lightning.profilers import AdvancedProfiler, PyTorchProfiler, SimpleProfiler
 from pytorch_lightning.strategies import DDPStrategy, FSDPStrategy
 import torch
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf.base import ContainerMetadata
+from omegaconf.nodes import ValueNode, AnyNode
+torch.serialization.add_safe_globals([
+    Any,
+    dict,
+    DictConfig, ListConfig, ContainerMetadata, ValueNode, AnyNode,
+])
 from pytorch_lightning.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -427,7 +434,16 @@ def main(cfg: DictConfig) -> None:
 
     ckpt_path = cfg.get("ckpt_path", None)
     if ckpt_path:
-        print(f"Resuming from checkpoint: {ckpt_path}")
+        print(f"Loading model weights from checkpoint: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        state_dict = ckpt.get("state_dict", ckpt)
+        missing, unexpected = module.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"  Missing keys: {len(missing)}")
+        if unexpected:
+            print(f"  Unexpected keys: {len(unexpected)}")
+        print("  Model weights loaded (optimizer state skipped — fresh optimizer)")
+        ckpt_path = None
 
     interrupted = False
     try:

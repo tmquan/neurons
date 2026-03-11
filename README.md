@@ -115,13 +115,25 @@ python scripts/train.py --config-name snemi3d \
 python scripts/train.py --config-name combine
 ```
 
-### 5. Fast development run
+### 5. Resume from a previous checkpoint
+
+```bash
+python scripts/train.py --config-name snemi3d_microns \
+    +ckpt_path=outputs/checkpoints/last.ckpt
+```
+
+This loads model weights only (optimizer state is reset), so you can
+safely change freeze settings, learning rates, or model architecture
+between runs.  See [TRAINING.md](doc/TRAINING.md#95-loading-a-previous-checkpoint)
+for details on the warm-start behavior.
+
+### 6. Fast development run
 
 ```bash
 python scripts/train.py training.fast_dev_run=true
 ```
 
-### 6. Visualize volumes
+### 7. Visualize volumes
 
 ```bash
 # SNEMI3D (AC4 training volume, resolution 6x6x30 nm)
@@ -145,7 +157,7 @@ python -m neurons.visualizer \
 
 Opens a web viewer at `http://localhost:8899` with 4-panel layout (axial, coronal, sagittal, 3D Gaussian splats). Add `--no-browser` to skip auto-opening.
 
-### 7. Profile training
+### 8. Profile training
 
 ```bash
 python scripts/train.py --config-name profiler

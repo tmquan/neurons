@@ -608,7 +608,51 @@ optimizer:
   backbone_lr: 1.0e-5      # separate LR for DiT backbone (omit to use same as lr)
 ```
 
-### 9.5 Cosmos-Transfer vs Cosmos-Predict
+### 9.5 Loading a Previous Checkpoint
+
+Use `+ckpt_path=` to warm-start training from a previously saved checkpoint.
+The script loads **model weights only** and starts a fresh optimizer, which
+allows you to change the freeze schedule, optimizer settings, or model
+config between runs without hitting state-dict mismatches.
+
+```bash
+# Resume from a previous run's checkpoint
+PYTHONPATH=$(pwd) python scripts/train.py \
+    --config-name snemi3d_microns \
+    +ckpt_path=outputs/checkpoints/last.ckpt
+```
+
+This is a **warm-start**, not a full resume:
+
+- Model weights (backbone, heads, adapters) are restored.
+- Optimizer state, learning rate scheduler, and epoch counter are **not**
+  restored — training begins from epoch 0 with a fresh optimizer.
+- `strict=False` is used, so missing or unexpected keys are reported but
+  do not cause failures.  This lets you load checkpoints even when the
+  model architecture has changed (e.g. added/removed heads).
+
+#### When to use warm-start
+
+| Scenario | Use `+ckpt_path=` ? |
+|---|---|
+| Changing freeze config (e.g. unfreezing backbone for Phase 2) | Yes |
+| Changing optimizer or LR schedule | Yes |
+| Changing model architecture (added heads, different feature_size) | Yes (with `strict=False` warnings) |
+| Exact resume after crash (same config, same optimizer) | Yes (epoch counter resets, but weights are current) |
+
+#### Automatic checkpointing
+
+The `ModelCheckpoint` callback saves `last.ckpt` every epoch and
+`best-epoch=*.ckpt` based on validation loss.  Both are valid inputs
+for `+ckpt_path=`.
+
+#### PyTorch 2.6 compatibility
+
+Checkpoints are loaded with `weights_only=False` because Lightning
+checkpoints contain OmegaConf objects and other non-tensor globals.
+This is safe for your own checkpoints.
+
+### 9.6 Cosmos-Transfer vs Cosmos-Predict
 
 Both model families share the same architecture and freeze interface.
 The difference is in pretraining:
