@@ -114,7 +114,7 @@ loss:
   delta_d: 1.5
   weight_edge: 5.0
   weight_bone: 5.0
-  weight_geometry: 0.1
+  weight_geometry: 1.0
   dir_target: centroid
   weight_dir: 1.0
   weight_cov: 1.0

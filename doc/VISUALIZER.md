@@ -281,14 +281,14 @@ python -m neurons.visualizer --raw <volume> --seg <segmentation> --spacing <z,y,
 ```bash
 # SNEMI3D — AC4 training volume (resolution 6x6x30 nm)
 python -m neurons.visualizer \
-    --raw data/snemi3d/AC4_inputs.h5 \
-    --seg data/snemi3d/AC4_labels.h5 \
+    --raw data/SNEMI3D/AC4_inputs.h5 \
+    --seg data/SNEMI3D/AC4_labels.h5 \
     --spacing 30,6,6
 
 # SNEMI3D — AC3 test volume
 python -m neurons.visualizer \
-    --raw data/snemi3d/AC3_inputs.h5 \
-    --seg data/snemi3d/AC3_labels.h5 \
+    --raw data/SNEMI3D/AC3_inputs.h5 \
+    --seg data/SNEMI3D/AC3_labels.h5 \
     --spacing 30,6,6
 
 # CREMI3D — sample A (resolution 4x4x40 nm)
@@ -305,7 +305,7 @@ python -m neurons.visualizer \
 
 # Raw volume only (no segmentation overlay)
 python -m neurons.visualizer \
-    --raw data/snemi3d/AC4_inputs.h5 \
+    --raw data/SNEMI3D/AC4_inputs.h5 \
     --spacing 30,6,6
 ```
 

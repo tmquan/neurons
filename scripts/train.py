@@ -425,9 +425,13 @@ def main(cfg: DictConfig) -> None:
     print("Starting Training")
     print("=" * 60 + "\n")
 
+    ckpt_path = cfg.get("ckpt_path", None)
+    if ckpt_path:
+        print(f"Resuming from checkpoint: {ckpt_path}")
+
     interrupted = False
     try:
-        trainer.fit(module, datamodule)
+        trainer.fit(module, datamodule, ckpt_path=ckpt_path)
     except KeyboardInterrupt:
         print("\n\nTraining interrupted by user")
         interrupted = True
