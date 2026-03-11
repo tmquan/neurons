@@ -20,21 +20,21 @@ data:
 
   # Train: SNEMI3D AC4 + 4 MICRONS train crops
   train_volumes:
-    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_1024_x120000_y90000_z20000_volume, seg: minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_1024_x124100_y90000_z20000_volume, seg: minnie65_mip0_1024_x124100_y90000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_1024_x120000_y93100_z20000_volume, seg: minnie65_mip0_1024_x120000_y93100_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_1024_x124100_y93100_z20000_volume, seg: minnie65_mip0_1024_x124100_y93100_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_1024_x120000_y90000_z20000_volume, seg: minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_1024_x124100_y90000_z20000_volume, seg: minnie65_mip0_1024_x124100_y90000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_1024_x120000_y93100_z20000_volume, seg: minnie65_mip0_1024_x120000_y93100_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_1024_x124100_y93100_z20000_volume, seg: minnie65_mip0_1024_x124100_y93100_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
 
   # Val: held-out SNEMI3D AC3 + MICRONS test crop
   val_volumes:
-    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
 
   # Test: same as val
   test_volumes:
-    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 0.0}
-    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 0.0}
+    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D, find_boundaries: 1.0}
+    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS, find_boundaries: 1.0}
 
 # # --- vista3d ---
 # model:
