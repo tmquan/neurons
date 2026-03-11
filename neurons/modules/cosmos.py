@@ -89,7 +89,7 @@ class BaseCosmosModule(pl.LightningModule):
         loss_config = loss_config or {}
         training_config = training_config or {}
 
-        self.model = self._model_cls(
+        self.model = self.model_cls(
             in_channels=model_config.get("in_channels", 1),
             num_classes=model_config.get("num_classes", 16),
             emb_dim=model_config.get("emb_dim", 16),
@@ -105,21 +105,21 @@ class BaseCosmosModule(pl.LightningModule):
             dropout=model_config.get("dropout", 0.0),
         )
 
-        self.criterion = self._loss_cls(**loss_config)
+        self.criterion = self.loss_cls(**loss_config)
 
-        self._clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
-        self._ignore_index = loss_config.get("ignore_index", -100)
+        self.clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
+        self.ignore_index = loss_config.get("ignore_index", -100)
 
         self.training_modes: List[str] = list(
             training_config.get("training_modes", _DEFAULT_TRAINING_MODES)
         )
-        self._num_pos_points: int = training_config.get("num_pos_points", 5)
-        self._num_neg_points: int = training_config.get("num_neg_points", 5)
-        self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
+        self.num_pos_points: int = training_config.get("num_pos_points", 5)
+        self.num_neg_points: int = training_config.get("num_neg_points", 5)
+        self.point_sample_mode: str = training_config.get("point_sample_mode", "class")
 
-        self._variant = model_config.get("variant", "2B")
+        self.variant = model_config.get("variant", "2B")
 
-        self._freeze_schedule = {
+        self.freeze_schedule = {
             "vae_encoder": model_config.get("freeze_vae_encoder", True),
             "dit_backbone": model_config.get("freeze_dit_backbone", False),
             "vae_decoder": model_config.get("freeze_vae_decoder", False),
@@ -153,10 +153,10 @@ class BaseCosmosModule(pl.LightningModule):
             "vae_decoder": "_freeze_vae_decoder",
         }
         needs_optimizer_rebuild = False
-        for name, value in self._freeze_schedule.items():
+        for name, value in self.freeze_schedule.items():
             if isinstance(value, bool):
                 continue
-            want_frozen = self._should_freeze(value, epoch)
+            want_frozen = self.should_freeze(value, epoch)
             is_frozen = getattr(self.model, _FLAGS[name])
             if want_frozen and not is_frozen:
                 _METHODS[name][0]()
@@ -213,8 +213,8 @@ class BaseCosmosModule(pl.LightningModule):
     def _get_proofread_sub_mode(self, targets: Dict[str, torch.Tensor]) -> str:
         """Return ``"fractionary"`` for partial annotations, else ``"interactive"``."""
         labels = targets["labels"]
-        has_ignore = (labels == self._ignore_index).any()
-        has_valid_fg = (labels > 0).any() & (labels != self._ignore_index).any()
+        has_ignore = (labels == self.ignore_index).any()
+        has_valid_fg = (labels > 0).any() & (labels != self.ignore_index).any()
         if has_ignore and has_valid_fg:
             return "fractionary"
         return "interactive"
@@ -225,10 +225,10 @@ class BaseCosmosModule(pl.LightningModule):
         """Remap a fractionary-annotated patch to contiguous instance IDs."""
         targets = dict(targets)
         labels = targets["labels"]
-        unknown = labels == self._ignore_index
+        unknown = labels == self.ignore_index
 
         sem = targets["semantic_labels"].clone()
-        sem[unknown] = self._ignore_index
+        sem[unknown] = self.ignore_index
         targets["semantic_labels"] = sem
         targets["semantic_ids"] = sem
 
@@ -278,18 +278,18 @@ class BaseCosmosModule(pl.LightningModule):
     def _run_proofread(
         self, images: torch.Tensor, targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
-        sub_mode = self._get_proofread_sub_mode(targets)
+        sub_mode = self.get_proofread_sub_mode(targets)
         if sub_mode == "fractionary":
-            targets = self._resolve_fractionary_labels(targets)
+            targets = self.resolve_fractionary_labels(targets)
             targets.pop("_cached_weights", None)
             predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         else:
             point_prompts = sample_point_prompts(
                 targets["semantic_labels"],
                 targets["labels"],
-                num_pos=self._num_pos_points,
-                num_neg=self._num_neg_points,
-                sample_mode=self._point_sample_mode,
+                num_pos=self.num_pos_points,
+                num_neg=self.num_neg_points,
+                sample_mode=self.point_sample_mode,
             )
             predictions = self.model(images, point_prompts=point_prompts)
         return self.criterion(predictions, targets)
@@ -299,12 +299,12 @@ class BaseCosmosModule(pl.LightningModule):
     # ------------------------------------------------------------------
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        batch = self._strip_meta_tensor(batch)
+        batch = self.strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
-        targets = self._prepare_targets(batch)
+        targets = self.prepare_targets(batch)
 
         if len(self.training_modes) > 1:
             cached = self.criterion._compute_targets(targets["labels"], targets)
@@ -315,9 +315,9 @@ class BaseCosmosModule(pl.LightningModule):
 
         for mode in self.training_modes:
             if mode == "automatic":
-                losses = self._run_automatic(images, targets)
+                losses = self.run_automatic(images, targets)
             elif mode == "proofread":
-                losses = self._run_proofread(images, targets)
+                losses = self.run_proofread(images, targets)
             else:
                 raise ValueError(f"Unknown training mode: {mode}")
             mode_losses.append(losses["loss"])
@@ -359,7 +359,7 @@ class BaseCosmosModule(pl.LightningModule):
 
         fg_mask = targets["labels"] > 0
         if fg_mask.any():
-            ins_pred, _, _ = self._clusterer(predictions["instance"].float(), fg_mask)
+            ins_pred, _, _ = self.clusterer(predictions["instance"].float(), fg_mask)
             ins_gt = targets["labels"]
 
             ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
@@ -376,12 +376,12 @@ class BaseCosmosModule(pl.LightningModule):
 
     def _eval_step(self, batch: Dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         """Shared evaluation logic for validation and test steps."""
-        batch = self._strip_meta_tensor(batch)
+        batch = self.strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
             images = rearrange(images, _EXPAND_PATTERN)
 
-        targets = self._prepare_targets(batch)
+        targets = self.prepare_targets(batch)
         predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         losses = self.criterion(predictions, targets)
 
@@ -393,14 +393,14 @@ class BaseCosmosModule(pl.LightningModule):
                 sync_dist=True, batch_size=bs,
             )
 
-        self._eval_metrics(predictions, targets, prefix, bs)
+        self.eval_metrics(predictions, targets, prefix, bs)
         return losses["loss"]
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        return self._eval_step(batch, "val")
+        return self.eval_step(batch, "val")
 
     def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        return self._eval_step(batch, "test")
+        return self.eval_step(batch, "test")
 
     # ------------------------------------------------------------------
     # Optimizer
@@ -466,8 +466,8 @@ class BaseCosmosModule(pl.LightningModule):
         input_shape: tuple = (1, 1, 32, 64, 64),
     ) -> Dict[str, Any]:
         """Verify the 3-D model fits the 3-stage volumetric segmentation task."""
-        result = self._verify_fit_fn(
-            variant=self._variant,
+        result = self.verify_fit_fn(
+            variant=self.variant,
             input_shape=input_shape,
             num_classes=self.model.num_classes,
             emb_dim=self.model.emb_dim,
@@ -479,7 +479,7 @@ class BaseCosmosModule(pl.LightningModule):
                 result["errors"].append(f"Invalid training mode: {mode}")
                 result["compatible"] = False
 
-        if self._variant == "14B" and self.criterion.weight_geometry > 0:
+        if self.variant == "14B" and self.criterion.weight_geometry > 0:
             result["warnings"].append(
                 "14B + 3-D geometry head is extremely memory-intensive.  "
                 "Consider weight_geometry=0 or gradient checkpointing."
@@ -493,5 +493,5 @@ class BaseCosmosModule(pl.LightningModule):
         result["checks"]["backbone_loaded"] = self.model._backbone_loaded
         result["checks"]["backbone_frozen"] = self.model._freeze_dit_backbone
         result["checks"]["training_modes"] = self.training_modes
-        result["checks"]["variant"] = self._variant
+        result["checks"]["variant"] = self.variant
         return result
