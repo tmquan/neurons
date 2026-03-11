@@ -35,6 +35,6 @@ class CosmosTransfer3DModule(BaseCosmosModule):
         training_config: Training behaviour (modes, point sampling, ...).
     """
 
-    model_cls = CosmosTransfer3DWrapper
-    loss_cls = CosmosTransfer3DLoss
-    verify_fit_fn = staticmethod(verify_fit)
+    _model_cls = CosmosTransfer3DWrapper
+    _loss_cls = CosmosTransfer3DLoss
+    _verify_fit_fn = staticmethod(verify_fit)

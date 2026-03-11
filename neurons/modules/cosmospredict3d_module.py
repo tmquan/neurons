@@ -35,6 +35,6 @@ class CosmosPredict3DModule(BaseCosmosModule):
         training_config: Training behaviour (modes, point sampling, ...).
     """
 
-    model_cls = CosmosPredict3DWrapper
-    loss_cls = CosmosPredict3DLoss
-    verify_fit_fn = staticmethod(verify_fit)
+    _model_cls = CosmosPredict3DWrapper
+    _loss_cls = CosmosPredict3DLoss
+    _verify_fit_fn = staticmethod(verify_fit)

@@ -104,7 +104,7 @@ class BaseVistaModule(pl.LightningModule):
 
         self.criterion = self._loss_cls(**loss_config)
 
-        self._clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
+        self.clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
         self._ignore_index = loss_config.get("ignore_index", -100)
 
         self.training_modes: List[str] = list(
@@ -310,7 +310,7 @@ class BaseVistaModule(pl.LightningModule):
 
         fg_mask = targets["labels"] > 0
         if fg_mask.any():
-            ins_pred, _, _ = self._clusterer(predictions["instance"], fg_mask)
+            ins_pred, _, _ = self.clusterer(predictions["instance"], fg_mask)
             ins_gt = targets["labels"]
 
             ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
