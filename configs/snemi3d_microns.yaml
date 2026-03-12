@@ -85,7 +85,7 @@ training:
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   benchmark: true
-  compile: true
+  compile: false
   training_modes:
     - automatic
 
