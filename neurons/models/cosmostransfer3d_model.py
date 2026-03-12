@@ -691,6 +691,8 @@ class CosmosTransfer3DWrapper(nn.Module):
 
         if freeze_dit_backbone:
             self.freeze_dit_backbone()
+        else:
+            self.dit.train()
 
         self._make_params_contiguous()
 
