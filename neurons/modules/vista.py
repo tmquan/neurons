@@ -296,9 +296,13 @@ class BaseVistaModule(pl.LightningModule):
         prefix: str,
         bs: int,
     ) -> None:
-        sem_pred = predictions["semantic"].argmax(dim=1)
+        sem_logits = predictions["semantic"]
+        active = getattr(self.criterion.semantic_loss, "active_classes", None)
+        if active is not None and active < sem_logits.shape[1]:
+            sem_logits = sem_logits[:, :active]
+        sem_pred = sem_logits.argmax(dim=1)
         sem_gt = targets["semantic_labels"]
-        n_cls = predictions["semantic"].shape[1]
+        n_cls = sem_logits.shape[1]
 
         sem_acc = reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean")
         sem_iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls)

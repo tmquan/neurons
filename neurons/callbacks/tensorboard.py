@@ -559,7 +559,7 @@ class ImageLogger(pl.Callback):
             preds_auto = pl_module.model(images[:n])
 
         preds_auto = {k: v.float() if isinstance(v, torch.Tensor) and v.is_floating_point() else v for k, v in preds_auto.items()}
-        clusterer = getattr(pl_module, "_clusterer", None)
+        clusterer = getattr(pl_module, "clusterer", None) or getattr(pl_module, "_clusterer", None)
 
         criterion = getattr(pl_module, "criterion", None)
         geom_loss = getattr(criterion, "geometry_loss", None) if criterion else None

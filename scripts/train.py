@@ -370,6 +370,16 @@ def main(cfg: DictConfig) -> None:
     module = get_module(cfg)
     print(f"\nModule: {module.__class__.__name__}")
 
+    backbone_loaded = getattr(getattr(module, "model", None), "_backbone_loaded", None)
+    if backbone_loaded is not None:
+        print(f"  Backbone loaded: {backbone_loaded}")
+        if not backbone_loaded:
+            print(
+                "  WARNING: pretrained backbone was NOT loaded — "
+                "the model will train from random initialisation. "
+                "Check HuggingFace cache, network access, and diffusers version."
+            )
+
     if cfg.get("training", {}).get("compile", False):
         module.model = torch.compile(module.model, mode="default")
         print("  torch.compile enabled (reduce-overhead)")

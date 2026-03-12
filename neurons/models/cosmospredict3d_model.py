@@ -767,7 +767,7 @@ class CosmosPredict3DWrapper(nn.Module):
                 token=hf_token,
             )
         except Exception as exc:
-            logger.debug("HuggingFace download failed: %s", exc)
+            logger.warning("HuggingFace download failed: %s", exc)
             return False
 
         try:
@@ -795,7 +795,7 @@ class CosmosPredict3DWrapper(nn.Module):
             )
             return True
         except Exception as exc:
-            logger.debug("diffusers load failed: %s", exc)
+            logger.warning("diffusers load failed: %s", exc)
             return False
 
     def _try_load_cosmos_package(
@@ -837,7 +837,7 @@ class CosmosPredict3DWrapper(nn.Module):
             logger.info("Loaded 3-D backbone via cosmos_predict2 package.")
             return True
         except Exception as exc:
-            logger.debug("cosmos_predict2 load failed: %s", exc)
+            logger.warning("cosmos_predict2 load failed: %s", exc)
             return False
 
     def _try_load_raw_checkpoint(
@@ -887,7 +887,7 @@ class CosmosPredict3DWrapper(nn.Module):
             logger.info("Loaded DiT transformer from snapshot via diffusers.")
             return True
         except Exception as exc:
-            logger.debug("diffusers DiT load from snapshot failed: %s", exc)
+            logger.warning("diffusers DiT load from snapshot failed: %s", exc)
 
         self._build_standalone_backbone()
 
@@ -927,7 +927,7 @@ class CosmosPredict3DWrapper(nn.Module):
                     )
                 loaded_any = True
             except Exception as exc:
-                logger.debug("Failed to load %s: %s", ckpt_file.name, exc)
+                logger.warning("Failed to load %s: %s", ckpt_file.name, exc)
 
         if loaded_any:
             self._backbone_loaded = True
