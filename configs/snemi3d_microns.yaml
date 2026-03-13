@@ -71,6 +71,7 @@ model:
   freeze_vae_encoder: true        # VAE encoder  (true = always frozen; int N = freeze for N epochs)
   freeze_dit_backbone: 10         # DiT backbone (true = always frozen; int N = freeze for N epochs then unfreeze)
   freeze_vae_decoder: true        # VAE decoder  (true = always frozen; int N = freeze for N epochs)
+  gradient_checkpointing: true
   dropout: 0.1
 
 training:

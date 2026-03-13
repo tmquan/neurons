@@ -99,6 +99,7 @@ class BaseCosmosModule(pl.LightningModule):
             freeze_dit_backbone=model_config.get("freeze_dit_backbone", False),
             freeze_vae_decoder=model_config.get("freeze_vae_decoder", False),
             freeze_vae_encoder=model_config.get("freeze_vae_encoder", True),
+            gradient_checkpointing=model_config.get("gradient_checkpointing", False),
             feature_layers=model_config.get("feature_layers"),
             cache_dir=model_config.get("cache_dir"),
             hf_token=model_config.get("hf_token"),

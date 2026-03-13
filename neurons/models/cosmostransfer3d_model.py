@@ -596,6 +596,7 @@ class CosmosTransfer3DWrapper(nn.Module):
         freeze_dit_backbone: bool = False,
         freeze_vae_decoder: bool = False,
         freeze_vae_encoder: bool = True,
+        gradient_checkpointing: bool = False,
         feature_layers: Optional[List[int]] = None,
         cache_dir: Optional[str] = None,
         hf_token: Optional[str] = None,
@@ -631,6 +632,7 @@ class CosmosTransfer3DWrapper(nn.Module):
         self._freeze_dit_backbone = freeze_dit_backbone
         self._freeze_vae_decoder = freeze_vae_decoder
         self._freeze_vae_encoder = freeze_vae_encoder
+        self._gradient_checkpointing = gradient_checkpointing
 
         if feature_layers is not None:
             self._feature_layers = sorted(feature_layers)
@@ -696,12 +698,15 @@ class CosmosTransfer3DWrapper(nn.Module):
 
         self._make_params_contiguous()
 
+        if gradient_checkpointing:
+            self.enable_gradient_checkpointing()
+
         logger.info(
             "CosmosTransfer3DWrapper initialised: variant=%s, "
             "feature_layers=%s, backbone_loaded=%s, frozen=%s, "
-            "params=%s (trainable=%s)",
+            "grad_ckpt=%s, params=%s (trainable=%s)",
             variant, self._feature_layers, self._backbone_loaded,
-            freeze_dit_backbone,
+            freeze_dit_backbone, self._gradient_checkpointing,
             f"{self.get_num_parameters(trainable_only=False):,}",
             f"{self.get_num_parameters(trainable_only=True):,}",
         )
@@ -1228,6 +1233,80 @@ class CosmosTransfer3DWrapper(nn.Module):
         self.decoder_adapter._unfreeze_body()
         self._freeze_vae_decoder = False
         logger.info("VAE decoder unfrozen.")
+
+    # ------------------------------------------------------------------
+    # Gradient checkpointing
+    # ------------------------------------------------------------------
+
+    def enable_gradient_checkpointing(self) -> None:
+        """Enable activation checkpointing on DiT transformer blocks.
+
+        Trades ~20-30% slower forward for ~40% lower activation memory,
+        allowing larger batch sizes or patch sizes.
+        """
+        if hasattr(self.dit, "enable_gradient_checkpointing"):
+            self.dit.enable_gradient_checkpointing()
+            self._gradient_checkpointing = True
+            logger.info("Gradient checkpointing enabled (diffusers API).")
+            return
+
+        block_container = None
+        for attr in ("transformer_blocks", "blocks", "layers"):
+            if hasattr(self.dit, attr):
+                block_container = getattr(self.dit, attr)
+                break
+
+        if block_container is None:
+            logger.warning(
+                "Cannot find transformer block container on %s — "
+                "gradient checkpointing not applied.",
+                type(self.dit).__name__,
+            )
+            return
+
+        for block in block_container:
+            original_forward = block.forward
+
+            def _make_ckpt_forward(fwd):
+                def ckpt_forward(*args, **kwargs):
+                    if not torch.is_grad_enabled():
+                        return fwd(*args, **kwargs)
+                    return torch.utils.checkpoint.checkpoint(
+                        fwd, *args, use_reentrant=False, **kwargs,
+                    )
+                return ckpt_forward
+
+            block.forward = _make_ckpt_forward(original_forward)
+            block._original_forward = original_forward
+
+        self._gradient_checkpointing = True
+        logger.info(
+            "Gradient checkpointing enabled (manual, %d blocks).",
+            len(block_container),
+        )
+
+    def disable_gradient_checkpointing(self) -> None:
+        """Disable activation checkpointing, restoring original block forwards."""
+        if hasattr(self.dit, "disable_gradient_checkpointing"):
+            self.dit.disable_gradient_checkpointing()
+            self._gradient_checkpointing = False
+            logger.info("Gradient checkpointing disabled (diffusers API).")
+            return
+
+        block_container = None
+        for attr in ("transformer_blocks", "blocks", "layers"):
+            if hasattr(self.dit, attr):
+                block_container = getattr(self.dit, attr)
+                break
+
+        if block_container is not None:
+            for block in block_container:
+                if hasattr(block, "_original_forward"):
+                    block.forward = block._original_forward
+                    del block._original_forward
+
+        self._gradient_checkpointing = False
+        logger.info("Gradient checkpointing disabled.")
 
     # ------------------------------------------------------------------
     # Utilities
