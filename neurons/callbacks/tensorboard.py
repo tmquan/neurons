@@ -435,7 +435,7 @@ def _log_predictions(
     cov_mat = rearrange(cov_val, "b (s1 s2) h w -> b h w s1 s2", s1=S, s2=S)
     g_cov_rgb = _render_cov_glyphs(cov_mat, img_gray, labels, S)
 
-    g_raw = torch.sigmoid(geom[:, ch_dir + ch_cov:])
+    g_raw = geom[:, ch_dir + ch_cov:]
     g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
 
     tb.add_images(f"{tag}/image", img_gray, global_step=epoch)

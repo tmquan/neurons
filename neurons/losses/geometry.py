@@ -252,7 +252,7 @@ class GeometryLoss(nn.Module):
                     rearrange(fg.float(), "n -> 1 n"),
                 ], dim=0)
                 L_raw = L_raw + self._fg_loss(
-                    torch.sigmoid(pred_raw[b]), rgba_tgt, fg, self.loss_raw,
+                    pred_raw[b], rgba_tgt, fg, self.loss_raw,
                 )
 
         n = max(valid_b, 1)
