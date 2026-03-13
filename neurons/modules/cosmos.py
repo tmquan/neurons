@@ -86,8 +86,9 @@ class BaseCosmosModule(pl.LightningModule):
             model_config["hf_token"] = _hf_token
 
         self.optimizer_config = optimizer_config or {}
+        self.training_config = training_config or {}
         loss_config = loss_config or {}
-        training_config = training_config or {}
+        training_config = self.training_config
 
         self.model = self._model_cls(
             in_channels=model_config.get("in_channels", 1),
@@ -433,8 +434,11 @@ class BaseCosmosModule(pl.LightningModule):
             {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
         ]
         param_groups = [g for g in param_groups if len(g["params"]) > 0]
-        use_fused = torch.cuda.is_available() and all(
-            p.is_cuda for g in param_groups for p in g["params"]
+        clip_val = self.training_config.get("gradient_clip_val")
+        use_fused = (
+            torch.cuda.is_available()
+            and not clip_val
+            and all(p.is_cuda for g in param_groups for p in g["params"])
         )
         optimizer = torch.optim.AdamW(
             param_groups, lr=lr, weight_decay=wd, fused=use_fused,
