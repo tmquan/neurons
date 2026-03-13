@@ -398,8 +398,8 @@ def main(cfg: DictConfig) -> None:
     strategy_name = training_cfg.get("strategy", "auto")
     if strategy_name == "ddp":
         strategy = DDPStrategy(
-            find_unused_parameters=True,
-            static_graph=False,
+            find_unused_parameters=False,
+            static_graph=True,
             gradient_as_bucket_view=True,
         )
     elif strategy_name == "fsdp":

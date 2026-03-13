@@ -4,8 +4,8 @@
 
 # Core deep learning
 --extra-index-url https://download.pytorch.org/whl/cu130
-torch==2.10.0+cu130
-torchvision==0.25.0+cu130
+# torch==2.10.0+cu130
+# torchvision==0.25.0+cu130
 # cupy-cuda13x==14.0.1
 pytorch-lightning==2.6.1
 torchmetrics==1.0.3
