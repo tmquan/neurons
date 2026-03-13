@@ -12,7 +12,7 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 4
+  num_workers: 8
   cache_rate: 0.0
   slice_mode: false
   num_samples: 16000

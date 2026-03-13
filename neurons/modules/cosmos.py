@@ -432,7 +432,12 @@ class BaseCosmosModule(pl.LightningModule):
             {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
         ]
         param_groups = [g for g in param_groups if len(g["params"]) > 0]
-        optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
+        use_fused = torch.cuda.is_available() and all(
+            p.is_cuda for g in param_groups for p in g["params"]
+        )
+        optimizer = torch.optim.AdamW(
+            param_groups, lr=lr, weight_decay=wd, fused=use_fused,
+        )
 
         sched_cfg = self.optimizer_config.get("scheduler", {})
         stype = sched_cfg.get("type", "cosine").lower()
