@@ -119,7 +119,7 @@ def _render_cov_glyphs(
     Args:
         cov_mat: [B, H, W, s1, s2] predicted covariance matrices (2D-sliced).
         img_rgb: [B, 3, H, W] grayscale EM repeated to 3 channels.
-        labels: [B, H, W] instance labels (fg/bg masking only).
+        labels: [B, H, W] fg/bg mask (any int tensor; 0 = background, >0 = foreground).
         S: spatial_dims (2 or 3).  For 3D the last 2x2 submatrix is used.
         step: grid spacing for glyph placement.
 
@@ -242,7 +242,7 @@ def _render_dir_quiver(
     Args:
         dir_val: [B, S, H, W] predicted direction channels (2D-sliced).
         img_rgb: [B, 3, H, W] grayscale EM repeated to 3 channels.
-        labels: [B, H, W] instance labels (fg/bg masking only).
+        labels: [B, H, W] fg/bg mask (any int tensor; 0 = background, >0 = foreground).
         S: spatial_dims (2 or 3).
         dir_target: ``"centroid"`` or ``"skeleton"`` (cosmetic only).
         step: grid spacing for arrow placement.
@@ -427,13 +427,15 @@ def _log_predictions(
     sem_rgb = _label_to_rgb(sem_ids)
     inst_rgb = _pca_project(inst, n_components=3)
 
+    fg_mask_pred = (sem_ids > 0).long()
+
     g_dir_rgb = _render_dir_quiver(
-        geom[:, :ch_dir], img_gray, labels, S, dir_target=dir_target,
+        geom[:, :ch_dir], img_gray, fg_mask_pred, S, dir_target=dir_target,
     )
 
     cov_val = geom[:, ch_dir:ch_dir + ch_cov]                     # [n, S*S, H, W]
     cov_mat = rearrange(cov_val, "b (s1 s2) h w -> b h w s1 s2", s1=S, s2=S)
-    g_cov_rgb = _render_cov_glyphs(cov_mat, img_gray, labels, S)
+    g_cov_rgb = _render_cov_glyphs(cov_mat, img_gray, fg_mask_pred, S)
 
     g_raw = geom[:, ch_dir + ch_cov:]
     g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
