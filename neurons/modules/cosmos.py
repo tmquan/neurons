@@ -379,6 +379,7 @@ class BaseCosmosModule(pl.LightningModule):
             self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
             self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
             self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
+            del ins_pred
 
     def _eval_step(self, batch: Dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
         """Shared evaluation logic for validation and test steps."""
@@ -400,7 +401,10 @@ class BaseCosmosModule(pl.LightningModule):
             )
 
         self._eval_metrics(predictions, targets, prefix, bs)
-        return losses["loss"]
+        del predictions
+        loss = losses["loss"]
+        del losses
+        return loss
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         return self._eval_step(batch, "val")

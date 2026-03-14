@@ -328,6 +328,7 @@ class BaseVistaModule(pl.LightningModule):
             self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
             self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
             self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
+            del ins_pred
         else:
             for m in ("ins_ari", "ins_ami", "ins_voi", "ins_voi_split", "ins_voi_merge", "ins_ted"):
                 self.log(f"{prefix}/{m}", 0.0, sync_dist=True, batch_size=bs)
@@ -352,7 +353,10 @@ class BaseVistaModule(pl.LightningModule):
             )
 
         self._eval_metrics(predictions, targets, prefix, bs)
-        return losses["loss"]
+        del predictions
+        loss = losses["loss"]
+        del losses
+        return loss
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         return self._eval_step(batch, "val")

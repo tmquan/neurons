@@ -1051,6 +1051,7 @@ class CosmosTransfer3DWrapper(nn.Module):
         self._hook_buffer: List[torch.Tensor] = []
         self._hook_handles: List[Any] = []
         self._hook_block_container = None
+        self._hooks_active = False
 
         for attr in ("transformer_blocks", "blocks", "layers"):
             if hasattr(self.dit, attr):
@@ -1062,6 +1063,8 @@ class CosmosTransfer3DWrapper(nn.Module):
 
         def _make_hook(_idx: int):
             def hook_fn(_module: nn.Module, _input: Any, output: Any) -> None:
+                if not self._hooks_active:
+                    return
                 out = output[0] if isinstance(output, tuple) else output
                 if self._freeze_dit_backbone:
                     out = out.detach()
@@ -1100,6 +1103,7 @@ class CosmosTransfer3DWrapper(nn.Module):
             )
 
         self._hook_buffer.clear()
+        self._hooks_active = True
 
         ctx = torch.no_grad() if self._freeze_dit_backbone else torch.enable_grad()
         with ctx:
@@ -1127,6 +1131,7 @@ class CosmosTransfer3DWrapper(nn.Module):
                 padding_mask=padding_mask,
             )
 
+        self._hooks_active = False
         collected = list(self._hook_buffer)
         self._hook_buffer.clear()
 
