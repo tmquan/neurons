@@ -512,7 +512,7 @@ class ImageLogger(pl.Callback):
         batch: Dict[str, torch.Tensor],
         batch_idx: int,
     ) -> None:
-        if batch_idx == 0:
+        if batch_idx == 0 and trainer.global_rank == 0:
             self._train_batch = {
                 k: v.detach().cpu() if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
@@ -524,6 +524,9 @@ class ImageLogger(pl.Callback):
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
     ) -> None:
+        if trainer.global_rank != 0:
+            self._train_batch = None
+            return
         epoch = trainer.current_epoch
         if epoch % self.every_n_epochs != 0:
             return

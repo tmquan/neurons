@@ -711,6 +711,19 @@ class CosmosTransfer3DWrapper(nn.Module):
             f"{self.get_num_parameters(trainable_only=True):,}",
         )
 
+    def _apply(self, fn):
+        """Extend device/dtype placement to the untracked full-VAE reference.
+
+        ``_vae_ref`` is a plain Python list (not ``nn.ModuleList``) to avoid
+        double-registering encoder/decoder parameters in ``state_dict()``.
+        This override ensures that auxiliary VAE components (e.g. quant_conv)
+        are moved together with the rest of the model.
+        """
+        super()._apply(fn)
+        if hasattr(self, "_vae_ref") and self._vae_ref:
+            self._vae_ref[0]._apply(fn)
+        return self
+
     def _make_params_contiguous(self) -> None:
         """Ensure all parameter data tensors are contiguous for DDP."""
         for p in self.parameters():
@@ -958,7 +971,7 @@ class CosmosTransfer3DWrapper(nn.Module):
     def _encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
         """Encode pixel-space volume ``[B, 3, D, H, W]`` to latent grid."""
         if hasattr(self, "_vae_ref") and self._vae_ref:
-            vae = self._vae_ref[0].to(device=x.device, dtype=x.dtype)
+            vae = self._vae_ref[0]
             ctx = torch.no_grad() if self._freeze_vae_encoder else torch.enable_grad()
             with ctx:
                 enc = vae.encode(x)
@@ -1105,33 +1118,35 @@ class CosmosTransfer3DWrapper(nn.Module):
         self._hook_buffer.clear()
         self._hooks_active = True
 
-        ctx = torch.no_grad() if self._freeze_dit_backbone else torch.enable_grad()
-        with ctx:
-            B = latent.shape[0]
-            dit_cfg = getattr(self.dit, "config", None)
-            text_dim = getattr(dit_cfg, "crossattn_proj_in_channels", 1024)
-            null_text = torch.zeros(B, 1, text_dim, device=latent.device, dtype=latent.dtype)
+        try:
+            ctx = torch.no_grad() if self._freeze_dit_backbone else torch.enable_grad()
+            with ctx:
+                B = latent.shape[0]
+                dit_cfg = getattr(self.dit, "config", None)
+                text_dim = getattr(dit_cfg, "crossattn_proj_in_channels", 1024)
+                null_text = torch.zeros(B, 1, text_dim, device=latent.device, dtype=latent.dtype)
 
-            img_dim_in = getattr(dit_cfg, "img_context_dim_in", None)
-            img_tokens = getattr(dit_cfg, "img_context_num_tokens", 256)
-            if img_dim_in:
-                null_img = torch.zeros(B, img_tokens, img_dim_in, device=latent.device, dtype=latent.dtype)
-                enc_hidden = (null_text, null_img)
-            else:
-                enc_hidden = null_text
+                img_dim_in = getattr(dit_cfg, "img_context_dim_in", None)
+                img_tokens = getattr(dit_cfg, "img_context_num_tokens", 256)
+                if img_dim_in:
+                    null_img = torch.zeros(B, img_tokens, img_dim_in, device=latent.device, dtype=latent.dtype)
+                    enc_hidden = (null_text, null_img)
+                else:
+                    enc_hidden = null_text
 
-            padding_mask = torch.ones(1, 1, latent.shape[-2], latent.shape[-1], device=latent.device, dtype=latent.dtype)
-            null_condition = torch.zeros(B, 1, *latent.shape[2:], device=latent.device, dtype=latent.dtype)
+                padding_mask = torch.ones(1, 1, latent.shape[-2], latent.shape[-1], device=latent.device, dtype=latent.dtype)
+                null_condition = torch.zeros(B, 1, *latent.shape[2:], device=latent.device, dtype=latent.dtype)
 
-            self.dit(
-                hidden_states=latent,
-                timestep=timestep,
-                encoder_hidden_states=enc_hidden,
-                condition_mask=null_condition,
-                padding_mask=padding_mask,
-            )
+                self.dit(
+                    hidden_states=latent,
+                    timestep=timestep,
+                    encoder_hidden_states=enc_hidden,
+                    condition_mask=null_condition,
+                    padding_mask=padding_mask,
+                )
+        finally:
+            self._hooks_active = False
 
-        self._hooks_active = False
         collected = list(self._hook_buffer)
         self._hook_buffer.clear()
 
