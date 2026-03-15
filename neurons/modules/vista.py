@@ -257,9 +257,8 @@ class BaseVistaModule(pl.LightningModule):
 
         targets = self._prepare_targets(batch)
 
-        if len(self.training_modes) > 1:
-            cached = self.criterion._compute_targets(targets["labels"], targets)
-            targets["_cached_weights"] = cached
+        cached = self.criterion._compute_targets(targets["labels"], targets)
+        targets["_cached_weights"] = cached
 
         all_losses: Dict[str, torch.Tensor] = {}
         mode_losses: List[torch.Tensor] = []

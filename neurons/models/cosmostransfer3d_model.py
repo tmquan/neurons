@@ -998,7 +998,7 @@ class CosmosTransfer3DWrapper(nn.Module):
         return self._conv_downsample(x)
 
     def _conv_downsample(self, x: torch.Tensor) -> torch.Tensor:
-        return self._fallback_down.to(device=x.device, dtype=x.dtype)(x)
+        return self._fallback_down(x)
 
     # ------------------------------------------------------------------
     # Feature extraction

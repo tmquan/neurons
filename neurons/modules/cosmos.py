@@ -308,9 +308,8 @@ class BaseCosmosModule(pl.LightningModule):
 
         targets = self._prepare_targets(batch)
 
-        if len(self.training_modes) > 1:
-            cached = self.criterion._compute_targets(targets["labels"], targets)
-            targets["_cached_weights"] = cached
+        cached = self.criterion._compute_targets(targets["labels"], targets)
+        targets["_cached_weights"] = cached
 
         all_losses: Dict[str, torch.Tensor] = {}
         mode_losses: List[torch.Tensor] = []
@@ -330,8 +329,8 @@ class BaseCosmosModule(pl.LightningModule):
 
         bs = images.shape[0]
         for name, val in all_losses.items():
-            self.log(name, val, on_step=False, on_epoch=True, sync_dist=True, batch_size=bs)
-        self.log("train/loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True, batch_size=bs)
+            self.log(name, val, on_step=False, on_epoch=True, batch_size=bs)
+        self.log("train/loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=bs)
 
         return total_loss
 

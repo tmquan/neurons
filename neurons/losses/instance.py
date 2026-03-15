@@ -84,43 +84,58 @@ class InstanceLoss(nn.Module):
 
     @torch.no_grad()
     def _get_weight_boundary(self, label: torch.Tensor) -> torch.Tensor:
-        """Boundary weight via morphological gradient (max_pool != min_pool)."""
-        label_4d = rearrange(label, "b ... -> b 1 ...")
-        padded = F.pad(label_4d.float(), self._pad, mode="replicate")
+        """Per-pixel boundary weight.
+
+        GPU path (torch): morphological gradient via max_pool != min_pool.
+        CPU path: cucim or skimage ``find_boundaries``.
+
+        Always prefers the on-device torch path for GPU tensors to avoid
+        costly CPU round-trips.
+        """
+        if label.is_cuda:
+            return self._boundary_weight_torch(label)
+        return self._boundary_weight_cpu(label)
+
+    @torch.no_grad()
+    def _boundary_weight_torch(self, label: torch.Tensor) -> torch.Tensor:
+        """Inner boundary weight matching ``find_boundaries(mode='inner')``.
+
+        A foreground pixel is on the boundary iff any neighbour in the
+        3^d kernel has a different label value.
+        """
+        label_4d = rearrange(label, "b ... -> b 1 ...").float()
+        padded = F.pad(label_4d, self._pad, mode="replicate")
         dilated = self._pool(+padded, 3, stride=1, padding=0)
         eroded = self._pool(-padded, 3, stride=1, padding=0).neg_()
-        boundary = rearrange(dilated != eroded, "b 1 ... -> b ...").float()
+        neighbor_differs = (dilated != label_4d) | (eroded != label_4d)
+        boundary = rearrange((label_4d > 0) & neighbor_differs, "b 1 ... -> b ...").float()
         return 1.0 + boundary * (self.weight_edge - 1.0)
+
+    @torch.no_grad()
+    def _boundary_weight_cpu(self, label: torch.Tensor) -> torch.Tensor:
+        """Boundary weight via cucim/skimage ``find_boundaries`` on CPU."""
+        from neurons.transforms.find_boundaries import find_boundaries
+
+        label_np = label.numpy()
+        weight_np = np.ones(label_np.shape, dtype=np.float32)
+        edge_scale = self.weight_edge - 1.0
+
+        for b in range(label_np.shape[0]):
+            boundary = find_boundaries(label_np[b], mode="inner")
+            weight_np[b][boundary] = 1.0 + edge_scale
+
+        return torch.from_numpy(weight_np)
 
     @torch.no_grad()
     def _get_weight_skeleton(self, label: torch.Tensor) -> torch.Tensor:
         """Per-instance EDT skeleton weight.
 
-        GPU path (cucim): numpy round-trip through cucim EDT.
         GPU path (torch): approximate L-inf EDT via morphological erosion.
         CPU path: all instances across batch via single pmap call.
+
+        Always prefers the on-device torch path for GPU tensors to avoid
+        costly CPU round-trips.
         """
-        from neurons.transforms.edt import _use_gpu, distance_transform_edt
-
-        B = label.shape[0]
-
-        if _use_gpu():
-            label_np = label.cpu().numpy()
-            weight_np = np.ones(label_np.shape, dtype=np.float32)
-
-            for b in range(B):
-                fg_ids = np.unique(label_np[b])
-                fg_ids = fg_ids[fg_ids > 0]
-                for uid in fg_ids:
-                    mask = label_np[b] == uid
-                    dt = distance_transform_edt(mask).astype(np.float32)
-                    dt_max = dt.max()
-                    if dt_max > 0:
-                        dt /= dt_max
-                    weight_np[b][mask] = 1.0 + dt[mask] * (self.weight_bone - 1.0)
-
-            return torch.from_numpy(weight_np).to(device=label.device)
-
         if label.is_cuda:
             return self._skeleton_weight_torch(label)
 
@@ -131,7 +146,7 @@ class InstanceLoss(nn.Module):
         """Approximate skeleton weight via iterative morphological erosion on GPU."""
         B = label.shape[0]
         weight = torch.ones_like(label, dtype=torch.float32)
-        _CHUNK = 16
+        _CHUNK = 32
         spatial_tail = label.shape[-self.spatial_dims:]
         max_iter = min(spatial_tail) // 2 + 1
         ones_pattern = " ".join(["1"] * self.spatial_dims)
@@ -163,9 +178,10 @@ class InstanceLoss(nn.Module):
                 max_d = reduce(dt, "k c ... -> k c", "max").clamp(min=1.0)
                 dt = dt / rearrange(max_d, reshape_pattern)
 
+                bone_scale = self.weight_bone - 1.0
                 for i, uid in enumerate(chunk_ids):
                     m = label[b] == uid
-                    weight[b][m] = 1.0 + dt[i, 0][m] * (self.weight_bone - 1.0)
+                    weight[b][m] = 1.0 + dt[i, 0][m] * bone_scale
 
         return weight
 
