@@ -67,19 +67,25 @@ class Labeld(MapTransform):
             is_tensor = isinstance(arr, torch.Tensor)
 
             if is_tensor:
-                device = arr.device
-                label_np = arr.cpu().numpy()
+                label_np = arr.detach().cpu().numpy()
             else:
                 label_np = np.asarray(arr)
 
-            # Strip channel dim(s) to get [*spatial]
+            had_channel = label_np.ndim > self.spatial_dims
             while label_np.ndim > self.spatial_dims:
                 label_np = label_np[0]
 
             relabeled = _cc_label(label_np.astype(np.int64))
 
+            if had_channel:
+                relabeled = relabeled[np.newaxis]
+
             if is_tensor:
-                d[key] = torch.from_numpy(relabeled.astype(np.int64)).to(device)
+                result = torch.from_numpy(relabeled.astype(np.int64)).to(arr.device)
+                if hasattr(arr, "meta"):
+                    from monai.data import MetaTensor
+                    result = MetaTensor(result, meta=arr.meta, applied_operations=arr.applied_operations)
+                d[key] = result
             else:
                 d[key] = relabeled
 
