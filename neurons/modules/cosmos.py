@@ -15,9 +15,11 @@ Supports two training modes that can be combined in a single step:
 
 import logging
 import warnings
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 import torch
+import torch.distributed as dist
 import pytorch_lightning as pl
 from einops import rearrange, reduce
 
@@ -167,6 +169,10 @@ class BaseCosmosModule(pl.LightningModule):
                 needs_optimizer_rebuild = True
         if needs_optimizer_rebuild and self.trainer is not None:
             self.trainer.strategy.setup_optimizers(self.trainer)
+
+    def on_train_epoch_end(self) -> None:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
     # Forward
@@ -335,53 +341,23 @@ class BaseCosmosModule(pl.LightningModule):
         return total_loss
 
     # ------------------------------------------------------------------
-    # Eval
+    # Eval — accumulate-then-reduce
     # ------------------------------------------------------------------
 
+    def _accum(self, name: str, value, weight: float) -> None:
+        """Accumulate a weighted metric value for epoch-end averaging."""
+        v = value.item() if isinstance(value, torch.Tensor) else float(value)
+        acc = self._eval_accum[name]
+        acc[0] += v * weight
+        acc[1] += weight
+
     @torch.no_grad()
-    def _eval_metrics(
+    def _eval_step_and_accumulate(
         self,
-        predictions: Dict[str, torch.Tensor],
-        targets: Dict[str, torch.Tensor],
+        batch: Dict[str, torch.Tensor],
         prefix: str,
-        bs: int,
     ) -> None:
-        sem_logits = predictions["semantic"]
-        active = getattr(self.criterion.semantic_loss, "active_classes", None)
-        if active is not None and active < sem_logits.shape[1]:
-            sem_logits = sem_logits[:, :active]
-        sem_pred = sem_logits.argmax(dim=1)
-        sem_gt = targets["semantic_labels"]
-        n_cls = sem_logits.shape[1]
-
-        sem_acc = reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean")
-        sem_iou = compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls)
-        sem_dice = compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls)
-
-        self.log(f"{prefix}/sem_acc", sem_acc, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/sem_iou", sem_iou, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-        self.log(f"{prefix}/sem_dice", sem_dice, sync_dist=True, batch_size=bs)
-
-        fg_mask = targets["labels"] > 0
-        if fg_mask.any():
-            ins_pred, _, _ = self.clusterer(predictions["instance"].float(), fg_mask)
-            ins_gt = targets["labels"]
-
-            ins_ari = compute_per_batch_ari(ins_pred, ins_gt)
-            ins_ami = compute_per_batch_ami(ins_pred, ins_gt)
-            ins_voi = compute_per_batch_voi(ins_pred, ins_gt)
-            ins_ted = compute_per_batch_ted(ins_pred, ins_gt)
-
-            self.log(f"{prefix}/ins_ari", ins_ari, prog_bar=(prefix == "val"), sync_dist=True, batch_size=bs)
-            self.log(f"{prefix}/ins_ami", ins_ami, sync_dist=True, batch_size=bs)
-            self.log(f"{prefix}/ins_voi", ins_voi.total, sync_dist=True, batch_size=bs)
-            self.log(f"{prefix}/ins_voi_split", ins_voi.split, sync_dist=True, batch_size=bs)
-            self.log(f"{prefix}/ins_voi_merge", ins_voi.merge, sync_dist=True, batch_size=bs)
-            self.log(f"{prefix}/ins_ted", ins_ted, sync_dist=True, batch_size=bs)
-            del ins_pred
-
-    def _eval_step(self, batch: Dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
-        """Shared evaluation logic for validation and test steps."""
+        """Run forward + loss + metrics, accumulate everything locally."""
         batch = self._strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
@@ -391,25 +367,85 @@ class BaseCosmosModule(pl.LightningModule):
         predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         losses = self.criterion(predictions, targets)
 
-        bs = images.shape[0]
+        bs = float(images.shape[0])
         for name, val in losses.items():
-            self.log(
-                f"{prefix}/{name}", val,
-                prog_bar=(name == "loss" and prefix == "val"),
-                sync_dist=True, batch_size=bs,
-            )
+            self._accum(f"{prefix}/{name}", val, bs)
 
-        self._eval_metrics(predictions, targets, prefix, bs)
-        del predictions
-        loss = losses["loss"]
-        del losses
-        return loss
+        sem_logits = predictions["semantic"]
+        active = getattr(self.criterion.semantic_loss, "active_classes", None)
+        if active is not None and active < sem_logits.shape[1]:
+            sem_logits = sem_logits[:, :active]
+        sem_pred = sem_logits.argmax(dim=1)
+        sem_gt = targets["semantic_labels"]
+        n_cls = sem_logits.shape[1]
 
-    def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        return self._eval_step(batch, "val")
+        self._accum(f"{prefix}/sem_acc", reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
+        self._accum(f"{prefix}/sem_iou", compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
+        self._accum(f"{prefix}/sem_dice", compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls), bs)
 
-    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        return self._eval_step(batch, "test")
+        fg_mask = targets["labels"] > 0
+        if fg_mask.any():
+            ins_pred, _, _ = self.clusterer(predictions["instance"].float(), fg_mask)
+            ins_gt = targets["labels"]
+
+            self._accum(f"{prefix}/ins_ari", compute_per_batch_ari(ins_pred, ins_gt), bs)
+            self._accum(f"{prefix}/ins_ami", compute_per_batch_ami(ins_pred, ins_gt), bs)
+            voi = compute_per_batch_voi(ins_pred, ins_gt)
+            self._accum(f"{prefix}/ins_voi", voi.total, bs)
+            self._accum(f"{prefix}/ins_voi_split", voi.split, bs)
+            self._accum(f"{prefix}/ins_voi_merge", voi.merge, bs)
+            self._accum(f"{prefix}/ins_ted", compute_per_batch_ted(ins_pred, ins_gt), bs)
+            del ins_pred
+
+        del predictions, losses
+
+    def _reduce_and_log_accum(self, prefix: str) -> None:
+        """All-reduce accumulated metrics once and log epoch averages."""
+        if not self._eval_accum:
+            return
+
+        names = sorted(self._eval_accum.keys())
+        sums = torch.tensor([self._eval_accum[n][0] for n in names], device=self.device)
+        counts = torch.tensor([self._eval_accum[n][1] for n in names], device=self.device)
+
+        if self.trainer.world_size > 1:
+            dist.all_reduce(sums, op=dist.ReduceOp.SUM)
+            dist.all_reduce(counts, op=dist.ReduceOp.SUM)
+
+        _PROG_BAR = {f"{prefix}/loss", f"{prefix}/sem_acc", f"{prefix}/sem_iou", f"{prefix}/ins_ari"}
+        for i, name in enumerate(names):
+            if counts[i] > 0:
+                avg = (sums[i] / counts[i]).item()
+                self.log(name, avg, prog_bar=(name in _PROG_BAR),
+                         sync_dist=False, rank_zero_only=True)
+
+        self._eval_accum.clear()
+
+    # --- validation ---
+
+    def on_validation_epoch_start(self) -> None:
+        self._eval_accum: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0])
+
+    def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
+        self._eval_step_and_accumulate(batch, "val")
+
+    def on_validation_epoch_end(self) -> None:
+        self._reduce_and_log_accum("val")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # --- test ---
+
+    def on_test_epoch_start(self) -> None:
+        self._eval_accum = defaultdict(lambda: [0.0, 0.0])
+
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
+        self._eval_step_and_accumulate(batch, "test")
+
+    def on_test_epoch_end(self) -> None:
+        self._reduce_and_log_accum("test")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
     # Optimizer
