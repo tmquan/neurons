@@ -193,6 +193,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         if self.patch_size is not None and self.overcrop_size is not None:
             min_zoom = 1.0 / self.overcrop_factor
             transforms.extend([
+                Labeld(keys=["label"], spatial_dims=sd),
                 RandZoomd(
                     keys=io_keys,
                     min_zoom=min_zoom,
