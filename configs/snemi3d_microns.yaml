@@ -17,6 +17,7 @@ data:
   slice_mode: false
   num_samples: 16000
   patch_size: [48, 256, 256]
+  overcrop_factor: 1.25        # train crops at 1.25x then random zoom-out to patch_size
 
   # Train: SNEMI3D AC4 + 4 MICRONS train crops
   train_volumes:

@@ -44,6 +44,7 @@ class MICRONSDataModule(CircuitDataModule):
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
+        overcrop_factor: float = 1.0,
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
@@ -60,6 +61,7 @@ class MICRONSDataModule(CircuitDataModule):
             val_volumes=val_volumes,
             test_volumes=test_volumes,
             persistent_workers=persistent_workers,
+            overcrop_factor=overcrop_factor,
         )
 
     @property
@@ -85,7 +87,7 @@ class MICRONSDataModule(CircuitDataModule):
         from neurons.datasets.lazy import LazyVolDataset
 
         num_samples = self.num_samples or 16000
-        patch_size = self.patch_size
+        train_patch = self.overcrop_size or self.patch_size
 
         if stage == "fit" or stage is None:
             train_vols = self.train_volumes or []
@@ -93,7 +95,7 @@ class MICRONSDataModule(CircuitDataModule):
                 self.train_dataset = LazyVolDataset(
                     root_dir=self.data_root,
                     volumes=train_vols,
-                    patch_size=patch_size,
+                    patch_size=train_patch,
                     transform=self.get_train_transforms(),
                     num_samples=num_samples,
                 )
@@ -102,10 +104,9 @@ class MICRONSDataModule(CircuitDataModule):
                 self.val_dataset = LazyVolDataset(
                     root_dir=self.data_root,
                     volumes=val_vols,
-                    patch_size=patch_size,
+                    patch_size=self.patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
-                    # deterministic=True,
                 )
 
         if stage == "test" or stage is None:
@@ -114,10 +115,9 @@ class MICRONSDataModule(CircuitDataModule):
                 self.test_dataset = LazyVolDataset(
                     root_dir=self.data_root,
                     volumes=test_vols,
-                    patch_size=patch_size,
+                    patch_size=self.patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
-                    # deterministic=True,
                 )
 
         logger.info("MICRONSDataModule: using LazyVolDataset (~0 MB base RAM per rank)")
