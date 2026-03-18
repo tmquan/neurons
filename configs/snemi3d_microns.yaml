@@ -73,7 +73,7 @@ model:
   freeze_dit_backbone: false      # DiT backbone (true = always frozen; int N = freeze for N epochs then unfreeze)
   freeze_vae_decoder: false       # VAE decoder  (true = always frozen; int N = freeze for N epochs)
   gradient_checkpointing: false
-  dropout: 0.0
+  dropout: 0.1
 
 training:
   max_epochs: 100
@@ -95,32 +95,35 @@ optimizer:
   type: adamw
   lr: 2.0e-4
   dit_backbone_lr: 2.0e-5
-  weight_decay: 1.0e-5
+  weight_decay: 1.0e-3
   scheduler:
-    type: cosine
+    type: cosine_warmup
+    warmup_epochs: 5
     T_max: 100
     eta_min: 1.0e-7
 
 loss:
   semantic_mode: softmax  
   active_classes: 2  # only first 2 of 16 semantic channels receive gradient; bump when adding classes
+  class_weights: [10.0, 1.0]
+  label_smoothing: 0.1
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
   weight_dice: 1.0
   weight_instance: 1.0
-  weight_pull: 1.0
-  weight_push: 1.0
-  weight_norm: 0.001
+  weight_pull: 10.0
+  weight_push: 10.0
+  weight_norm: 0.01
   delta_v: 0.5
-  delta_d: 1.5
+  delta_d: 2.5
   weight_edge: 10.0
   weight_bone: 10.0
   weight_geometry: 1.0
   dir_target: centroid
   weight_dir: 1.0
-  weight_cov: 1.0
-  weight_raw: 1.0
+  weight_cov: 10.0
+  weight_raw: 10.0
   loss_dir: l1
   loss_cov: l1
   loss_raw: l1

@@ -46,6 +46,7 @@ class SemanticLoss(nn.Module):
         class_weights: Optional[List[float]] = None,
         ignore_index: int = -100,
         active_classes: Optional[int] = None,
+        label_smoothing: float = 0.0,
     ) -> None:
         super().__init__()
         if mode not in ("sigmoid", "softmax"):
@@ -59,7 +60,9 @@ class SemanticLoss(nn.Module):
 
         cw = torch.tensor(class_weights, dtype=torch.float32) if class_weights is not None else None
         if mode == "softmax":
-            self.ce_loss = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index)
+            self.ce_loss = nn.CrossEntropyLoss(
+                weight=cw, ignore_index=ignore_index, label_smoothing=label_smoothing,
+            )
         else:
             self.ce_loss = nn.BCEWithLogitsLoss(pos_weight=cw, reduction="none")
 

@@ -44,6 +44,7 @@ class BaseCombinedLoss(nn.Module):
         class_weights: Optional[List[float]] = None,
         ignore_index: int = -100,
         active_classes: Optional[int] = None,
+        label_smoothing: float = 0.0,
         **geom_kwargs,
     ) -> None:
         super().__init__()
@@ -59,6 +60,7 @@ class BaseCombinedLoss(nn.Module):
             class_weights=class_weights,
             ignore_index=ignore_index,
             active_classes=active_classes,
+            label_smoothing=label_smoothing,
         )
         self.instance_loss = InstanceLoss(
             spatial_dims=self._SPATIAL_DIMS,
