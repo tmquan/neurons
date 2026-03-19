@@ -298,7 +298,7 @@ class InstanceLoss(nn.Module):
             emb_fg = emb_b[:, fg].T                    # [M, E]
 
             dist = ((emb_fg - center_per_pixel) ** 2).sum(dim=1).clamp(min=1e-12).sqrt()  # [M]
-            pull_per_pixel = F.relu(dist - self.delta_v) ** 2
+            pull_per_pixel = (dist - self.delta_v).clamp(min=0).pow(2)
             if wgt_b is not None:
                 pull_per_pixel = pull_per_pixel * wgt_b[fg]
 
@@ -314,7 +314,7 @@ class InstanceLoss(nn.Module):
                 pw = (pw_diff ** 2).sum(dim=2).clamp(min=1e-12).sqrt()
                 triu = torch.triu_indices(K, K, offset=1, device=device)
                 loss_push = loss_push + reduce(
-                    F.relu(2 * self.delta_d - pw[triu[0], triu[1]]) ** 2,
+                    (2 * self.delta_d - pw[triu[0], triu[1]]).clamp(min=0).pow(2),
                     "n -> ", "mean",
                 )
 

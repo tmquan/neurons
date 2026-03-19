@@ -121,9 +121,7 @@ class SoftMeanShift(nn.Module):
             # --- Mean-shift iteration: refine modes via Gaussian-weighted average ---
             for _ in range(self.num_iters):
                 emb_fg = emb_b[:, fg_b]                           # [E, M] foreground only
-                diff = (rearrange(emb_fg, "e n -> 1 e n")
-                        - rearrange(modes, "k e -> k e 1"))       # [K, E, M]
-                sq_dist = (diff ** 2).sum(dim=1)                   # [K, M]
+                sq_dist = self._sq_dist(modes, emb_fg)             # [K, M]
 
                 # Gaussian kernel: weight each pixel by proximity to each mode
                 weights = torch.exp(-sq_dist / (2 * self.bandwidth ** 2))
@@ -140,9 +138,7 @@ class SoftMeanShift(nn.Module):
                     K = modes.shape[0]
 
             # --- Soft assignment: Gaussian distance to each final mode ---
-            diff_all = (rearrange(emb_b, "e n -> 1 e n")
-                        - rearrange(modes, "k e -> k e 1"))       # [K, E, N]
-            sq_dist_all = (diff_all ** 2).sum(dim=1)
+            sq_dist_all = self._sq_dist(modes, emb_b)             # [K, N]
             logits = -sq_dist_all / (2 * self.bandwidth ** 2 * self.temperature)
             soft = F.softmax(logits, dim=0)                        # [K, N]
 
@@ -172,6 +168,25 @@ class SoftMeanShift(nn.Module):
         centers = torch.stack(padded_centers)
 
         return labels, soft_assign, centers
+
+    @staticmethod
+    def _sq_dist(centers: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
+        """Memory-efficient squared Euclidean distance.
+
+        Uses ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ to avoid materializing
+        the [K, E, M] difference tensor.
+
+        Args:
+            centers: [K, E] cluster centres.
+            points:  [E, M] data points.
+
+        Returns:
+            [K, M] squared distances.
+        """
+        c_sq = (centers ** 2).sum(dim=1, keepdim=True)      # [K, 1]
+        p_sq = (points ** 2).sum(dim=0, keepdim=True)        # [1, M]
+        cross = centers @ points                              # [K, M]
+        return (c_sq + p_sq - 2 * cross).clamp(min=0.0)
 
     def _merge_modes(
         self, modes: torch.Tensor, factor: float = 0.5,
