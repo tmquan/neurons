@@ -13,6 +13,7 @@ from neurons.transforms.edt import _use_gpu
 def find_boundaries(
     label: np.ndarray,
     mode: str = "inner",
+    connectivity: int = 1,
     **kwargs,
 ) -> np.ndarray:
     """Find boundaries between labeled regions.
@@ -22,6 +23,9 @@ def find_boundaries(
     Args:
         label: Integer label array ``[*spatial]``.
         mode: Boundary mode (``'inner'``, ``'outer'``, ``'thick'``).
+        connectivity: Neighbourhood connectivity.  ``1`` = face-adjacent
+            only (6-connected in 3D, thinnest boundaries).  Higher values
+            include edge/corner neighbours (up to 26-connected in 3D).
 
     Returns:
         Boolean boundary mask, same shape as *label*.
@@ -32,11 +36,12 @@ def find_boundaries(
             from cucim.skimage.segmentation import (
                 find_boundaries as _cucim_fb,
             )
-            return cp.asnumpy(_cucim_fb(cp.asarray(label), mode=mode, **kwargs))
+            return cp.asnumpy(_cucim_fb(cp.asarray(label), mode=mode,
+                                        connectivity=connectivity, **kwargs))
         except Exception:
             pass
     from skimage.segmentation import find_boundaries as _skimage_fb
-    return _skimage_fb(label, mode=mode, **kwargs)
+    return _skimage_fb(label, mode=mode, connectivity=connectivity, **kwargs)
 
 
 class FindBoundariesd(MapTransform, Randomizable):
