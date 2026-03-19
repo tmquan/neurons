@@ -16,7 +16,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import einsum, rearrange, reduce, repeat
 
 
 class SoftMeanShift(nn.Module):
@@ -64,11 +64,10 @@ class SoftMeanShift(nn.Module):
         """
         fg_idx = torch.where(fg_mask)[0]
         if len(fg_idx) == 0:
-            return emb_flat[:, :1].T
+            return rearrange(emb_flat[:, :1], "e 1 -> 1 e")
         n = min(max_seeds, len(fg_idx))
         perm = torch.randperm(len(fg_idx), device=fg_idx.device)[:n]
-        seeds = emb_flat[:, fg_idx[perm]].T
-        return seeds
+        return rearrange(emb_flat[:, fg_idx[perm]], "e k -> k e")
 
     def forward(
         self,
@@ -125,11 +124,10 @@ class SoftMeanShift(nn.Module):
 
                 # Gaussian kernel: weight each pixel by proximity to each mode
                 weights = torch.exp(-sq_dist / (2 * self.bandwidth ** 2))
-                weights_sum = weights.sum(dim=1, keepdim=True).clamp(min=1e-8)
+                weights_sum = reduce(weights, "k m -> k 1", "sum").clamp(min=1e-8)
 
                 # Weighted mean update: each mode moves toward its kernel-weighted centroid
-                modes = (rearrange(weights, "k n -> k 1 n")
-                         * rearrange(emb_fg, "e n -> 1 e n")).sum(dim=2) / weights_sum
+                modes = einsum(weights, emb_fg, "k m, e m -> k e") / weights_sum
 
                 # Merge modes that have converged close together
                 merged = self._merge_modes(modes)
@@ -183,9 +181,9 @@ class SoftMeanShift(nn.Module):
         Returns:
             [K, M] squared distances.
         """
-        c_sq = (centers ** 2).sum(dim=1, keepdim=True)      # [K, 1]
-        p_sq = (points ** 2).sum(dim=0, keepdim=True)        # [1, M]
-        cross = centers @ points                              # [K, M]
+        c_sq = reduce(centers ** 2, "k e -> k 1", "sum")
+        p_sq = reduce(points ** 2, "e m -> 1 m", "sum")
+        cross = einsum(centers, points, "k e, e m -> k m")
         return (c_sq + p_sq - 2 * cross).clamp(min=0.0)
 
     def _merge_modes(
@@ -277,8 +275,7 @@ class HoughVoting(nn.Module):
         device = offsets.device
 
         coords = self._make_coords(spatial_shape, device)
-        coords = coords.unsqueeze(0).expand(B, -1, *spatial_shape)
-        votes = coords + offsets
+        votes = repeat(coords, "s ... -> b s ...", b=B) + offsets
 
         if foreground_mask is None:
             foreground_mask = torch.ones(B, *spatial_shape, device=device, dtype=torch.bool)
