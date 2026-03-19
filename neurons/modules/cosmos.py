@@ -32,8 +32,6 @@ from neurons.metrics import (
     compute_per_batch_voi,
     compute_per_batch_ted,
 )
-from neurons.utils.point_sampling import sample_point_prompts
-
 logger = logging.getLogger(__name__)
 
 _SPATIAL_DIMS = 3
@@ -172,8 +170,7 @@ class BaseCosmosModule(pl.LightningModule):
             self.trainer.strategy.setup_optimizers(self.trainer)
 
     def on_train_epoch_end(self) -> None:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        pass
 
     # ------------------------------------------------------------------
     # Forward
@@ -198,15 +195,8 @@ class BaseCosmosModule(pl.LightningModule):
             sem = rearrange(sem, _SQUEEZE_PATTERN)
 
         if self._use_boundary_in_semantic:
-            from neurons.transforms.find_boundaries import find_boundaries
-            lbl_np = labels.cpu().numpy()
-            bnd = torch.zeros_like(sem, dtype=torch.bool)
-            for b in range(lbl_np.shape[0]):
-                bnd[b] = torch.from_numpy(
-                    find_boundaries(lbl_np[b], mode="inner", connectivity=1)
-                )
             sem = sem.clone()
-            sem[bnd] = 0
+            sem[self._boundary_mask(labels)] = 0
 
         targets: Dict[str, Any] = {
             "semantic_labels": sem,
@@ -225,6 +215,25 @@ class BaseCosmosModule(pl.LightningModule):
         if "label_covariance" in batch:
             targets["label_covariance"] = batch["label_covariance"]
         return targets
+
+    @staticmethod
+    @torch.no_grad()
+    def _boundary_mask(labels: torch.Tensor) -> torch.Tensor:
+        """Thin inner boundary mask (connectivity=1, 6-connected in 3D).
+
+        Passes CUDA tensors directly to cucim via DLPack zero-copy
+        when available; falls back to skimage on CPU otherwise.
+        """
+        from neurons.transforms.find_boundaries import find_boundaries
+
+        parts = []
+        for b in range(labels.shape[0]):
+            bnd = find_boundaries(labels[b], mode="inner", connectivity=1)
+            if isinstance(bnd, torch.Tensor):
+                parts.append(bnd)
+            else:
+                parts.append(torch.from_numpy(bnd).to(labels.device))
+        return torch.stack(parts)
 
     # ------------------------------------------------------------------
     # Proofread helpers
@@ -304,6 +313,7 @@ class BaseCosmosModule(pl.LightningModule):
             targets.pop("_cached_weights", None)
             predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
         else:
+            from neurons.utils.point_sampling import sample_point_prompts
             point_prompts = sample_point_prompts(
                 targets["semantic_labels"],
                 targets["labels"],
@@ -318,6 +328,8 @@ class BaseCosmosModule(pl.LightningModule):
     # Training step
     # ------------------------------------------------------------------
 
+    _MODE_DISPATCH = {"automatic": "_run_automatic", "proofread": "_run_proofread"}
+
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         batch = self._strip_meta_tensor(batch)
         images = batch["image"]
@@ -325,27 +337,25 @@ class BaseCosmosModule(pl.LightningModule):
             images = rearrange(images, _EXPAND_PATTERN)
 
         targets = self._prepare_targets(batch)
+        targets["_cached_weights"] = self.criterion._compute_targets(
+            targets["labels"], targets,
+        )
 
-        cached = self.criterion._compute_targets(targets["labels"], targets)
-        targets["_cached_weights"] = cached
-
+        bs = images.shape[0]
         all_losses: Dict[str, torch.Tensor] = {}
         mode_losses: List[torch.Tensor] = []
 
         for mode in self.training_modes:
-            if mode == "automatic":
-                losses = self._run_automatic(images, targets)
-            elif mode == "proofread":
-                losses = self._run_proofread(images, targets)
-            else:
+            fn = self._MODE_DISPATCH.get(mode)
+            if fn is None:
                 raise ValueError(f"Unknown training mode: {mode}")
+            losses = getattr(self, fn)(images, targets)
             mode_losses.append(losses["loss"])
             for k, v in losses.items():
                 all_losses[f"train/{mode}/{k}"] = v
 
-        total_loss = torch.stack(mode_losses).mean()
+        total_loss = mode_losses[0] if len(mode_losses) == 1 else torch.stack(mode_losses).mean()
 
-        bs = images.shape[0]
         for name, val in all_losses.items():
             self.log(name, val, on_step=False, on_epoch=True, batch_size=bs)
         self.log("train/loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=bs)

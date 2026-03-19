@@ -178,10 +178,6 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             keys.extend(["label_direction", "label_covariance"])
         return keys
 
-    def _train_output_keys(self) -> list:
-        """Output keys for train pipeline (includes precomputed weights)."""
-        return self._output_keys() + ["weight_edge", "weight_bone"]
-
     def get_train_transforms(self) -> Compose:
         io_keys = ["image", "label"]
         sd = self._get_spatial_dims()

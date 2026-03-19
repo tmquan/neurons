@@ -29,7 +29,7 @@ class _VolumeHandle:
     """Lightweight metadata handle for a single volume — no data in RAM."""
 
     __slots__ = ("image_path", "label_path", "image_key", "label_key",
-                 "shape", "name", "find_boundaries")
+                 "shape", "name")
 
     def __init__(
         self,
@@ -39,7 +39,6 @@ class _VolumeHandle:
         name: str,
         image_key: Optional[str] = None,
         label_key: Optional[str] = None,
-        find_boundaries: float = 0.0,
     ) -> None:
         self.image_path = image_path
         self.label_path = label_path
@@ -47,7 +46,6 @@ class _VolumeHandle:
         self.label_key = label_key
         self.shape = shape
         self.name = name
-        self.find_boundaries = find_boundaries
 
 
 def _resolve_hdf5_key(path: Path) -> Optional[str]:
@@ -227,7 +225,6 @@ class LazyVolDataset(Dataset):
                 name=vol_name,
                 image_key=img_key,
                 label_key=label_key,
-                find_boundaries=float(vol_spec.get("find_boundaries", 0)),
             )
             self._handles.append(handle)
             cumulative += int(np.prod(shape))

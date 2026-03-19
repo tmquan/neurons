@@ -11,37 +11,60 @@ from neurons.transforms.edt import _use_gpu
 
 
 def find_boundaries(
-    label: np.ndarray,
+    label,
     mode: str = "inner",
     connectivity: int = 1,
     **kwargs,
-) -> np.ndarray:
+):
     """Find boundaries between labeled regions.
 
-    Uses cucim on GPU when available, falls back to skimage.
+    Accepts ``numpy.ndarray`` or CUDA ``torch.Tensor``.  When a CUDA
+    tensor is passed and cucim is available, the entire operation stays
+    on the GPU via DLPack zero-copy — no CPU roundtrip.
 
     Args:
-        label: Integer label array ``[*spatial]``.
+        label: Integer label array ``[*spatial]`` (numpy or torch).
         mode: Boundary mode (``'inner'``, ``'outer'``, ``'thick'``).
         connectivity: Neighbourhood connectivity.  ``1`` = face-adjacent
             only (6-connected in 3D, thinnest boundaries).  Higher values
             include edge/corner neighbours (up to 26-connected in 3D).
 
     Returns:
-        Boolean boundary mask, same shape as *label*.
+        Boolean boundary mask, same type and device as *label*.
     """
+    is_tensor = isinstance(label, torch.Tensor)
+
+    if is_tensor and label.is_cuda and _use_gpu():
+        try:
+            import cupy as cp
+            from cucim.skimage.segmentation import (
+                find_boundaries as _cucim_fb,
+            )
+            cp_label = cp.from_dlpack(label)
+            cp_bnd = _cucim_fb(cp_label, mode=mode,
+                               connectivity=connectivity, **kwargs)
+            return torch.from_dlpack(cp_bnd)
+        except Exception:
+            pass
+
+    if is_tensor:
+        label_np = label.detach().cpu().numpy()
+    else:
+        label_np = label
+
     if _use_gpu():
         try:
             import cupy as cp
             from cucim.skimage.segmentation import (
                 find_boundaries as _cucim_fb,
             )
-            return cp.asnumpy(_cucim_fb(cp.asarray(label), mode=mode,
+            return cp.asnumpy(_cucim_fb(cp.asarray(label_np), mode=mode,
                                         connectivity=connectivity, **kwargs))
         except Exception:
             pass
+
     from skimage.segmentation import find_boundaries as _skimage_fb
-    return _skimage_fb(label, mode=mode, connectivity=connectivity, **kwargs)
+    return _skimage_fb(label_np, mode=mode, connectivity=connectivity, **kwargs)
 
 
 class FindBoundariesd(MapTransform, Randomizable):
