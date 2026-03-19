@@ -120,6 +120,7 @@ class BaseCosmosModule(pl.LightningModule):
         self._num_pos_points: int = training_config.get("num_pos_points", 5)
         self._num_neg_points: int = training_config.get("num_neg_points", 5)
         self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
+        self._use_boundary_in_semantic: bool = training_config.get("boundary_in_semantic", True)
 
         self._variant = model_config.get("variant", "2B")
 
@@ -195,6 +196,17 @@ class BaseCosmosModule(pl.LightningModule):
         sem = batch.get("semantic_ids", (labels > 0).long())
         if sem.dim() == _SPATIAL_DIMS + 2:
             sem = rearrange(sem, _SQUEEZE_PATTERN)
+
+        if self._use_boundary_in_semantic:
+            from neurons.transforms.find_boundaries import find_boundaries
+            lbl_np = labels.cpu().numpy()
+            bnd = torch.zeros_like(sem, dtype=torch.bool)
+            for b in range(lbl_np.shape[0]):
+                bnd[b] = torch.from_numpy(
+                    find_boundaries(lbl_np[b], mode="inner", connectivity=1)
+                )
+            sem = sem.clone()
+            sem[bnd] = 0
 
         targets: Dict[str, Any] = {
             "semantic_labels": sem,
