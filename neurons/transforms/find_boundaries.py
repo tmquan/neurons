@@ -67,8 +67,36 @@ def find_boundaries(
     return _skimage_fb(label_np, mode=mode, connectivity=connectivity, **kwargs)
 
 
+def boundary_mask_batch(
+    labels: torch.Tensor,
+    mode: str = "inner",
+    connectivity: int = 1,
+) -> torch.Tensor:
+    """Batch boundary mask using thinnest connectivity (6-connected in 3D).
+
+    Args:
+        labels: Instance labels [B, *spatial].
+        mode: Boundary mode (``'inner'``, ``'outer'``, ``'thick'``).
+        connectivity: 1 = face-adjacent only (thinnest).
+
+    Returns:
+        Boolean mask [B, *spatial], True at boundary voxels.
+    """
+    parts = []
+    for b in range(labels.shape[0]):
+        bnd = find_boundaries(labels[b], mode=mode, connectivity=connectivity)
+        if isinstance(bnd, np.ndarray):
+            parts.append(torch.from_numpy(bnd).to(labels.device))
+        else:
+            parts.append(bnd)
+    return torch.stack(parts)
+
+
 class FindBoundariesd(MapTransform, Randomizable):
-    """Zero out boundary voxels in instance labels.
+    """Zero out boundary voxels in instance labels (label × (1 − boundary)).
+
+    Uses thinnest boundary (connectivity=1, 6-connected in 3D) so boundary
+    voxels are multiplied out: label[boundary] = 0.
 
     Wraps :func:`find_boundaries` as a MONAI dictionary transform.
     Expects input labels in ``[C, *spatial]`` format (post
@@ -77,6 +105,7 @@ class FindBoundariesd(MapTransform, Randomizable):
     Args:
         keys: Keys of instance label maps to process.
         mode: Boundary mode (``'inner'``, ``'outer'``, ``'thick'``).
+        connectivity: 1 = face-adjacent only (thinnest boundaries).
         prob: Probability of applying the transform per sample.
     """
 
@@ -84,10 +113,12 @@ class FindBoundariesd(MapTransform, Randomizable):
         self,
         keys: KeysCollection,
         mode: str = "inner",
+        connectivity: int = 1,
         prob: float = 1.0,
     ) -> None:
         super().__init__(keys)
         self.mode = mode
+        self.connectivity = connectivity
         self.prob = prob
         self._do_transform = True
 
@@ -114,10 +145,14 @@ class FindBoundariesd(MapTransform, Randomizable):
 
             if label_np.ndim > 1:
                 for c in range(label_np.shape[0]):
-                    boundaries = find_boundaries(label_np[c], mode=self.mode)
+                    boundaries = find_boundaries(
+                        label_np[c], mode=self.mode, connectivity=self.connectivity
+                    )
                     label_np[c][boundaries] = 0
             else:
-                boundaries = find_boundaries(label_np, mode=self.mode)
+                boundaries = find_boundaries(
+                    label_np, mode=self.mode, connectivity=self.connectivity
+                )
                 label_np[boundaries] = 0
 
             if is_tensor:

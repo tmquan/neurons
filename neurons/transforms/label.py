@@ -21,18 +21,21 @@ from monai.transforms import MapTransform
 from neurons.transforms.edt import _use_gpu
 
 
-def _cc_label(label_np: np.ndarray) -> np.ndarray:
-    """Value-based connected-component labeling (cucim / skimage)."""
+def _cc_label(label_np: np.ndarray, connectivity: int = 1) -> np.ndarray:
+    """Value-based connected-component labeling (cucim / skimage).
+
+    connectivity=1: face-adjacent only (6-connected in 3D, thinnest).
+    """
     if _use_gpu():
         try:
             import cupy as cp
             from cucim.skimage.measure import label as _cucim_label
-            result = _cucim_label(cp.asarray(label_np), background=0)
+            result = _cucim_label(cp.asarray(label_np), background=0, connectivity=connectivity)
             return cp.asnumpy(result)
         except Exception:
             pass
     from skimage.measure import label as _skimage_label
-    return _skimage_label(label_np, background=0)
+    return _skimage_label(label_np, background=0, connectivity=connectivity)
 
 
 class Labeld(MapTransform):
@@ -49,15 +52,18 @@ class Labeld(MapTransform):
     Args:
         keys: Keys of instance label maps.
         spatial_dims: Number of spatial dimensions (2 or 3).
+        connectivity: 1 = face-adjacent only (6-connected in 3D, thinnest).
     """
 
     def __init__(
         self,
         keys: KeysCollection,
         spatial_dims: int = 3,
+        connectivity: int = 1,
     ) -> None:
         super().__init__(keys)
         self.spatial_dims = spatial_dims
+        self.connectivity = connectivity
 
     def __call__(self, data: Dict) -> Dict:
         d = dict(data)
@@ -75,7 +81,7 @@ class Labeld(MapTransform):
             while label_np.ndim > self.spatial_dims:
                 label_np = label_np[0]
 
-            relabeled = _cc_label(label_np.astype(np.int64))
+            relabeled = _cc_label(label_np.astype(np.int64), connectivity=self.connectivity)
 
             if had_channel:
                 relabeled = relabeled[np.newaxis]

@@ -98,22 +98,15 @@ class InstanceLoss(nn.Module):
 
     @torch.no_grad()
     def _boundary_weight_torch(self, label: torch.Tensor) -> torch.Tensor:
-        """Inner boundary weight matching ``find_boundaries(mode='inner')``.
+        """Inner boundary weight via find_boundaries (connectivity=1, thinnest)."""
+        from neurons.transforms.find_boundaries import boundary_mask_batch
 
-        A foreground pixel is on the boundary iff any neighbour in the
-        3^d kernel has a different label value.
-        """
-        label_4d = rearrange(label, "b ... -> b 1 ...").float()
-        padded = F.pad(label_4d, self._pad, mode="replicate")
-        dilated = self._pool(+padded, 3, stride=1, padding=0)
-        eroded = self._pool(-padded, 3, stride=1, padding=0).neg_()
-        neighbor_differs = (dilated != label_4d) | (eroded != label_4d)
-        boundary = rearrange((label_4d > 0) & neighbor_differs, "b 1 ... -> b ...").float()
+        boundary = boundary_mask_batch(label, mode="inner", connectivity=1).float()
         return 1.0 + boundary * (self.weight_edge - 1.0)
 
     @torch.no_grad()
     def _boundary_weight_cpu(self, label: torch.Tensor) -> torch.Tensor:
-        """Boundary weight via cucim/skimage ``find_boundaries`` on CPU."""
+        """Boundary weight via cucim/skimage ``find_boundaries`` (connectivity=1)."""
         from neurons.transforms.find_boundaries import find_boundaries
 
         label_np = label.numpy()
@@ -121,7 +114,7 @@ class InstanceLoss(nn.Module):
         edge_scale = self.weight_edge - 1.0
 
         for b in range(label_np.shape[0]):
-            boundary = find_boundaries(label_np[b], mode="inner")
+            boundary = find_boundaries(label_np[b], mode="inner", connectivity=1)
             weight_np[b][boundary] = 1.0 + edge_scale
 
         return torch.from_numpy(weight_np)

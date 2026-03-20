@@ -195,8 +195,11 @@ class BaseCosmosModule(pl.LightningModule):
             sem = rearrange(sem, _SQUEEZE_PATTERN)
 
         if self._use_boundary_in_semantic:
+            boundary = self._boundary_mask(labels)
             sem = sem.clone()
-            sem[self._boundary_mask(labels)] = 0
+            sem[boundary] = 0
+            labels = labels.clone()
+            labels[boundary] = 0  # thinnest boundary multiplied to label
 
         targets: Dict[str, Any] = {
             "semantic_labels": sem,
@@ -219,21 +222,9 @@ class BaseCosmosModule(pl.LightningModule):
     @staticmethod
     @torch.no_grad()
     def _boundary_mask(labels: torch.Tensor) -> torch.Tensor:
-        """Thin inner boundary mask (connectivity=1, 6-connected in 3D).
-
-        Passes CUDA tensors directly to cucim via DLPack zero-copy
-        when available; falls back to skimage on CPU otherwise.
-        """
-        from neurons.transforms.find_boundaries import find_boundaries
-
-        parts = []
-        for b in range(labels.shape[0]):
-            bnd = find_boundaries(labels[b], mode="inner", connectivity=1)
-            if isinstance(bnd, torch.Tensor):
-                parts.append(bnd)
-            else:
-                parts.append(torch.from_numpy(bnd).to(labels.device))
-        return torch.stack(parts)
+        """Thin inner boundary mask (connectivity=1, 6-connected in 3D)."""
+        from neurons.transforms.find_boundaries import boundary_mask_batch
+        return boundary_mask_batch(labels, mode="inner", connectivity=1)
 
     # ------------------------------------------------------------------
     # Proofread helpers

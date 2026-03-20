@@ -92,8 +92,8 @@ class BaseVistaModule(pl.LightningModule):
 
         model_config = model_config or {}
         self.optimizer_config = optimizer_config or {}
-        loss_config = loss_config or {}
         training_config = training_config or {}
+        loss_config = loss_config or {}
 
         self.model = self._model_cls(
             in_channels=model_config.get("in_channels", 1),
@@ -115,6 +115,7 @@ class BaseVistaModule(pl.LightningModule):
         self._num_pos_points: int = training_config.get("num_pos_points", 5)
         self._num_neg_points: int = training_config.get("num_neg_points", 5)
         self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
+        self._use_boundary_in_semantic: bool = training_config.get("boundary_in_semantic", True)
 
         if "proofread" not in self.training_modes:
             self.model.point_encoder.requires_grad_(False)
@@ -148,6 +149,13 @@ class BaseVistaModule(pl.LightningModule):
         if sem.dim() == ndim_with_channel:
             sem = rearrange(sem, squeeze)
 
+        if self._use_boundary_in_semantic:
+            boundary = self._boundary_mask(labels)
+            sem = sem.clone()
+            sem[boundary] = 0
+            labels = labels.clone()
+            labels[boundary] = 0  # thinnest boundary multiplied to label
+
         targets: Dict[str, Any] = {
             "semantic_labels": sem,
             "labels": labels,
@@ -164,6 +172,13 @@ class BaseVistaModule(pl.LightningModule):
         if "label_covariance" in batch:
             targets["label_covariance"] = batch["label_covariance"]
         return targets
+
+    @staticmethod
+    @torch.no_grad()
+    def _boundary_mask(labels: torch.Tensor) -> torch.Tensor:
+        """Thin inner boundary mask (connectivity=1, 6-connected in 3D)."""
+        from neurons.transforms.find_boundaries import boundary_mask_batch
+        return boundary_mask_batch(labels, mode="inner", connectivity=1)
 
     # ------------------------------------------------------------------
     # Proofread helpers
