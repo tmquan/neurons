@@ -1,8 +1,14 @@
 # Tensor Glyph Formation
 
-This document explains how the **EDT structure tensor** is computed in
-`neurons.losses.discriminative._compute_covariance` and visualised as
-elliptical tensor glyphs in `notebooks/00_explore_utility.ipynb`.
+This document explains the **EDT structure tensor** — a symmetric
+positive-semi-definite matrix encoding local shape from the Euclidean
+distance transform. The concept is visualised as elliptical tensor glyphs
+in `notebooks/00_explore_utility.ipynb`.
+
+**Note:** The current training pipeline uses `neurons.transforms.covariance.compute_covariance_field`,
+which computes per-instance spatial covariance from `regionprops.moments_central`
+(rather than EDT gradient outer product). The EDT structure tensor described
+here is a related geometric concept used in the exploration notebook.
 
 ---
 

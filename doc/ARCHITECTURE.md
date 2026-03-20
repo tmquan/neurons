@@ -44,11 +44,12 @@ Trainer.fit(module, datamodule)
 | `models/vista3d_model.py`            | SegResNet backbone + semantic/instance/geometry heads              |
 | `models/cosmospredict3d_model.py`    | Cosmos-Predict2.5 DiT backbone + VAE decoder adapter               |
 | `models/cosmostransfer3d_model.py`   | Cosmos-Transfer2.5 DiT backbone + VAE decoder adapter              |
-| `modules/base.py`                    | `BaseVistaModule` / `BaseCosmosModule` — shared training logic     |
+| `modules/vista.py`                   | `BaseVistaModule` — shared training logic for Vista 2D/3D         |
+| `modules/cosmos.py`                  | `BaseCosmosModule` — shared training logic for Cosmos Predict/Transfer |
 | `modules/vista3d_module.py`          | Lightning module for Vista3D training                              |
 | `modules/cosmospredict3d_module.py`  | Lightning module for CosmosPredict3D training                      |
 | `modules/cosmostransfer3d_module.py` | Lightning module for CosmosTransfer3D training                     |
-| `losses/loss.py`                     | `BaseCombinedLoss` — shared semantic + instance + geometry loss     |
+| `losses/cosmos.py`                   | `BaseCombinedLoss` — shared semantic + instance + geometry loss     |
 | `losses/vista3d_losses.py`           | Vista3DLoss: L_sem + L_ins + L_geom                                |
 | `losses/cosmospredict3d_losses.py`   | CosmosPredict3DLoss: same + optional L_flow_consistency            |
 | `losses/cosmostransfer3d_losses.py`  | CosmosTransfer3DLoss: same + optional L_flow_consistency           |
@@ -320,7 +321,7 @@ CosmosPredict3DModule supports **differential learning rates**:
 ```yaml
 optimizer:
   lr: 1.0e-4           # head learning rate
-  backbone_lr: 1.0e-5  # lower LR for pretrained DiT
+  dit_backbone_lr: 1.0e-5  # lower LR for pretrained DiT
 ```
 
 Also supports `cosine_warmup` scheduler (linear warmup then cosine decay),
@@ -459,7 +460,7 @@ Point prompts Sparse → Conv3d        Same mechanism
 | Feature                         | Vista3D           | CosmosPredict3D         | CosmosTransfer3D        |
 | ------------------------------- | ----------------- | ----------------------- | ----------------------- |
 | `freeze_dit_backbone` default   | N/A (no pretrain) | `False`                 | `False`                 |
-| Differential LR (`backbone_lr`) | No                | Yes                     | Yes                     |
+| Differential LR (`dit_backbone_lr`) | No                | Yes                     | Yes                     |
 | `cosine_warmup` scheduler       | No                | Yes                     | Yes                     |
 | Feature-consistency loss        | No                | Optional                | Optional                |
 | Compatibility check             | No                | `compatibility_check()` | `compatibility_check()` |

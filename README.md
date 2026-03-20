@@ -12,9 +12,10 @@ A modular, extensible PyTorch Lightning-based infrastructure for connectomics re
 
 ## Features
 
-- **Multi-Dataset Support** -- SNEMI3D, CREMI3D, MICRONS, MitoEM2, and combined multi-dataset training with unified label space
-- **Vista Architecture** -- Vista3D and Vista2D with semantic + instance dual heads
-- **Model Zoo** -- Vista3D backbone via MONAI (SegResNet fallback)
+- **Multi-Dataset Support** — SNEMI3D, CREMI3D, MICRONS, MitoEM2, and combined multi-dataset training with unified label space
+- **Vista Architecture** — Vista3D and Vista2D with semantic + instance dual heads
+- **Cosmos Foundation Models** — CosmosPredict3D and CosmosTransfer3D (DiT + VAE from NVIDIA)
+- **Model Zoo** — Vista3D backbone via MONAI (SegResNet fallback)
 - **Geometric Instance Losses** -- Centroid and skeleton discriminative losses with learned projection heads for direction, structure tensor, and image reconstruction
 - **Evaluation Metrics** -- ARI, AMI, AXI, VOI, TED (instance); Dice, IoU (semantic)
 - **Hydra Configuration** -- YAML-based config with CLI overrides, no code changes needed
@@ -97,13 +98,17 @@ jupyter notebook notebooks/01_explore_snemi3d.ipynb
 ### 2. Train a segmentation model
 
 ```bash
+# Vista3D on SNEMI3D (lightweight, from scratch)
 python scripts/train.py --config-name snemi3d
+
+# CosmosTransfer3D on combined SNEMI3D + MICRONS (recommended for large-scale)
+python scripts/train.py --config-name snemi3d_microns
 ```
 
 ### 3. Override parameters via CLI
 
 ```bash
-python scripts/train.py --config-name snemi3d \
+python scripts/train.py --config-name snemi3d_microns \
     data.batch_size=8 \
     training.max_epochs=200 \
     optimizer.lr=5e-4
@@ -112,7 +117,8 @@ python scripts/train.py --config-name snemi3d \
 ### 4. Train with combined datasets
 
 ```bash
-python scripts/train.py --config-name combine
+python scripts/train.py --config-name snemi3d_microns   # SNEMI3D + MICRONS
+python scripts/train.py --config-name combine           # Multi-dataset Vista3D
 ```
 
 ### 5. Resume from a previous checkpoint
@@ -165,7 +171,7 @@ python scripts/train.py --config-name profiler
 
 ## Configuration
 
-All behavior is driven by YAML configs in `configs/`:
+All behavior is driven by YAML configs in `configs/`. See [doc/CONFIG_REFERENCE.md](doc/CONFIG_REFERENCE.md) for full parameter documentation.
 
 | Config | Description |
 |--------|-------------|
@@ -175,7 +181,7 @@ All behavior is driven by YAML configs in `configs/`:
 | `cremi3d.yaml` | CREMI3D multi-class segmentation |
 | `microns.yaml` | MICRONS large-scale connectomics |
 | `combine.yaml` | Multi-dataset Vista3D training |
-| `snemi3d_microns.yaml` | Combined SNEMI3D + MICRONS training |
+| `snemi3d_microns.yaml` | CosmosTransfer3D on combined SNEMI3D + MICRONS (recommended) |
 | `foundation.yaml` | Foundation model (all datasets) |
 | `profiler.yaml` | Profiling configuration |
 

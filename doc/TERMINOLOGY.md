@@ -24,8 +24,9 @@ background voxels.
 
 ## Architecture
 
-**Backbone** -- The shared encoder (SegResNet / SegResNetDS2 from MONAI)
-that maps the input image to a feature volume.  All task heads read
+**Backbone** -- The shared encoder that maps the input image to a feature
+volume. Vista uses SegResNet/SegResNetDS2 from MONAI; Cosmos uses a
+pretrained DiT (Diffusion Transformer) from NVIDIA. All task heads read
 from the same backbone features.
 
 **Task head** -- A lightweight decoder (Conv-Norm-ReLU-Conv) that

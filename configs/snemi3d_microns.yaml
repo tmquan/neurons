@@ -1,23 +1,31 @@
 # Combined SNEMI3D + MICRONS Configuration
-# Trains on neuron volumes from both datasets simultaneously.
+# Trains CosmosTransfer3D on neuron volumes from both datasets simultaneously.
 # Each volume entry includes a 'root' key pointing to its data directory.
+#
+# Usage:
+#   python scripts/train.py --config-name snemi3d_microns
+#   python scripts/train.py --config-name snemi3d_microns data.batch_size=8
+#
+# See doc/CONFIG_REFERENCE.md for full parameter documentation.
 
 defaults:
   - default
 
 experiment_name: snemi3d_microns_combined
 project_name: neurons-combined
+output_dir: outputs
 
 data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 8
-  cache_rate: 0.0
-  slice_mode: false
-  num_samples: 16000
+  num_workers: 16           # per-process; 8 GPUs × 16 = 128 total workers
+  cache_rate: 0.0           # LazyVolDataset reads on-demand; no caching
+  pin_memory: true
+  slice_mode: false          # 3D volumetric patches
+  num_samples: 16000        # virtual epoch length (random patches per epoch)
   patch_size: [48, 256, 256]
-  overcrop_factor: 1.25        # train crops at 1.25x then random zoom-out to patch_size
+  overcrop_factor: 1.25      # train crops at 1.25× then random zoom-out to patch_size
 
   # Train: SNEMI3D AC4 + 4 MICRONS train crops
   train_volumes:
@@ -88,6 +96,7 @@ training:
   log_every_n_steps: 50
   benchmark: true
   compile: false
+  boundary_in_semantic: true   # boundary computed in _prepare_targets, applied to semantic only
   training_modes:
     - automatic
 

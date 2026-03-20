@@ -25,7 +25,7 @@ Einops is used consistently in:
 ### 1.3 Further Opportunities
 
 - **`losses/skeletonize.py`**: kernel tensors `view(1, 1, 3, 3, 3)` → `rearrange(..., "d h w -> 1 1 d h w")`
-- **`losses/discriminative.py`**: `.view(spatial_shape)` → einops with explicit spatial dims
+- **`losses/instance.py`**, **`losses/geometry.py`**: `.view(spatial_shape)` → einops with explicit spatial dims
 - **`inference/soft_clustering.py`**: `.view(B, *spatial_shape)` → `rearrange(..., "b (d h w) -> b d h w", ...)`
 
 ---
@@ -34,10 +34,10 @@ Einops is used consistently in:
 
 ### 2.1 `find_boundaries` — Shape Handling
 
-**File:** `neurons/utils/labels.py`
+**File:** `neurons/transforms/find_boundaries.py`
 
-- **2D labels `[1, H, W]`**: `has_channel = (dim==4 and shape[0]==1)` is False → treated as 3D with D=1. The roll and pool paths both handle this; no crash.
-- **`instance_only`**: When True, marks only instance-background boundaries (erased); keeps instance-instance boundaries.
+- **2D/3D labels**: Supports both numpy and torch tensors; uses cucim when available for GPU acceleration.
+- **Boundary application**: In Cosmos/Vista modules, boundary is computed in `_prepare_targets` and applied to semantic labels only (instance labels stay intact). Uses `connectivity=1` (6-connected in 3D) for thinnest boundaries.
 
 ### 2.2 Transform Pipeline
 
@@ -117,4 +117,4 @@ Einops is used consistently in:
 
 - Add tests for `RandFindBoundariesd` (2D and 3D, instance_only True/False)
 - Document `ElasticDeformationd` as per-slice 2D for 3D input
-- Consider einops in `skeletonize.py` and `discriminative.py` for consistency
+- Consider einops in `skeletonize.py` and `instance.py` for consistency

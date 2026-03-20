@@ -4,11 +4,11 @@ The training loop supports two modes that run **in the same step** on every batc
 When both are enabled the losses are averaged and a single backward pass updates all
 weights (backbone, task heads, and point prompt encoder together).
 
-All Lightning modules inherit from `BaseVistaModule` (Vista family) or
-`BaseCosmosModule` (Cosmos family) in `modules/base.py`, which centralise the
-shared `training_step` / `validation_step` logic, target preparation, and
-scheduler configuration.  Loss composition is handled by `BaseCombinedLoss`
-in `losses/loss.py`.
+All Lightning modules inherit from `BaseVistaModule` (Vista family) in
+`modules/vista.py` or `BaseCosmosModule` (Cosmos family) in `modules/cosmos.py`,
+which centralise the shared `training_step` / `validation_step` logic, target
+preparation, and scheduler configuration.  Loss composition is handled by
+`BaseCombinedLoss` in `losses/cosmos.py`.
 
 ```
 training_step(batch)
@@ -518,7 +518,7 @@ model:
 
 optimizer:
   lr: 1.0e-4                 # head + decoder learning rate
-  backbone_lr: 1.0e-5        # 10x lower for pretrained DiT
+  dit_backbone_lr: 1.0e-5    # 10x lower for pretrained DiT backbone
   scheduler:
     type: cosine_warmup       # warm up the backbone slowly
     warmup_epochs: 5
@@ -529,7 +529,7 @@ training:
 ```
 
 **What trains**: everything except the VAE encoder.  The DiT backbone
-receives gradients at 10x lower learning rate via the `backbone_lr`
+receives gradients at 10x lower learning rate via the `dit_backbone_lr`
 parameter (already supported by all Cosmos modules).
 
 **Rationale**: Once the heads have converged, the backbone can be
@@ -547,7 +547,7 @@ checkpoint via Hydra or PyTorch Lightning's `ckpt_path` mechanism:
 PYTHONPATH=$(pwd) python scripts/train.py \
     --config-name snemi3d_microns \
     model.freeze_dit_backbone=false \
-    optimizer.backbone_lr=1.0e-5 \
+    optimizer.dit_backbone_lr=1.0e-5 \
     optimizer.scheduler.type=cosine_warmup \
     training.max_epochs=160 \
     +ckpt_path=outputs/checkpoints/phase1-last.ckpt
@@ -566,7 +566,7 @@ model:
 
 optimizer:
   lr: 1.0e-5
-  backbone_lr: 1.0e-6        # very conservative for both backbone and encoder
+  dit_backbone_lr: 1.0e-6    # very conservative for both backbone and encoder
 ```
 
 **Warning**: The VAE encoder defines the latent space that the DiT was
@@ -600,12 +600,12 @@ model:
 These flags are identical across all four Cosmos models
 (CosmosPredict2D, CosmosPredict3D, CosmosTransfer2D, CosmosTransfer3D).
 
-The `backbone_lr` differential learning rate is set under `optimizer:`:
+The `dit_backbone_lr` differential learning rate is set under `optimizer:`:
 
 ```yaml
 optimizer:
   lr: 1.0e-4               # default LR for heads, decoder, adapter, projector
-  backbone_lr: 1.0e-5      # separate LR for DiT backbone (omit to use same as lr)
+  dit_backbone_lr: 1.0e-5  # separate LR for DiT backbone (omit to use same as lr)
 ```
 
 ### 9.5 Loading a Previous Checkpoint
