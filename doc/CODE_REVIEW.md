@@ -37,7 +37,7 @@ Einops is used consistently in:
 **File:** `neurons/transforms/find_boundaries.py`
 
 - **2D/3D labels**: Supports both numpy and torch tensors; uses cucim when available for GPU acceleration.
-- **Boundary application**: In Cosmos/Vista modules, boundary is computed in `_prepare_targets` and applied to semantic labels only (instance labels stay intact). Uses `connectivity=1` (6-connected in 3D) for thinnest boundaries.
+- **Boundary application**: Train-time ``FindBoundariesd`` (``data.find_boundaries`` probability) zeros boundary voxels in instance ``label`` patches; semantic targets derived from ``label`` follow automatically. ``InstanceLoss`` still uses ``boundary_mask_batch`` only for per-pixel **loss weighting** (`weight_edge`), not for mutating labels.
 
 ### 2.2 Transform Pipeline
 

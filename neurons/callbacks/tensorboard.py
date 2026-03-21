@@ -560,13 +560,6 @@ class ImageLogger(pl.Callback):
             if labels.dim() == self.spatial_dims + 2:
                 labels = rearrange(labels, "b 1 ... -> b ...")
 
-            # Apply thinnest boundary to labels (same as _prepare_targets)
-            if getattr(pl_module, "_use_boundary_in_semantic", True):
-                from neurons.transforms.find_boundaries import boundary_mask_batch
-                boundary = boundary_mask_batch(labels, mode="inner", connectivity=1)
-                labels = labels.clone()
-                labels[boundary] = 0
-
             n = min(images.shape[0], self.max_images)
             preds_auto = pl_module.model(images[:n])
 

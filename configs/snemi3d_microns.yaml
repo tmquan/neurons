@@ -19,13 +19,14 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 16           # per-process; 8 GPUs × 16 = 128 total workers
+  num_workers: 10           # per-process; 8 GPUs × 10 = 80 total workers
   cache_rate: 0.0           # LazyVolDataset reads on-demand; no caching
   pin_memory: true
   slice_mode: false          # 3D volumetric patches
   num_samples: 16000        # virtual epoch length (random patches per epoch)
   patch_size: [48, 256, 256]
   overcrop_factor: 1.25      # train crops at 1.25× then random zoom-out to patch_size
+  find_boundaries: 0.0       # train only: prob of FindBoundariesd per patch (0=off, 1=always)
 
   # Train: SNEMI3D AC4 + 4 MICRONS train crops
   train_volumes:
@@ -45,30 +46,6 @@ data:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS}
 
-# # --- vista3d ---
-# model:
-#   type: vista3d
-#   in_channels: 1
-#   num_classes: 16
-#   emb_dim: 16
-#   feature_size: 48
-#   dropout: 0.1
-
-# # --- cosmospredict3d ---
-# model:
-#   type: cosmospredict3d
-#   in_channels: 1
-#   num_classes: 16
-#   emb_dim: 16
-#   feature_size: 64
-#   variant: "2B"
-#   dtype: "bf16"
-#   freeze_vae_encoder: true      # VAE encoder  (true = always frozen; int N = freeze for N epochs)
-#   freeze_dit_backbone: 10       # DiT backbone (default false; int N = freeze for N epochs then unfreeze)
-#   freeze_vae_decoder: 10        # VAE decoder  (default false; set true to freeze body)
-#   dropout: 0.1
-
-# --- cosmostransfer3d ---
 model:
   type: cosmostransfer3d
   in_channels: 1
@@ -96,7 +73,6 @@ training:
   log_every_n_steps: 50
   benchmark: true
   compile: false
-  boundary_in_semantic: true   # boundary computed in _prepare_targets, applied to semantic only
   training_modes:
     - automatic
 

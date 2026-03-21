@@ -163,7 +163,7 @@ into disconnected fragments.  `RelabelAfterCropd` runs connected-component
 labelling (via `cupyx.scipy.ndimage.label` on GPU or `scipy.ndimage.label`
 on CPU) to assign unique IDs to each fragment.
 
-**Find boundaries** -- `RandFindBoundariesd` detects and erases
+**Find boundaries** -- `FindBoundariesd` detects and erases
 inter-instance boundary pixels (sets them to background 0), teaching
 the model to separate touching instances.
 

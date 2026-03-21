@@ -23,7 +23,7 @@ from monai.transforms import (
 )
 
 from neurons.datasets.base import CircuitDataset
-from neurons.transforms import Labeld, Directiond, Covarianced
+from neurons.transforms import FindBoundariesd, Labeld, Directiond, Covarianced
 
 
 class CircuitDataModule(pl.LightningDataModule, ABC):
@@ -73,6 +73,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         persistent_workers: bool = True,
         compute_geometry: bool = True,
         overcrop_factor: float = 1.0,
+        find_boundaries: float = 0.0,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -90,6 +91,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.persistent_workers = persistent_workers and num_workers > 0
         self.compute_geometry = compute_geometry
         self.overcrop_factor = overcrop_factor
+        self.find_boundaries = float(find_boundaries)
 
         self.overcrop_size: Optional[Tuple[int, ...]] = None
         if self.patch_size is not None and overcrop_factor > 1.0:
@@ -209,6 +211,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         elif self.image_size is not None:
             transforms.append(
                 Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
+            )
+
+        if self.find_boundaries > 0:
+            transforms.append(
+                FindBoundariesd(keys=["label"], prob=self.find_boundaries),
             )
 
         transforms.extend([

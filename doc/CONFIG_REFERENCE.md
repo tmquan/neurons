@@ -39,6 +39,7 @@ Use `--config-name <name>` to select a config. Override any key via CLI:
 | `num_samples` | int | null | Virtual epoch length (null = dataset default) |
 | `patch_size` | [D,H,W] | null | 3D crop size; enables LazyVolDataset when set |
 | `overcrop_factor` | float | 1.0 | Train crop = patch_size × factor, then zoom-out |
+| `find_boundaries` | float | 0.0 | Train only: probability of ``FindBoundariesd`` (0=off, 1=always) |
 | `train_volumes` | list | null | `[{vol, seg, root?}, ...]` |
 | `val_volumes` | list | null | Defaults to train_volumes |
 | `test_volumes` | list | null | Defaults to train_volumes |
@@ -146,7 +147,6 @@ Supported formats: HDF5, TIFF, NRRD, NIfTI (auto-detected by extension).
 | `num_sanity_val_steps` | int | 2 | Sanity check steps |
 | `log_every_n_steps` | int | 50 | Logging interval |
 | `benchmark` | bool | true | cudnn.benchmark |
-| `boundary_in_semantic` | bool | true | Boundary in semantic targets only |
 | `training_modes` | list | `[automatic]` | `automatic`, `proofread` |
 
 ---

@@ -45,6 +45,7 @@ class MitoEM2DataModule(CircuitDataModule):
         test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
         overcrop_factor: float = 1.0,
+        find_boundaries: float = 0.0,
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
@@ -61,6 +62,7 @@ class MitoEM2DataModule(CircuitDataModule):
             test_volumes=test_volumes,
             persistent_workers=persistent_workers,
             overcrop_factor=overcrop_factor,
+            find_boundaries=find_boundaries,
         )
 
     @property
