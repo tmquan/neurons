@@ -17,7 +17,6 @@ from monai.transforms import (
     RandGaussianNoised,
     RandRotate90d,
     RandSpatialCropd,
-    RandZoomd,
     Resized,
     SpatialPadd,
 )
@@ -72,7 +71,6 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
         compute_geometry: bool = True,
-        overcrop_factor: float = 1.0,
         find_boundaries: float = 0.0,
     ) -> None:
         super().__init__()
@@ -90,14 +88,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.test_volumes = test_volumes if test_volumes is not None else train_volumes
         self.persistent_workers = persistent_workers and num_workers > 0
         self.compute_geometry = compute_geometry
-        self.overcrop_factor = overcrop_factor
         self.find_boundaries = float(find_boundaries)
-
-        self.overcrop_size: Optional[Tuple[int, ...]] = None
-        if self.patch_size is not None and overcrop_factor > 1.0:
-            self.overcrop_size = tuple(
-                int(round(s * overcrop_factor)) for s in self.patch_size
-            )
 
         self.train_dataset: Optional[CircuitDataset] = None
         self.val_dataset: Optional[CircuitDataset] = None
@@ -188,22 +179,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
         ]
 
-        if self.patch_size is not None and self.overcrop_size is not None:
-            min_zoom = 1.0 / self.overcrop_factor
-            transforms.extend([
-                Labeld(keys=["label"], spatial_dims=sd),
-                RandZoomd(
-                    keys=io_keys,
-                    min_zoom=min_zoom,
-                    max_zoom=1.0,
-                    mode=("bilinear", "nearest"),
-                    keep_size=False,
-                    prob=1.0,
-                ),
-                SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
-                RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
-            ])
-        elif self.patch_size is not None:
+        if self.patch_size is not None:
             transforms.extend([
                 SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
                 RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),

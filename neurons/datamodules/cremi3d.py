@@ -46,7 +46,6 @@ class CREMI3DDataModule(CircuitDataModule):
         val_volumes: Optional[List[Dict[str, str]]] = None,
         test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
-        overcrop_factor: float = 1.0,
         find_boundaries: float = 0.0,
     ) -> None:
         self.include_clefts = include_clefts
@@ -64,7 +63,6 @@ class CREMI3DDataModule(CircuitDataModule):
             val_volumes=val_volumes,
             test_volumes=test_volumes,
             persistent_workers=persistent_workers,
-            overcrop_factor=overcrop_factor,
             find_boundaries=find_boundaries,
         )
 
@@ -91,14 +89,13 @@ class CREMI3DDataModule(CircuitDataModule):
         from neurons.datasets.lazy import LazyVolDataset
 
         num_samples = self.num_samples or 16000
-        train_patch = self.overcrop_size or self.patch_size
 
         if stage == "fit" or stage is None:
             train_vols = self.train_volumes or [{"vol": "A"}, {"vol": "B"}, {"vol": "C"}]
             self.train_dataset = LazyVolDataset(
                 root_dir=self.data_root,
                 volumes=train_vols,
-                patch_size=train_patch,
+                patch_size=self.patch_size,
                 transform=self.get_train_transforms(),
                 num_samples=num_samples,
             )

@@ -86,7 +86,6 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         "train_volumes": train_volumes,
         "val_volumes": val_volumes,
         "test_volumes": test_volumes,
-        "overcrop_factor": data_cfg.get("overcrop_factor", 1.0),
         "find_boundaries": float(data_cfg.get("find_boundaries", 0.0)),
     }
 

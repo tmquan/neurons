@@ -25,7 +25,6 @@ data:
   slice_mode: false          # 3D volumetric patches
   num_samples: 16000         # virtual epoch length (random patches per epoch)
   patch_size: [48, 256, 256]
-  overcrop_factor: 1.0       # train crops at 1.25× then random zoom-out to patch_size
   find_boundaries: 1.0       # train only: prob of FindBoundariesd per patch (0=off, 1=always)
 
   # Train: SNEMI3D AC4 + 4 MICRONS train crops

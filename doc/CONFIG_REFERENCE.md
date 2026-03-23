@@ -38,7 +38,6 @@ Use `--config-name <name>` to select a config. Override any key via CLI:
 | `slice_mode` | bool | true | 2D slices vs 3D patches |
 | `num_samples` | int | null | Virtual epoch length (null = dataset default) |
 | `patch_size` | [D,H,W] | null | 3D crop size; enables LazyVolDataset when set |
-| `overcrop_factor` | float | 1.0 | Train crop = patch_size × factor, then zoom-out |
 | `find_boundaries` | float | 0.0 | Train only: probability of ``FindBoundariesd`` (0=off, 1=always) |
 | `train_volumes` | list | null | `[{vol, seg, root?}, ...]` |
 | `val_volumes` | list | null | Defaults to train_volumes |
@@ -166,7 +165,6 @@ data:
   slice_mode: false
   num_samples: 16000
   patch_size: [48, 256, 256]
-  overcrop_factor: 1.25
   train_volumes: [...]  # SNEMI3D AC4 + 4 MICRONS crops
   val_volumes: [...]     # SNEMI3D AC3 + 1 MICRONS crop
 
