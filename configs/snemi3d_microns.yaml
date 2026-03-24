@@ -96,8 +96,8 @@ loss:
   weight_iou: 1.0
   weight_dice: 1.0
   weight_instance: 1.0
-  weight_pull: 2.0
-  weight_push: 2.0
+  weight_pull: 1.0
+  weight_push: 1.0
   weight_norm: 0.001
   delta_v: 0.5
   delta_d: 1.5
@@ -107,7 +107,7 @@ loss:
   dir_target: centroid
   weight_dir: 1.0
   weight_cov: 2.0
-  weight_raw: 2.0
+  weight_raw: 4.0
   loss_dir: l1
   loss_cov: l1
   loss_raw: l1

@@ -9,8 +9,11 @@ Supervises three groups of channels predicted by the geometry head:
 * **covariance** -- next ``S*S`` channels: full symmetric spatial covariance.
 * **raw** -- last 4 channels: RGBA reconstruction of the input image.
 
-All three sub-losses are foreground-only and support configurable loss type:
-``mse``, ``l1``, or ``smooth_l1``.
+Direction and covariance sub-losses are foreground-only.  The raw
+reconstruction sub-loss is computed over ALL pixels (the alpha channel
+encodes the foreground mask, so the model learns both regions).
+All sub-losses support configurable loss type: ``mse``, ``l1``, or
+``smooth_l1``.
 
 Expected geometry head output has ``S + S*S + 4`` channels:
   2-D:  2 + 4 + 4 = 10
@@ -131,6 +134,21 @@ class GeometryLoss(nn.Module):
             return F.smooth_l1_loss(
                 p, t, beta=self.smooth_l1_beta, reduction="sum",
             ) / numel
+
+    def _global_loss(self, pred, target, loss_type):
+        """Regression loss over ALL pixels (no foreground masking).
+
+        Args:
+            pred:      [C, N] predicted channels (flattened spatial).
+            target:    [C, N] target channels.
+            loss_type: "mse" | "l1" | "smooth_l1".
+        """
+        if loss_type == "mse":
+            return ((pred - target) ** 2).mean()
+        elif loss_type == "l1":
+            return (pred - target).abs().mean()
+        else:
+            return F.smooth_l1_loss(pred, target, beta=self.smooth_l1_beta)
 
     # ------------------------------------------------------------------
     # Target construction
@@ -265,7 +283,7 @@ class GeometryLoss(nn.Module):
             for b in range(B):
                 if cached_targets["dir_targets"][b] is None and cached_targets["cov_targets"][b] is None:
                     continue
-                L_raw = L_raw + self._fg_loss(pred_raw[b], rgba_tgt[b], fg[b], self.loss_raw)
+                L_raw = L_raw + self._global_loss(pred_raw[b], rgba_tgt[b], self.loss_raw)
 
         n = max(valid_b, 1)
         L_dir, L_cov, L_raw = L_dir / n, L_cov / n, L_raw / n
