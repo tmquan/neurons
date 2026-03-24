@@ -401,7 +401,11 @@ def main(cfg: DictConfig) -> None:
         strategy = DDPStrategy(
             find_unused_parameters=False,
             static_graph=True,
-            gradient_as_bucket_view=True,
+            # Must be False when any parameter gets gradients whose strides differ
+            # from the param layout (common with 1x1 convs, views, and DiT internals).
+            # True + mismatch triggers reducer warnings and can hit expect_autograd_hooks_
+            # internal asserts during backward.
+            gradient_as_bucket_view=False,
         )
     elif strategy_name == "fsdp":
         strategy = FSDPStrategy(

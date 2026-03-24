@@ -649,7 +649,7 @@ class CosmosPredict3DWrapper(nn.Module):
             nn.Conv3d(3, lc * 2, kernel_size=(t, s, s), stride=(t, s, s)),
             _NORM(lc * 2),
             nn.GELU(),
-            nn.Conv3d(lc * 2, lc, kernel_size=1),
+            _PointwiseLinear(lc * 2, lc),
         )
 
         self._backbone_loaded = False

@@ -182,7 +182,7 @@ class BaseCosmosModule(pl.LightningModule):
     # Target preparation
     # ------------------------------------------------------------------
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Extract and reshape targets from *batch*.
 
@@ -353,7 +353,7 @@ class BaseCosmosModule(pl.LightningModule):
         acc[0] += v * weight
         acc[1] += weight
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _eval_step_and_accumulate(
         self,
         batch: Dict[str, torch.Tensor],
