@@ -78,7 +78,7 @@ training:
 optimizer:
   type: adamw
   lr: 2.0e-4
-  dit_backbone_lr: 2.0e-5
+  dit_backbone_lr: 1.0e-4
   weight_decay: 1.0e-3
   scheduler:
     type: cosine_warmup
@@ -90,7 +90,7 @@ loss:
   semantic_mode: softmax  
   active_classes: 2  # only first 2 of 16 semantic channels receive gradient; bump when adding classes
   class_weights: [2.0, 1.0]
-  label_smoothing: 0.1
+  label_smoothing: 0.5
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
@@ -98,9 +98,9 @@ loss:
   weight_instance: 1.0
   weight_pull: 2.0
   weight_push: 2.0
-  weight_norm: 0.1
+  weight_norm: 0.001
   delta_v: 0.5
-  delta_d: 2.5
+  delta_d: 1.5
   weight_edge: 2.0
   weight_bone: 2.0
   weight_geometry: 1.0
