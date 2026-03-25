@@ -23,7 +23,7 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 4            # per rank; 8 GPUs × 4 workers = 32 dataloader procs (saves host RAM)
+  num_workers: 8            # per rank; 8 GPUs × 4 workers = 32 dataloader procs (saves host RAM)
   persistent_workers: false   # avoid N ranks × workers holding RAM across epochs
   cache_rate: 0.0           # LazyVolDataset reads on-demand; no caching
   pin_memory: true
