@@ -25,6 +25,7 @@ References:
 
 import logging
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1033,10 +1034,11 @@ class CosmosPredict3DWrapper(nn.Module):
                 latent, timestep, d_tok, h_tok, w_tok,
             )
         else:
-            final, intermediates = self.dit(
-                latent, timestep=timestep,
-                feature_layers=self._feature_layers,
-            )
+            with self._dit_forward_without_ckpt_when_eval():
+                final, intermediates = self.dit(
+                    latent, timestep=timestep,
+                    feature_layers=self._feature_layers,
+                )
             feat_list = [
                 intermediates[i]
                 for i in self._feature_layers
@@ -1132,13 +1134,14 @@ class CosmosPredict3DWrapper(nn.Module):
                 padding_mask = torch.ones(1, 1, latent.shape[-2], latent.shape[-1], device=latent.device, dtype=latent.dtype)
                 null_condition = torch.zeros(B, 1, *latent.shape[2:], device=latent.device, dtype=latent.dtype)
 
-                self.dit(
-                    hidden_states=latent,
-                    timestep=timestep,
-                    encoder_hidden_states=enc_hidden,
-                    condition_mask=null_condition,
-                    padding_mask=padding_mask,
-                )
+                with self._dit_forward_without_ckpt_when_eval():
+                    self.dit(
+                        hidden_states=latent,
+                        timestep=timestep,
+                        encoder_hidden_states=enc_hidden,
+                        condition_mask=null_condition,
+                        padding_mask=padding_mask,
+                    )
         finally:
             self._hooks_active = False
 
@@ -1253,7 +1256,25 @@ class CosmosPredict3DWrapper(nn.Module):
     # Gradient checkpointing
     # ------------------------------------------------------------------
 
-    def enable_gradient_checkpointing(self) -> None:
+    @contextmanager
+    def _dit_forward_without_ckpt_when_eval(self):
+        """Turn off DiT checkpointing during eval when it was enabled for training.
+
+        PyTorch Lightning runs ``validation_step`` under ``torch.inference_mode()``.
+        ``torch.utils.checkpoint`` cannot wrap inference tensors, so diffusers
+        DiT forward fails with gradient checkpointing left on. Training is
+        unaffected (``self.training`` is True).
+        """
+        if not self.training and self._gradient_checkpointing:
+            self.disable_gradient_checkpointing(_log=False)
+            try:
+                yield
+            finally:
+                self.enable_gradient_checkpointing(_log=False)
+        else:
+            yield
+
+    def enable_gradient_checkpointing(self, _log: bool = True) -> None:
         """Enable activation checkpointing on DiT transformer blocks.
 
         Trades ~20-30% slower forward for ~40% lower activation memory,
@@ -1262,7 +1283,8 @@ class CosmosPredict3DWrapper(nn.Module):
         if hasattr(self.dit, "enable_gradient_checkpointing"):
             self.dit.enable_gradient_checkpointing()
             self._gradient_checkpointing = True
-            logger.info("Gradient checkpointing enabled (diffusers API).")
+            if _log:
+                logger.info("Gradient checkpointing enabled (diffusers API).")
             return
 
         block_container = None
@@ -1295,17 +1317,19 @@ class CosmosPredict3DWrapper(nn.Module):
             block._original_forward = original_forward
 
         self._gradient_checkpointing = True
-        logger.info(
-            "Gradient checkpointing enabled (manual, %d blocks).",
-            len(block_container),
-        )
+        if _log:
+            logger.info(
+                "Gradient checkpointing enabled (manual, %d blocks).",
+                len(block_container),
+            )
 
-    def disable_gradient_checkpointing(self) -> None:
+    def disable_gradient_checkpointing(self, _log: bool = True) -> None:
         """Disable activation checkpointing, restoring original block forwards."""
         if hasattr(self.dit, "disable_gradient_checkpointing"):
             self.dit.disable_gradient_checkpointing()
             self._gradient_checkpointing = False
-            logger.info("Gradient checkpointing disabled (diffusers API).")
+            if _log:
+                logger.info("Gradient checkpointing disabled (diffusers API).")
             return
 
         block_container = None
@@ -1321,7 +1345,8 @@ class CosmosPredict3DWrapper(nn.Module):
                     del block._original_forward
 
         self._gradient_checkpointing = False
-        logger.info("Gradient checkpointing disabled.")
+        if _log:
+            logger.info("Gradient checkpointing disabled.")
 
     # ------------------------------------------------------------------
     # Utilities
