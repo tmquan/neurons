@@ -22,6 +22,8 @@ data:
   slice_mode: true
   num_samples: null
   find_boundaries: 0.0
+  # Keep false on multi-GPU jobs if host RAM is tight (each rank × num_workers processes).
+  persistent_workers: true
   train_volumes: null  # List of {vol, seg} dicts; null = dataset defaults
   val_volumes: null    # Defaults to train_volumes
   test_volumes: null   # Defaults to train_volumes
@@ -97,6 +99,8 @@ training:
   benchmark: true
   fast_dev_run: false
   profiler: null  # Options: null, simple, advanced, pytorch
+  # Full Lightning resume (optimizer, epoch, schedulers). Prefer this after crashes.
+  resume_from_checkpoint: null
 
 # Callbacks configuration
 callbacks:
@@ -125,3 +129,6 @@ callbacks:
     enabled: true
     every_n_epochs: 1
     max_images: 4
+
+  # Clear GPU cache before validation (helps large 3D models at train/val boundary).
+  cuda_empty_cache_before_val: false

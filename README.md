@@ -123,15 +123,21 @@ python scripts/train.py --config-name combine           # Multi-dataset Vista3D
 
 ### 5. Resume from a previous checkpoint
 
+**Full resume** (same config — restores optimizer, LR schedule, epoch, step):
+
+```bash
+python scripts/train.py --config-name snemi3d_microns \
+    training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
+```
+
+**Warm-start** (weights only — use when changing freeze/LR/architecture):
+
 ```bash
 python scripts/train.py --config-name snemi3d_microns \
     +ckpt_path=outputs/checkpoints/last.ckpt
 ```
 
-This loads model weights only (optimizer state is reset), so you can
-safely change freeze settings, learning rates, or model architecture
-between runs.  See [TRAINING.md](doc/TRAINING.md#95-loading-a-previous-checkpoint)
-for details on the warm-start behavior.
+See [TRAINING.md](doc/TRAINING.md#95-loading-a-previous-checkpoint).
 
 ### 6. Fast development run
 

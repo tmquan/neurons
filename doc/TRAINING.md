@@ -616,29 +616,38 @@ allows you to change the freeze schedule, optimizer settings, or model
 config between runs without hitting state-dict mismatches.
 
 ```bash
-# Resume from a previous run's checkpoint
+# Full resume (optimizer, LR schedule, epoch, global_step) — same config
+PYTHONPATH=$(pwd) python scripts/train.py \
+    --config-name snemi3d_microns \
+    training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
+```
+
+**Warm-start** (weights only, fresh optimizer) — use when changing phases, optimizer, or architecture:
+
+```bash
 PYTHONPATH=$(pwd) python scripts/train.py \
     --config-name snemi3d_microns \
     +ckpt_path=outputs/checkpoints/last.ckpt
 ```
 
-This is a **warm-start**, not a full resume:
+With `+ckpt_path=`, the script loads **model weights only**:
 
-- Model weights (backbone, heads, adapters) are restored.
 - Optimizer state, learning rate scheduler, and epoch counter are **not**
   restored — training begins from epoch 0 with a fresh optimizer.
 - `strict=False` is used, so missing or unexpected keys are reported but
   do not cause failures.  This lets you load checkpoints even when the
   model architecture has changed (e.g. added/removed heads).
 
-#### When to use warm-start
+Do **not** set both `training.resume_from_checkpoint` and `+ckpt_path=` in the same run.
 
-| Scenario | Use `+ckpt_path=` ? |
+#### When to use warm-start vs full resume
+
+| Scenario | Mechanism |
 |---|---|
-| Changing freeze config (e.g. unfreezing backbone for Phase 2) | Yes |
-| Changing optimizer or LR schedule | Yes |
-| Changing model architecture (added heads, different feature_size) | Yes (with `strict=False` warnings) |
-| Exact resume after crash (same config, same optimizer) | Yes (epoch counter resets, but weights are current) |
+| Changing freeze config (e.g. unfreezing backbone for Phase 2) | `+ckpt_path=` |
+| Changing optimizer or LR schedule | `+ckpt_path=` |
+| Changing model architecture (added heads, different feature_size) | `+ckpt_path=` (with `strict=False` warnings) |
+| Exact resume after crash or preemption (same config) | `training.resume_from_checkpoint=` |
 
 #### Automatic checkpointing
 

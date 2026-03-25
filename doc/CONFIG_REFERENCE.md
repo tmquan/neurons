@@ -39,6 +39,7 @@ Use `--config-name <name>` to select a config. Override any key via CLI:
 | `num_samples` | int | null | Virtual epoch length (null = dataset default) |
 | `patch_size` | [D,H,W] | null | 3D crop size; enables LazyVolDataset when set |
 | `find_boundaries` | float | 0.0 | Train only: probability of ``FindBoundariesd`` (0=off, 1=always) |
+| `persistent_workers` | bool | true | Keep DataLoader workers between epochs (disable to cut host RAM on multi-GPU) |
 | `train_volumes` | list | null | `[{vol, seg, root?}, ...]` |
 | `val_volumes` | list | null | Defaults to train_volumes |
 | `test_volumes` | list | null | Defaults to train_volumes |
@@ -136,6 +137,7 @@ Supported formats: HDF5, TIFF, NRRD, NIfTI (auto-detected by extension).
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `max_epochs` | int | 100 | Training epochs |
+| `resume_from_checkpoint` | str | null | Path to a Lightning `.ckpt` for full resume (optimizer, epoch, step). Do not combine with `+ckpt_path=`. |
 | `accelerator` | str | `auto` | `cpu`, `gpu`, `tpu`, `auto` |
 | `devices` | int/str | `auto` | GPU count or `auto` |
 | `strategy` | str | `ddp` | `ddp`, `fsdp`, `auto` |
@@ -150,7 +152,17 @@ Supported formats: HDF5, TIFF, NRRD, NIfTI (auto-detected by extension).
 
 ---
 
-## 7. snemi3d_microns Quick Reference
+## 7. Callbacks (`callbacks`)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `cuda_empty_cache_before_val` | bool | false | Empty CUDA cache before each validation epoch (reduces peak VRAM at epoch boundary) |
+
+Checkpointing and early stopping keys live under `callbacks.checkpoint` and `callbacks.early_stopping` (see `configs/default.yaml`).
+
+---
+
+## 8. snemi3d_microns Quick Reference
 
 The `snemi3d_microns` config trains CosmosTransfer3D on combined SNEMI3D + MICRONS:
 
@@ -160,7 +172,8 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D
   batch_size: 4
-  num_workers: 16
+  num_workers: 4
+  persistent_workers: false
   cache_rate: 0.0
   slice_mode: false
   num_samples: 16000
@@ -174,6 +187,10 @@ model:
   freeze_vae_encoder: true
   freeze_dit_backbone: false
   freeze_vae_decoder: false
+  gradient_checkpointing: true
+
+callbacks:
+  cuda_empty_cache_before_val: true
 
 optimizer:
   lr: 2.0e-4
@@ -189,4 +206,5 @@ optimizer:
 ```bash
 python scripts/train.py --config-name snemi3d_microns
 python scripts/train.py --config-name snemi3d_microns data.batch_size=8 +ckpt_path=outputs/checkpoints/last.ckpt
+python scripts/train.py --config-name snemi3d_microns training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
 ```

@@ -83,6 +83,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         "num_workers": data_cfg.get("num_workers", 4),
         "cache_rate": data_cfg.get("cache_rate", 0.5),
         "pin_memory": data_cfg.get("pin_memory", True),
+        "persistent_workers": bool(data_cfg.get("persistent_workers", True)),
         "train_volumes": train_volumes,
         "val_volumes": val_volumes,
         "test_volumes": test_volumes,
@@ -251,6 +252,11 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     callbacks: List[pl.Callback] = []
 
     callback_cfg = cfg.get("callbacks", {})
+
+    if callback_cfg.get("cuda_empty_cache_before_val", False):
+        from neurons.callbacks.memory import CudaEmptyCacheCallback
+
+        callbacks.append(CudaEmptyCacheCallback())
 
     ckpt_cfg = callback_cfg.get("checkpoint", {})
     if ckpt_cfg.get("enabled", True):
@@ -448,10 +454,22 @@ def main(cfg: DictConfig) -> None:
     print("Starting Training")
     print("=" * 60 + "\n")
 
-    ckpt_path = cfg.get("ckpt_path", None)
-    if ckpt_path:
-        print(f"Loading model weights from checkpoint: {ckpt_path}")
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    resume_ckpt = training_cfg.get("resume_from_checkpoint")
+    weights_only_ckpt = cfg.get("ckpt_path", None)
+
+    if resume_ckpt and weights_only_ckpt:
+        raise ValueError(
+            "Use either training.resume_from_checkpoint (full Lightning resume) "
+            "or +ckpt_path= (weights-only warm start), not both."
+        )
+
+    fit_ckpt_path: Optional[str] = None
+    if resume_ckpt:
+        fit_ckpt_path = str(resume_ckpt)
+        print(f"\nFull Lightning resume from: {fit_ckpt_path}")
+    elif weights_only_ckpt:
+        print(f"Loading model weights from checkpoint: {weights_only_ckpt}")
+        ckpt = torch.load(weights_only_ckpt, map_location="cpu", weights_only=False)
         state_dict = ckpt.get("state_dict", ckpt)
         missing, unexpected = module.load_state_dict(state_dict, strict=False)
         if missing:
@@ -459,20 +477,27 @@ def main(cfg: DictConfig) -> None:
         if unexpected:
             print(f"  Unexpected keys: {len(unexpected)}")
         print("  Model weights loaded (optimizer state skipped — fresh optimizer)")
-        ckpt_path = None
 
     interrupted = False
+    output_dir = cfg.get("output_dir", "outputs")
     try:
-        trainer.fit(module, datamodule, ckpt_path=ckpt_path)
+        trainer.fit(module, datamodule, ckpt_path=fit_ckpt_path)
     except KeyboardInterrupt:
         print("\n\nTraining interrupted by user")
         interrupted = True
     except Exception as e:
         print(f"\n\nTraining failed: {e}")
+        if trainer.global_rank == 0:
+            recovery = Path(output_dir) / "checkpoints" / "crash_recovery.ckpt"
+            recovery.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                trainer.save_checkpoint(str(recovery))
+                print(f"Recovery checkpoint written to {recovery}")
+            except Exception as save_err:
+                print(f"Could not save recovery checkpoint: {save_err}")
         raise
 
     if trainer.global_rank == 0:
-        output_dir = cfg.get("output_dir", "outputs")
         final_path = Path(output_dir) / "checkpoints" / "final_model.ckpt"
         final_path.parent.mkdir(parents=True, exist_ok=True)
         if interrupted:

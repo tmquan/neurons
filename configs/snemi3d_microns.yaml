@@ -6,6 +6,10 @@
 #   python scripts/train.py --config-name snemi3d_microns
 #   python scripts/train.py --config-name snemi3d_microns data.batch_size=8
 #
+# Full resume (optimizer + epoch) after interruption:
+#   python scripts/train.py --config-name snemi3d_microns \\
+#     training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
+#
 # See doc/CONFIG_REFERENCE.md for full parameter documentation.
 
 defaults:
@@ -19,7 +23,8 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D  # default root for volumes without explicit root
   batch_size: 4
-  num_workers: 8            # per-process; 8 GPUs × 10 = 80 total workers
+  num_workers: 4            # per rank; 8 GPUs × 4 workers = 32 dataloader procs (saves host RAM)
+  persistent_workers: false   # avoid N ranks × workers holding RAM across epochs
   cache_rate: 0.0           # LazyVolDataset reads on-demand; no caching
   pin_memory: true
   slice_mode: false          # 3D volumetric patches
@@ -56,8 +61,11 @@ model:
   freeze_vae_encoder: true        # VAE encoder  (true = always frozen; int N = freeze for N epochs)
   freeze_dit_backbone: false      # DiT backbone (true = always frozen; int N = freeze for N epochs then unfreeze)
   freeze_vae_decoder: false       # VAE decoder  (true = always frozen; int N = freeze for N epochs)
-  gradient_checkpointing: false
+  gradient_checkpointing: true   # lowers VRAM; helps train→val boundary on 2B + 48×256×256
   dropout: 0.2
+
+callbacks:
+  cuda_empty_cache_before_val: true
 
 training:
   max_epochs: 100
