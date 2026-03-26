@@ -105,17 +105,28 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     return rearrange(rgb, "(b h w) c -> b c h w", b=B, h=H, w=W)
 
 
-def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
-    """Project [B, E, H, W] embeddings → [B, 3, H, W] via per-image PCA.
+def _pca_project(
+    emb: torch.Tensor,
+    n_components: int = 3,
+    labels: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Project [B, E, H, W] embeddings → [B, 3, H, W] RGB visualisation.
 
-    The top-3 principal components are used as RGB channels.  Each image
-    in the batch is projected independently so colours are locally
-    meaningful (nearby pixels with similar embeddings get similar colours).
+    When *labels* ([B, H, W]) are provided, each foreground pixel is
+    coloured with the golden-angle palette of the GT instance whose
+    centroid is nearest in embedding space.  Brightness is modulated by
+    proximity to the assigned centroid (bright = close, dim = far),
+    giving an immediate visual of embedding quality that is directly
+    comparable to the ``label`` and ``instance_pred`` panels.
 
-    Falls back to the first 3 channels when SVD fails to converge
-    (ill-conditioned matrices are common in early training).
+    When *labels* are ``None``, falls back to per-image PCA with the
+    top-3 principal components mapped to RGB channels.
     """
     B, E, H, W = emb.shape
+
+    if labels is not None:
+        return _embed_nearest_centroid_rgb(emb, labels)
+
     flat = rearrange(emb, "b e h w -> b e (h w)").float()         # [B, E, N]
     mean = flat.mean(dim=2, keepdim=True)
     centered = flat - mean
@@ -128,6 +139,61 @@ def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
 
     proj = rearrange(proj, "b c (h w) -> b c h w", h=H, w=W)
     return _normalise(proj)
+
+
+def _embed_nearest_centroid_rgb(
+    emb: torch.Tensor,
+    labels: torch.Tensor,
+) -> torch.Tensor:
+    """Colour each pixel by nearest GT centroid using the golden-angle palette.
+
+    For each batch element:
+      1. Compute the mean embedding per GT instance.
+      2. Assign every foreground pixel to the nearest centroid.
+      3. Look up the golden-angle colour for the assigned GT instance ID.
+      4. Scale brightness by proximity (close → full colour, far → dim).
+
+    Pixels assigned to a *wrong* centroid show up in the wrong colour,
+    making embedding errors immediately visible.
+    """
+    B, E, H, W = emb.shape
+    device = emb.device
+    result = torch.zeros(B, 3, H, W, device=device)
+
+    for b in range(B):
+        emb_flat = rearrange(emb[b], "e h w -> (h w) e").float()  # [N, E]
+        lbl_flat = labels[b].reshape(-1).long()                    # [N]
+
+        fg = lbl_flat > 0
+        if not fg.any():
+            continue
+
+        unique_ids = torch.unique(lbl_flat[fg])
+        K = len(unique_ids)
+
+        centroids = torch.zeros(K, E, device=device, dtype=torch.float32)
+        for i, uid in enumerate(unique_ids):
+            centroids[i] = emb_flat[lbl_flat == uid].mean(dim=0)
+
+        dists = torch.cdist(
+            emb_flat.unsqueeze(0), centroids.unsqueeze(0),
+        ).squeeze(0)                                               # [N, K]
+
+        nearest_k = dists.argmin(dim=1)                            # [N]
+        assigned_ids = unique_ids[nearest_k]                       # [N]
+        assigned_ids[~fg] = 0
+
+        own_dist = dists[torch.arange(dists.shape[0], device=device), nearest_k]
+        cap = own_dist[fg].quantile(0.95).clamp(min=1e-6)
+        brightness = 1.0 - 0.6 * (own_dist / cap).clamp(0, 1)    # [0.4, 1.0]
+        brightness[~fg] = 0.0
+
+        rgb = _golden_angle_rgb(assigned_ids)                      # [N, 3]
+        rgb = rgb * brightness.unsqueeze(1)
+
+        result[b] = rearrange(rgb, "(h w) c -> c h w", h=H, w=W)
+
+    return result
 
 
 # ======================================================================
@@ -460,7 +526,7 @@ def _log_predictions(
     lbl_rgb = _label_to_rgb(labels.long())
     sem_ids = sem.argmax(dim=1)
     sem_rgb = _label_to_rgb(sem_ids)
-    inst_rgb = _pca_project(inst, n_components=3)
+    inst_rgb = _pca_project(inst, n_components=3, labels=labels)
 
     fg_mask_pred = (sem_ids > 0).long()
 
