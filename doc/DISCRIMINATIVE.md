@@ -24,17 +24,20 @@ recovers the instance segmentation.
 
 Given a batch element with **K** foreground instances, let:
 
-- $\mathbf{x}_i \in \mathbb{R}^E$ be the embedding at pixel $i$,
-- $S_k$ be the set of pixels belonging to instance $k$,
-- $N_k = |S_k|$,
-- $\boldsymbol{\mu}_k = \frac{1}{\sum_{i \in S_k} w_i} \sum_{i \in S_k} w_i \, \mathbf{x}_i$
-  be the **weighted centroid** of instance $k$, where $w_i$ is the per-pixel
-  weight (see [Section 5](#5-per-pixel-weighting-boundary--skeleton)).
+- **x\_i** ∈ ℝ^E be the embedding at pixel `i`,
+- **S\_k** be the set of pixels belonging to instance `k`,
+- **N\_k** = |S\_k|,
+- **μ\_k** be the **weighted centroid** of instance `k`:
+
+$$
+\boldsymbol{\mu}_k = \frac{1}{\sum_{i \in S_k} w_i} \sum_{i \in S_k} w_i \, \mathbf{x}_i
+$$
+
+where `w_i` is the per-pixel weight (see [Section 5](#5-per-pixel-weighting-boundary--skeleton)).
 
 ### 2.1 Pull Loss (Intra-Cluster Variance)
 
-Each embedding is pulled toward its instance centroid with a hinge at
-$\delta_v$:
+Each embedding is pulled toward its instance centroid with a hinge at `δ_v`:
 
 $$
 L_{\text{pull}} = \frac{1}{K} \sum_{k=1}^{K} \frac{1}{N_k}
@@ -42,27 +45,27 @@ L_{\text{pull}} = \frac{1}{K} \sum_{k=1}^{K} \frac{1}{N_k}
   \Big[\,\|\mathbf{x}_i - \boldsymbol{\mu}_k\| - \delta_v\,\Big]_+^{\,2}
 $$
 
-where $[\cdot]_+ = \max(\cdot, 0)$ is the hinge.
+where `[·]₊ = max(·, 0)` is the hinge.
 
-**Effect of $\delta_v$**: pixels within distance $\delta_v$ of their
-centroid incur zero pull loss. This slack prevents the loss from wasting
-capacity compressing already-tight clusters; training focuses on outliers
-that lie beyond the margin. Typical value: **0.5**.
+**Effect of `δ_v`**: pixels within distance `δ_v` of their centroid incur
+zero pull loss. This slack prevents the loss from wasting capacity compressing
+already-tight clusters; training focuses on outliers that lie beyond the
+margin. Typical value: **0.5**.
 
 ### 2.2 Push Loss (Inter-Cluster Separation)
 
-Every pair of centroids is pushed apart with a hinge at $2\delta_d$:
+Every pair of centroids is pushed apart with a hinge at `2·δ_d`:
 
 $$
 L_{\text{push}} = \frac{1}{\binom{K}{2}} \sum_{k_a < k_b}
   \Big[\,2\delta_d - \|\boldsymbol{\mu}_{k_a} - \boldsymbol{\mu}_{k_b}\|\,\Big]_+^{\,2}
 $$
 
-**Effect of $\delta_d$**: centroids separated by more than $2\delta_d$ incur
-zero push loss. The factor of 2 comes from the symmetry of the margin — each
-centroid "owns" a ball of radius $\delta_d$. Once the balls no longer overlap,
-the push term turns off. Typical value: **1.5** (so centroids must be at least
-3.0 apart).
+**Effect of `δ_d`**: centroids separated by more than `2·δ_d` incur zero push
+loss. The factor of 2 comes from the symmetry of the margin — each centroid
+"owns" a ball of radius `δ_d`. Once the balls no longer overlap, the push
+term turns off. Typical value: **1.5** (so centroids must be at least 3.0
+apart).
 
 ### 2.3 Norm Loss (Centroid Regularisation)
 
@@ -85,9 +88,9 @@ $$
 
 | Config key | Symbol | Default | Role |
 | ---------- | ------ | ------- | ---- |
-| `weight_pull` | $\alpha$ | 1.0 | Pull importance |
-| `weight_push` | $\beta$  | 1.0 | Push importance |
-| `weight_norm` | $\gamma$ | 0.001 | Norm importance (kept small) |
+| `weight_pull` | α | 1.0 | Pull importance |
+| `weight_push` | β | 1.0 | Push importance |
+| `weight_norm` | γ | 0.001 | Norm importance (kept small) |
 
 ## 3. Implementation Walk-Through
 
@@ -135,7 +138,7 @@ pull_per_pixel = (dist - self.delta_v).clamp(min=0).pow(2)
 ```
 
 1. L2 distance from each foreground pixel to its centroid.
-2. Hinge: subtract $\delta_v$, clamp negatives to zero.
+2. Hinge: subtract `δ_v`, clamp negatives to zero.
 3. Square the residual (smooth gradient near the margin).
 
 Pixel weights are multiplied in, then the loss is averaged per-instance
@@ -160,8 +163,7 @@ difference tensor without an explicit double loop:
 
 - `"i e -> i 1 e"` adds a broadcast dimension at position 1 (the "j" axis).
 - `"j e -> 1 j e"` adds a broadcast dimension at position 0 (the "i" axis).
-- Subtraction yields `[K, K, E]` where entry `[a, b, :]` is
-  $\boldsymbol{\mu}_a - \boldsymbol{\mu}_b$.
+- Subtraction yields `[K, K, E]` where entry `[a, b, :]` is `μ_a − μ_b`.
 
 Only the upper triangle is kept (`triu_indices` with `offset=1`) since the
 matrix is antisymmetric and the diagonal is zero.
@@ -211,7 +213,7 @@ already belong to different semantic classes (e.g., neurites vs. mitochondria).
 
 ## 4. Distance Parameters
 
-### 4.1 δ_v — Pull Margin (`delta_v`)
+### 4.1 δ\_v — Pull Margin (`delta_v`)
 
 | Value | Effect |
 | ----- | ------ |
@@ -219,24 +221,24 @@ already belong to different semantic classes (e.g., neurites vs. mitochondria).
 | **0.5** (default) | Pixels within 0.5 of their centroid are "close enough" |
 | > 1.0 | Very lax — clusters can be diffuse without penalty |
 
-**Tuning guide**: set $\delta_v$ to roughly the acceptable intra-cluster
-scatter. If downstream clustering uses a bandwidth of $b$, a good starting
-point is $\delta_v \approx b/2$.
+**Tuning guide**: set `δ_v` to roughly the acceptable intra-cluster scatter.
+If downstream clustering uses a bandwidth of `b`, a good starting point is
+`δ_v ≈ b/2`.
 
-### 4.2 δ_d — Push Margin (`delta_d`)
+### 4.2 δ\_d — Push Margin (`delta_d`)
 
 | Value | Effect |
 | ----- | ------ |
-| Small (< 1.0) | Centroids only need to be > $2\delta_d$ apart — easy but fragile |
+| Small (< 1.0) | Centroids only need to be > `2·δ_d` apart — easy but fragile |
 | **1.5** (default) | Centroids must be > 3.0 apart — comfortable margin for clustering |
 | Large (> 3.0) | Very aggressive separation — can cause slow convergence |
 
-**Relationship to $\delta_v$**: the embedding space is well-posed when
-$\delta_d > \delta_v$. The gap $\delta_d - \delta_v$ is the "no-man's
-land" between the pull and push radii where neither term applies — a
-buffer zone that prevents the two forces from fighting.
+**Relationship to `δ_v`**: the embedding space is well-posed when
+`δ_d > δ_v`. The gap `δ_d − δ_v` is the "no-man's land" between the pull
+and push radii where neither term applies — a buffer zone that prevents
+the two forces from fighting.
 
-### 4.3 Interaction Between δ_v and δ_d
+### 4.3 Interaction Between δ\_v and δ\_d
 
 ```
                               ◄── 2δ_d ──►
@@ -253,11 +255,11 @@ buffer zone that prevents the two forces from fighting.
                             push zone
 ```
 
-Embeddings inside their pull radius (circle of radius $\delta_v$ around
-each centroid) incur zero pull loss. Centroid pairs outside the push
-diameter ($2\delta_d$) incur zero push loss. The configuration is stable
-when each cluster fits within its $\delta_v$-ball and all balls are
-separated by at least $2\delta_d$.
+Embeddings inside their pull radius (circle of radius `δ_v` around each
+centroid) incur zero pull loss. Centroid pairs outside the push diameter
+(`2·δ_d`) incur zero push loss. The configuration is stable when each
+cluster fits within its `δ_v`-ball and all balls are separated by at least
+`2·δ_d`.
 
 ## 5. Per-Pixel Weighting: Boundary + Skeleton
 
@@ -326,8 +328,8 @@ Setting `weight_bone = 1.0` disables skeleton weighting.
 
 ### 5.3 Combined Effect
 
-| Region | $w_{\text{edge}}$ | $w_{\text{bone}}$ | $w_{\text{total}}$ (defaults) |
-| ------ | ------------------- | ------------------- | ------------------------------- |
+| Region | w\_edge | w\_bone | w\_total (defaults) |
+| ------ | ------- | ------- | ------------------- |
 | Interior, away from skeleton | 1.0 | ~1.0 | ~1.0 |
 | Interior, on skeleton | 1.0 | 10.0 | 10.0 |
 | Boundary, thin | 10.0 | ~1.0 | ~10.0 |
@@ -341,13 +343,13 @@ tips touching another instance) receive the strongest gradient signal.
 | Parameter | Config key | Type | Default | Description |
 | --------- | ---------- | ---- | ------- | ----------- |
 | `spatial_dims` | (constructor) | int | 3 | 2 for 2D, 3 for 3D; selects pool function and pad tuple |
-| `weight_pull` | `weight_pull` | float | 1.0 | Multiplier on $L_{\text{pull}}$ |
-| `weight_push` | `weight_push` | float | 1.0 | Multiplier on $L_{\text{push}}$ |
-| `weight_norm` | `weight_norm` | float | 0.001 | Multiplier on $L_{\text{norm}}$; kept small to avoid overwhelming pull/push |
+| `weight_pull` | `weight_pull` | float | 1.0 | Multiplier on L\_pull |
+| `weight_push` | `weight_push` | float | 1.0 | Multiplier on L\_push |
+| `weight_norm` | `weight_norm` | float | 0.001 | Multiplier on L\_norm; kept small to avoid overwhelming pull/push |
 | `weight_edge` | `weight_edge` | float | 10.0 | Boundary pixel weight; 1.0 = disabled |
 | `weight_bone` | `weight_bone` | float | 10.0 | Skeleton pixel weight; 1.0 = disabled |
 | `delta_v` | `delta_v` | float | 0.5 | Pull hinge margin; pixels closer than this to centroid are penalty-free |
-| `delta_d` | `delta_d` | float | 1.5 | Half the push hinge margin; centroids farther than $2\delta_d$ are penalty-free |
+| `delta_d` | `delta_d` | float | 1.5 | Half the push hinge margin; centroids farther than `2·δ_d` are penalty-free |
 
 ## 7. Typical Configurations
 
@@ -383,7 +385,7 @@ weight_bone: 1.0
 - **No Python loops over instances** for the centroid computation (scatter-based).
 - **One Python loop over batch elements** is required because instances differ
   per sample.
-- The push term is $O(K^2)$ in the number of instances; this is acceptable
+- The push term is O(K²) in the number of instances; this is acceptable
   for connectomics patch sizes (typically K < 100).
 - Boundary and skeleton weight maps are computed inside `@torch.no_grad()`
   and detached from the computation graph — they modulate gradients but do
