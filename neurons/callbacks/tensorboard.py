@@ -48,11 +48,47 @@ def _normalise(t: torch.Tensor) -> torch.Tensor:
                      c=t.shape[1], h=t.shape[2], w=t.shape[3])
 
 
-def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
-    """Map integer instance labels → deterministic RGB image.
+def _golden_angle_rgb(ids: torch.Tensor) -> torch.Tensor:
+    """Map integer IDs → [N, 3] RGB via golden-angle HSV spacing.
 
-    Background (0) is black.  Each non-zero label gets a random but
-    reproducible colour via a seeded palette.
+    Consecutive IDs are maximally separated in hue (~137.5° apart).
+    Saturation and value are varied via coprime multipliers so distinct
+    IDs that happen to share a hue still differ in appearance.
+    """
+    GOLDEN_ANGLE = 0.381966011250105
+    x = ids.float()
+    h = (x * GOLDEN_ANGLE) % 1.0
+    s = 0.65 + 0.35 * ((x * 0.274 + 0.2) % 1.0)
+    v = 0.75 + 0.25 * ((x * 0.529 + 0.3) % 1.0)
+
+    h6 = h * 6.0
+    sector = h6.long() % 6
+    f = h6 - h6.floor()
+    p = v * (1.0 - s)
+    q = v * (1.0 - s * f)
+    t = v * (1.0 - s * (1.0 - f))
+
+    rgb_lut = [(v, t, p), (q, v, p), (p, v, t),
+               (p, q, v), (t, p, v), (v, p, q)]
+    r, g, b = torch.zeros_like(h), torch.zeros_like(h), torch.zeros_like(h)
+    for i, (ri, gi, bi) in enumerate(rgb_lut):
+        mask = sector == i
+        r = torch.where(mask, ri, r)
+        g = torch.where(mask, gi, g)
+        b = torch.where(mask, bi, b)
+
+    return torch.stack([r, g, b], dim=-1)
+
+
+def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
+    """Map integer instance labels → deterministic, perceptually-distinct RGB.
+
+    Background (0) is black.  Each non-zero label ID is mapped to a unique
+    colour via golden-angle hue spacing, guaranteeing that nearby integer
+    IDs produce maximally separated hues.  The mapping is purely per-ID:
+    the same label value always produces the same colour regardless of
+    what other IDs are present, so ground-truth and prediction visualisations
+    are identical when their label maps match.
 
     Args:
         labels: [B, H, W] long tensor.
@@ -62,11 +98,10 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     """
     B, H, W = labels.shape
     flat = rearrange(labels, "b h w -> (b h w)").long()
-    gen = torch.Generator(device=labels.device).manual_seed(0)
-    palette = torch.rand(flat.max().item() + 1, 3,
-                         device=labels.device, generator=gen)
-    palette[0] = 0.0                                               # background → black
-    rgb = palette[flat]
+
+    rgb = _golden_angle_rgb(flat)                                  # [B*H*W, 3]
+    rgb[flat == 0] = 0.0                                           # background → black
+
     return rearrange(rgb, "(b h w) c -> b c h w", b=B, h=H, w=W)
 
 
