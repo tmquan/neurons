@@ -11,11 +11,13 @@ The discriminative loss for instance segmentation originates from
 a network outputs an E-dimensional embedding vector for every pixel (or voxel).
 During training, three complementary forces shape the embedding space:
 
-| Force | Goal | Analogy |
-| ----- | ---- | ------- |
-| **Pull** | Embeddings of the *same* instance converge to their centroid | Gravity within a cluster |
-| **Push** | Centroids of *different* instances repel each other | Electrostatic repulsion between clusters |
-| **Norm** | Centroids stay near the origin | Spring anchoring the constellation |
+
+| Force    | Goal                                                         | Analogy                                  |
+| -------- | ------------------------------------------------------------ | ---------------------------------------- |
+| **Pull** | Embeddings of the *same* instance converge to their centroid | Gravity within a cluster                 |
+| **Push** | Centroids of *different* instances repel each other          | Electrostatic repulsion between clusters |
+| **Norm** | Centroids stay near the origin                               | Spring anchoring the constellation       |
+
 
 At inference, a simple mean-shift or seed-based clustering in embedding space
 recovers the instance segmentation.
@@ -24,13 +26,13 @@ recovers the instance segmentation.
 
 Given a batch element with **K** foreground instances, let:
 
-- **x\_i** ∈ ℝ^E be the embedding at pixel `i`,
-- **S\_k** be the set of pixels belonging to instance `k`,
-- **N\_k** = |S\_k|,
-- **μ\_k** be the **weighted centroid** of instance `k`:
+- **xi** ∈ ℝ^E be the embedding at pixel `i`,
+- **Sk** be the set of pixels belonging to instance `k`,
+- **Nk** = |Sk|,
+- **μk** be the **weighted centroid** of instance `k`:
 
 $$
-\boldsymbol{\mu}_k = \frac{1}{\sum_{i \in S_k} w_i} \sum_{i \in S_k} w_i \, \mathbf{x}_i
+\boldsymbol{\mu}*k = \frac{1}{\sum*{i \in S_k} w_i} \sum_{i \in S_k} w_i  \mathbf{x}_i
 $$
 
 where `w_i` is the per-pixel weight (see [Section 5](#5-per-pixel-weighting-boundary--skeleton)).
@@ -42,7 +44,7 @@ Each embedding is pulled toward its instance centroid with a hinge at `δ_v`:
 $$
 L_{\text{pull}} = \frac{1}{K} \sum_{k=1}^{K} \frac{1}{N_k}
   \sum_{i \in S_k} w_i \cdot
-  \Big[\,\|\mathbf{x}_i - \boldsymbol{\mu}_k\| - \delta_v\,\Big]_+^{\,2}
+  \Big[\mathbf{x}_i - \boldsymbol{\mu}*k - \delta_v\Big]*+^{2}
 $$
 
 where `[·]₊ = max(·, 0)` is the hinge.
@@ -58,7 +60,7 @@ Every pair of centroids is pushed apart with a hinge at `2·δ_d`:
 
 $$
 L_{\text{push}} = \frac{1}{\binom{K}{2}} \sum_{k_a < k_b}
-  \Big[\,2\delta_d - \|\boldsymbol{\mu}_{k_a} - \boldsymbol{\mu}_{k_b}\|\,\Big]_+^{\,2}
+  \Big[2\delta_d - \boldsymbol{\mu}*{k_a} - \boldsymbol{\mu}*{k_b}\Big]_+^{2}
 $$
 
 **Effect of `δ_d`**: centroids separated by more than `2·δ_d` incur zero push
@@ -70,7 +72,7 @@ apart).
 ### 2.3 Norm Loss (Centroid Regularisation)
 
 $$
-L_{\text{norm}} = \frac{1}{K} \sum_{k=1}^{K} \|\boldsymbol{\mu}_k\|
+L_{\text{norm}} = \frac{1}{K} \sum_{k=1}^{K} \boldsymbol{\mu}_k
 $$
 
 Prevents the embedding space from drifting arbitrarily far from the origin,
@@ -81,16 +83,18 @@ at infinity).
 
 $$
 L_{\text{instance}} =
-  \alpha \, L_{\text{pull}} +
-  \beta  \, L_{\text{push}} +
-  \gamma \, L_{\text{norm}}
+  \alpha  L_{\text{pull}} +
+  \beta   L_{\text{push}} +
+  \gamma  L_{\text{norm}}
 $$
 
-| Config key | Symbol | Default | Role |
-| ---------- | ------ | ------- | ---- |
-| `weight_pull` | α | 1.0 | Pull importance |
-| `weight_push` | β | 1.0 | Push importance |
-| `weight_norm` | γ | 0.001 | Norm importance (kept small) |
+
+| Config key    | Symbol | Default | Role                         |
+| ------------- | ------ | ------- | ---------------------------- |
+| `weight_pull` | α      | 1.0     | Pull importance              |
+| `weight_push` | β      | 1.0     | Push importance              |
+| `weight_norm` | γ      | 0.001   | Norm importance (kept small) |
+
 
 ## 3. Implementation Walk-Through
 
@@ -213,53 +217,91 @@ already belong to different semantic classes (e.g., neurites vs. mitochondria).
 
 ## 4. Distance Parameters
 
-### 4.1 δ\_v — Pull Margin (`delta_v`)
+### 4.1 δv — Pull Margin (`delta_v`)
 
-| Value | Effect |
-| ----- | ------ |
-| 0.0 | No slack — every pixel is penalised for *any* distance from centroid |
-| **0.5** (default) | Pixels within 0.5 of their centroid are "close enough" |
-| > 1.0 | Very lax — clusters can be diffuse without penalty |
+
+| Value             | Effect                                                               |
+| ----------------- | -------------------------------------------------------------------- |
+| 0.0               | No slack — every pixel is penalised for *any* distance from centroid |
+| **0.5** (default) | Pixels within 0.5 of their centroid are "close enough"               |
+| > 1.0             | Very lax — clusters can be diffuse without penalty                   |
+
 
 **Tuning guide**: set `δ_v` to roughly the acceptable intra-cluster scatter.
 If downstream clustering uses a bandwidth of `b`, a good starting point is
 `δ_v ≈ b/2`.
 
-### 4.2 δ\_d — Push Margin (`delta_d`)
+### 4.2 δd — Push Margin (`delta_d`)
 
-| Value | Effect |
-| ----- | ------ |
-| Small (< 1.0) | Centroids only need to be > `2·δ_d` apart — easy but fragile |
+
+| Value             | Effect                                                            |
+| ----------------- | ----------------------------------------------------------------- |
+| Small (< 1.0)     | Centroids only need to be > `2·δ_d` apart — easy but fragile      |
 | **1.5** (default) | Centroids must be > 3.0 apart — comfortable margin for clustering |
-| Large (> 3.0) | Very aggressive separation — can cause slow convergence |
+| Large (> 3.0)     | Very aggressive separation — can cause slow convergence           |
 
-**Relationship to `δ_v`**: the embedding space is well-posed when
+
+**Relationship to `δ_v*`*: the embedding space is well-posed when
 `δ_d > δ_v`. The gap `δ_d − δ_v` is the "no-man's land" between the pull
 and push radii where neither term applies — a buffer zone that prevents
 the two forces from fighting.
 
-### 4.3 Interaction Between δ\_v and δ\_d
+### 4.3 Interaction Between δv and δd
 
 ```
-                              ◄── 2δ_d ──►
-             ┌───────────────────────────────────────────┐
-             │                                           │
-    ─────────┤    ●────δ_v────μ_a────δ_v────●            │
-             │         pull zone a                       │
-             │                                           │
-             │              gap (no gradient)            │
-             │                                           │
-             │            ●────δ_v────μ_b────δ_v────●    │
-             │                  pull zone b              │
-             └───────────────────────────────────────────┘
-                            push zone
+  2D embedding space (two instances, converged state)
+
+                        dead zone
+                   (no pull, no push)
+           ·    ·  ·                 ·   ·
+        ·    · . .    ·           ·    . .  ·   ·
+      ·    ╭╌╌╌╌╌╌╌╌╌--╌╌╮         ╭╌╌╌╌╌╌╌╌╌--╌╌╮
+     ·   ╭─┼─────────────┼─╮     ╭─┼─────────────┼─╮   ·
+    ·  · ╎ ╎  .  ·  .    ╎ ╎     ╎ ╎    ·  .  .  ╎ ╎ ·  ·
+    ·  · ╎ ╎    ·μ_a·    ╎ ╎     ╎ ╎    ·μ_b·    ╎ ╎ ·
+    ·  · ╎ ╎  ·   . · .  ╎ ╎     ╎ ╎  .  ·.  ·   ╎ ╎ ·  ·
+     ·   ╰─┼─────────────┼─╯     ╰─┼─────────────┼─╯   ·
+      ·    ╰╌╌╌╌╌╌╌╌╌--╌╌╯         ╰╌╌╌╌╌╌╌╌--╌╌╌╯
+        ·                  ·           ·              ·
+           ·            ·                 ·        ·
+
+           ├─── δ_v ───┤                 ├── δ_v ──┤
+           inner dashed circle           inner dashed circle
+           (pull-free zone)              (pull-free zone)
+
+           ├──── δ_d ──────┤             ├──── δ_d ─────┤
+           outer solid circle            outer solid circle
+           (push half-margin)            (push half-margin)
+
+           μ_a ◄──────────── ≥ 2·δ_d ─────────────► μ_b
+
+  · = embedding points (pixels)
+
+  INSIDE dashed circle (distance to own μ < δ_v):
+      Pull loss = 0. Pixel is close enough to its centroid.
+
+  BETWEEN dashed and solid circle (δ_v < distance < δ_d):
+      Pull loss > 0. Pixel is pulled inward toward its centroid.
+      This region is within the push half-margin of its own centroid.
+
+  OUTSIDE solid circle (distance > δ_d):
+      Pull loss > 0 (strong). Pixel is far from its centroid.
+
+  TWO solid circles OVERLAP (||μ_a − μ_b|| < 2·δ_d):
+      Push loss > 0. Centroids are repelled apart.
+
+  TWO solid circles DO NOT OVERLAP (||μ_a − μ_b|| ≥ 2·δ_d):
+      Push loss = 0. Centroids are sufficiently separated.
 ```
 
-Embeddings inside their pull radius (circle of radius `δ_v` around each
-centroid) incur zero pull loss. Centroid pairs outside the push diameter
-(`2·δ_d`) incur zero push loss. The configuration is stable when each
-cluster fits within its `δ_v`-ball and all balls are separated by at least
-`2·δ_d`.
+Both forces operate in the same embedding space. Each centroid is surrounded
+by two concentric regions: an inner ball of radius `δ_v` where pull is zero,
+and an outer ball of radius `δ_d` representing its half of the push margin.
+The configuration is stable when every cluster's embeddings fit inside the
+`δ_v`-ball and the `δ_d`-balls of different centroids do not overlap (i.e.,
+centroid separation ≥ `2·δ_d`). The annular gap between `δ_v` and `δ_d`
+(`= δ_d − δ_v`, default 1.0) is the buffer that prevents the pull and push
+forces from fighting over the same pixels.
 
 ## 5. Per-Pixel Weighting: Boundary + Skeleton
 
@@ -267,9 +309,9 @@ Raw discriminative loss treats all foreground pixels equally. This is
 problematic for connectomics where:
 
 - **Touching instances** share thin boundaries that the model must get
-  exactly right (a single misclassified boundary pixel can merge two neurons).
+exactly right (a single misclassified boundary pixel can merge two neurons).
 - **Elongated instances** have medial axes (skeletons) that carry topological
-  information — breaking the skeleton splits the instance.
+information — breaking the skeleton splits the instance.
 
 The implementation multiplies two independent weight maps element-wise:
 
@@ -279,9 +321,11 @@ w_total = w_boundary ⊙ w_skeleton
 
 ### 5.1 Boundary Weight (`weight_edge`)
 
-| Config key | Default | Meaning |
-| ---------- | ------- | ------- |
-| `weight_edge` | 10.0 | Boundary pixels receive this weight; non-boundary pixels receive 1.0 |
+
+| Config key    | Default | Meaning                                                              |
+| ------------- | ------- | -------------------------------------------------------------------- |
+| `weight_edge` | 10.0    | Boundary pixels receive this weight; non-boundary pixels receive 1.0 |
+
 
 Computed via **morphological gradient**: a pixel is on the boundary if the
 local max-pool and min-pool of the label map disagree (i.e., two different
@@ -292,17 +336,21 @@ via `max_pool3d` / `max_pool2d`, avoiding CPU round-trips.
 The weight map is:
 
 $$
-w_{\text{edge}}(i) = 1 + \mathbb{1}[\text{boundary}(i)] \cdot (\texttt{weight\_edge} - 1)
+w_{\text{edge}}(i) = 1 + \mathbb{1}[\text{boundary}(i)] \cdot (W_e - 1)
 $$
+
+where W_e is the `weight_edge` config value.
 
 Setting `weight_edge = 1.0` disables boundary weighting (the map is not
 computed at all).
 
 ### 5.2 Skeleton Weight (`weight_bone`)
 
-| Config key | Default | Meaning |
-| ---------- | ------- | ------- |
-| `weight_bone` | 10.0 | Medial-axis (skeleton) pixels receive this weight; instance periphery receives 1.0 |
+
+| Config key    | Default | Meaning                                                                            |
+| ------------- | ------- | ---------------------------------------------------------------------------------- |
+| `weight_bone` | 10.0    | Medial-axis (skeleton) pixels receive this weight; instance periphery receives 1.0 |
+
 
 The weight is proportional to the **normalised Euclidean Distance Transform
 (EDT)**: for each instance, the EDT is computed (distance from each interior
@@ -321,35 +369,41 @@ instances and batch elements in a single pool).
 The weight map is:
 
 $$
-w_{\text{bone}}(i) = 1 + \text{EDT}_{\text{norm}}(i) \cdot (\texttt{weight\_bone} - 1)
+w_{\text{bone}}(i) = 1 + \text{EDT}_{\text{norm}}(i) \cdot (W_b - 1)
 $$
+
+where W_b is the `weight_bone` config value.
 
 Setting `weight_bone = 1.0` disables skeleton weighting.
 
 ### 5.3 Combined Effect
 
-| Region | w\_edge | w\_bone | w\_total (defaults) |
-| ------ | ------- | ------- | ------------------- |
-| Interior, away from skeleton | 1.0 | ~1.0 | ~1.0 |
-| Interior, on skeleton | 1.0 | 10.0 | 10.0 |
-| Boundary, thin | 10.0 | ~1.0 | ~10.0 |
-| Boundary at skeleton tip | 10.0 | high | up to 100.0 |
+
+| Region                       | wedge | wbone | wtotal (defaults) |
+| ---------------------------- | ----- | ----- | ----------------- |
+| Interior, away from skeleton | 1.0   | ~1.0  | ~1.0              |
+| Interior, on skeleton        | 1.0   | 10.0  | 10.0              |
+| Boundary, thin               | 10.0  | ~1.0  | ~10.0             |
+| Boundary at skeleton tip     | 10.0  | high  | up to 100.0       |
+
 
 The multiplicative combination means skeleton-boundary intersections (branch
 tips touching another instance) receive the strongest gradient signal.
 
 ## 6. Full Parameter Reference
 
-| Parameter | Config key | Type | Default | Description |
-| --------- | ---------- | ---- | ------- | ----------- |
-| `spatial_dims` | (constructor) | int | 3 | 2 for 2D, 3 for 3D; selects pool function and pad tuple |
-| `weight_pull` | `weight_pull` | float | 1.0 | Multiplier on L\_pull |
-| `weight_push` | `weight_push` | float | 1.0 | Multiplier on L\_push |
-| `weight_norm` | `weight_norm` | float | 0.001 | Multiplier on L\_norm; kept small to avoid overwhelming pull/push |
-| `weight_edge` | `weight_edge` | float | 10.0 | Boundary pixel weight; 1.0 = disabled |
-| `weight_bone` | `weight_bone` | float | 10.0 | Skeleton pixel weight; 1.0 = disabled |
-| `delta_v` | `delta_v` | float | 0.5 | Pull hinge margin; pixels closer than this to centroid are penalty-free |
-| `delta_d` | `delta_d` | float | 1.5 | Half the push hinge margin; centroids farther than `2·δ_d` are penalty-free |
+
+| Parameter      | Config key    | Type  | Default | Description                                                                 |
+| -------------- | ------------- | ----- | ------- | --------------------------------------------------------------------------- |
+| `spatial_dims` | (constructor) | int   | 3       | 2 for 2D, 3 for 3D; selects pool function and pad tuple                     |
+| `weight_pull`  | `weight_pull` | float | 1.0     | Multiplier on Lpull                                                         |
+| `weight_push`  | `weight_push` | float | 1.0     | Multiplier on Lpush                                                         |
+| `weight_norm`  | `weight_norm` | float | 0.001   | Multiplier on Lnorm; kept small to avoid overwhelming pull/push             |
+| `weight_edge`  | `weight_edge` | float | 10.0    | Boundary pixel weight; 1.0 = disabled                                       |
+| `weight_bone`  | `weight_bone` | float | 10.0    | Skeleton pixel weight; 1.0 = disabled                                       |
+| `delta_v`      | `delta_v`     | float | 0.5     | Pull hinge margin; pixels closer than this to centroid are penalty-free     |
+| `delta_d`      | `delta_d`     | float | 1.5     | Half the push hinge margin; centroids farther than `2·δ_d` are penalty-free |
+
 
 ## 7. Typical Configurations
 
@@ -384,11 +438,12 @@ weight_bone: 1.0
 
 - **No Python loops over instances** for the centroid computation (scatter-based).
 - **One Python loop over batch elements** is required because instances differ
-  per sample.
+per sample.
 - The push term is O(K²) in the number of instances; this is acceptable
-  for connectomics patch sizes (typically K < 100).
+for connectomics patch sizes (typically K < 100).
 - Boundary and skeleton weight maps are computed inside `@torch.no_grad()`
-  and detached from the computation graph — they modulate gradients but do
-  not receive gradients themselves.
+and detached from the computation graph — they modulate gradients but do
+not receive gradients themselves.
 - When both `weight_edge` and `weight_bone` are 1.0, the weight computation
-  is skipped entirely (returns `None`), saving a full-volume allocation.
+is skipped entirely (returns `None`), saving a full-volume allocation.
+
