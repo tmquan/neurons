@@ -9,11 +9,11 @@
 #   - eta_min          1e-7 → 1e-6  (warmer LR floor so backbone stays trainable late)
 #   - warmup_epochs    5    → 3     (shorter warmup since warm-starting)
 #   - batch_size       4    → 8     (GPUs were at 31% VRAM — double throughput)
-#   - gradient_checkpointing re-enabled (needed for batch_size 8)
+#   - gradient_checkpointing OFF (31% VRAM at bs=4 — plenty of headroom at bs=8, saves ~25% wall time)
 #
 # Usage:
-#   python scripts/train.py --config-name snemi3d_microns_2 \
-#     +ckpt_path=outputs/checkpoints/last.ckpt
+#  python scripts/train.py --config-name snemi3d_microns_2 \
+#    +ckpt_path=outputs/checkpoints/last.ckpt
 #
 # See doc/CONFIG_REFERENCE.md for full parameter documentation.
 
@@ -63,7 +63,7 @@ model:
   freeze_vae_encoder: true
   freeze_dit_backbone: false
   freeze_vae_decoder: false
-  gradient_checkpointing: true
+  gradient_checkpointing: false
   dropout: 0.1
 
 callbacks:

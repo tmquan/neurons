@@ -15,24 +15,23 @@
 defaults:
   - default
 
-experiment_name: snemi3d_microns_combined
+experiment_name: snemi3d_microns_phase2
 project_name: neurons-combined
 output_dir: outputs
 
 data:
   dataset: snemi3d
-  data_root: data/SNEMI3D  # default root for volumes without explicit root
+  data_root: data/SNEMI3D
   batch_size: 4
-  num_workers: 8            # per rank; 8 GPUs × 4 workers = 32 dataloader procs (saves host RAM)
-  persistent_workers: false   # avoid N ranks × workers holding RAM across epochs
-  cache_rate: 0.0           # LazyVolDataset reads on-demand; no caching
+  num_workers: 8
+  persistent_workers: false
+  cache_rate: 0.0
   pin_memory: true
-  slice_mode: false          # 3D volumetric patches
-  num_samples: 16000         # virtual epoch length (random patches per epoch)
+  slice_mode: false
+  num_samples: 16000
   patch_size: [48, 256, 256]
-  find_boundaries: 1.0       # train only: prob of FindBoundariesd per patch (0=off, 1=always)
+  find_boundaries: 1.0
 
-  # Train: SNEMI3D AC4 + 4 MICRONS train crops
   train_volumes:
     - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024_x120000_y90000_z20000_volume, seg: minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation, root: data/MICRONS}
@@ -40,12 +39,10 @@ data:
     - {vol: minnie65_mip0_1024_x120000_y93100_z20000_volume, seg: minnie65_mip0_1024_x120000_y93100_z20000_v1300_segmentation, root: data/MICRONS}
     - {vol: minnie65_mip0_1024_x124100_y93100_z20000_volume, seg: minnie65_mip0_1024_x124100_y93100_z20000_v1300_segmentation, root: data/MICRONS}
 
-  # Val: held-out SNEMI3D AC3 + MICRONS test crop
   val_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS}
 
-  # Test: same as val
   test_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS}
@@ -58,11 +55,11 @@ model:
   feature_size: 64
   variant: "2B"
   dtype: "bf16"
-  freeze_vae_encoder: true        # VAE encoder  (true = always frozen; int N = freeze for N epochs)
-  freeze_dit_backbone: false      # DiT backbone (true = always frozen; int N = freeze for N epochs then unfreeze)
-  freeze_vae_decoder: false       # VAE decoder  (true = always frozen; int N = freeze for N epochs)
-  gradient_checkpointing: true   # lowers VRAM; helps train→val boundary on 2B + 48×256×256
-  dropout: 0.2
+  freeze_vae_encoder: true
+  freeze_dit_backbone: false
+  freeze_vae_decoder: false
+  gradient_checkpointing: false
+  dropout: 0.1
 
 callbacks:
   cuda_empty_cache_before_val: true
@@ -83,39 +80,39 @@ training:
   training_modes:
     - automatic
 
-optimizer:
+optimizer: 
   type: adamw
-  lr: 2.0e-4
-  dit_backbone_lr: 2.0e-5
-  weight_decay: 1.0e-3
+  lr: 1.0e-4
+  dit_backbone_lr: 2.0e-4
+  weight_decay: 3.0e-4
   scheduler:
     type: cosine_warmup
     warmup_epochs: 5
     T_max: 100
-    eta_min: 1.0e-7
+    eta_min: 1.0e-5
 
 loss:
-  semantic_mode: softmax  
-  active_classes: 2  # only first 2 of 16 semantic channels receive gradient; bump when adding classes
+  semantic_mode: softmax
+  active_classes: 2
   class_weights: [2.0, 1.0]
-  label_smoothing: 0.5
+  label_smoothing: 0.05
   weight_semantic: 1.0
   weight_ce: 1.0
   weight_iou: 1.0
   weight_dice: 1.0
   weight_instance: 1.0
-  weight_pull: 1.0
-  weight_push: 1.0
-  weight_norm: 0.001
+  weight_pull: 2.0
+  weight_push: 2.0
+  weight_norm: 0.01
   delta_v: 0.5
-  delta_d: 1.5
+  delta_d: 2.5
   weight_edge: 2.0
   weight_bone: 2.0
   weight_geometry: 1.0
   dir_target: centroid
   weight_dir: 1.0
   weight_cov: 2.0
-  weight_raw: 4.0
+  weight_raw: 1.0
   loss_dir: l1
   loss_cov: l1
   loss_raw: l1
