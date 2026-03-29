@@ -96,10 +96,10 @@ loss:
   active_classes: 1
   class_weights: [1.0]
   label_smoothing: 0.0
-  weight_semantic: 2.0
-  weight_ce: 1.0
+  weight_semantic: 1.0
+  weight_ce: 0.0
   weight_iou: 1.0
-  weight_dice: 1.0
+  weight_dice: 2.0
   weight_instance: 1.0
   weight_pull: 2.0
   weight_push: 2.0
@@ -112,7 +112,7 @@ loss:
   dir_target: centroid
   weight_dir: 1.0
   weight_cov: 2.0
-  weight_raw: 1.0
+  weight_raw: 2.0
   loss_dir: l1
   loss_cov: l1
   loss_raw: smooth_l1 
