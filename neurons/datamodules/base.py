@@ -223,6 +223,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             )
 
         transforms.extend([
+            *self._original_transforms(sd),
             *self._semantic_transforms(sd),
             *self._instance_transforms(sd),
             *self._geometry_transforms(sd),
