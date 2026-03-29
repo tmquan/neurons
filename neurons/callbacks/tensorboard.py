@@ -16,7 +16,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from einops import rearrange, repeat
+from einops import rearrange, reduce, repeat
 
 
 # ======================================================================
@@ -48,19 +48,8 @@ def _normalise(t: torch.Tensor) -> torch.Tensor:
                      c=t.shape[1], h=t.shape[2], w=t.shape[3])
 
 
-def _golden_angle_rgb(ids: torch.Tensor) -> torch.Tensor:
-    """Map integer IDs → [N, 3] RGB via golden-angle HSV spacing.
-
-    Consecutive IDs are maximally separated in hue (~137.5° apart).
-    Saturation and value are varied via coprime multipliers so distinct
-    IDs that happen to share a hue still differ in appearance.
-    """
-    GOLDEN_ANGLE = 0.381966011250105
-    x = ids.float()
-    h = (x * GOLDEN_ANGLE) % 1.0
-    s = 0.65 + 0.35 * ((x * 0.274 + 0.2) % 1.0)
-    v = 0.75 + 0.25 * ((x * 0.529 + 0.3) % 1.0)
-
+def _hsv_to_rgb(h: torch.Tensor, s: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """Vectorised HSV→RGB.  All inputs/outputs in [0, 1], shape [N]."""
     h6 = h * 6.0
     sector = h6.long() % 6
     f = h6 - h6.floor()
@@ -68,27 +57,23 @@ def _golden_angle_rgb(ids: torch.Tensor) -> torch.Tensor:
     q = v * (1.0 - s * f)
     t = v * (1.0 - s * (1.0 - f))
 
-    rgb_lut = [(v, t, p), (q, v, p), (p, v, t),
-               (p, q, v), (t, p, v), (v, p, q)]
+    lut = [(v, t, p), (q, v, p), (p, v, t),
+           (p, q, v), (t, p, v), (v, p, q)]
     r, g, b = torch.zeros_like(h), torch.zeros_like(h), torch.zeros_like(h)
-    for i, (ri, gi, bi) in enumerate(rgb_lut):
+    for i, (ri, gi, bi) in enumerate(lut):
         mask = sector == i
         r = torch.where(mask, ri, r)
         g = torch.where(mask, gi, g)
         b = torch.where(mask, bi, b)
-
     return torch.stack([r, g, b], dim=-1)
 
 
 def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
-    """Map integer instance labels → deterministic, perceptually-distinct RGB.
+    """Map integer instance labels → pastel, deterministic RGB image.
 
-    Background (0) is black.  Each non-zero label ID is mapped to a unique
-    colour via golden-angle hue spacing, guaranteeing that nearby integer
-    IDs produce maximally separated hues.  The mapping is purely per-ID:
-    the same label value always produces the same colour regardless of
-    what other IDs are present, so ground-truth and prediction visualisations
-    are identical when their label maps match.
+    Background (0) is black.  Non-zero labels are coloured via a
+    golden-ratio hue-spaced HSV palette with moderate saturation and
+    high value for soft, PCA-like colours.
 
     Args:
         labels: [B, H, W] long tensor.
@@ -98,35 +83,35 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     """
     B, H, W = labels.shape
     flat = rearrange(labels, "b h w -> (b h w)").long()
+    n_labels = flat.max().item() + 1
 
-    rgb = _golden_angle_rgb(flat)                                  # [B*H*W, 3]
-    rgb[flat == 0] = 0.0                                           # background → black
+    GOLDEN_RATIO = 0.618033988749895
+    ids = torch.arange(n_labels, device=labels.device, dtype=torch.float32)
+    hue = (ids * GOLDEN_RATIO) % 1.0
 
+    gen = torch.Generator(device=labels.device).manual_seed(0)
+    rand = torch.rand(n_labels, 2, device=labels.device, generator=gen)
+    sat = 0.20 + 0.25 * rand[:, 0]                                # [0.20, 0.45]
+    val = 0.75 + 0.25 * rand[:, 1]                                # [0.75, 1.00]
+
+    palette = _hsv_to_rgb(hue, sat, val)                           # [n_labels, 3]
+    palette[0] = 0.0                                               # background → black
+
+    rgb = palette[flat]
     return rearrange(rgb, "(b h w) c -> b c h w", b=B, h=H, w=W)
 
 
-def _pca_project(
-    emb: torch.Tensor,
-    n_components: int = 3,
-    labels: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    """Project [B, E, H, W] embeddings → [B, 3, H, W] RGB visualisation.
+def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
+    """Project [B, E, H, W] embeddings → [B, 3, H, W] via per-image PCA.
 
-    When *labels* ([B, H, W]) are provided, each foreground pixel is
-    coloured with the golden-angle palette of the GT instance whose
-    centroid is nearest in embedding space.  Brightness is modulated by
-    proximity to the assigned centroid (bright = close, dim = far),
-    giving an immediate visual of embedding quality that is directly
-    comparable to the ``label`` and ``instance_pred`` panels.
+    The top-3 principal components are used as RGB channels.  Each image
+    in the batch is projected independently so colours are locally
+    meaningful (nearby pixels with similar embeddings get similar colours).
 
-    When *labels* are ``None``, falls back to per-image PCA with the
-    top-3 principal components mapped to RGB channels.
+    Falls back to the first 3 channels when SVD fails to converge
+    (ill-conditioned matrices are common in early training).
     """
     B, E, H, W = emb.shape
-
-    if labels is not None:
-        return _embed_nearest_centroid_rgb(emb, labels)
-
     flat = rearrange(emb, "b e h w -> b e (h w)").float()         # [B, E, N]
     mean = flat.mean(dim=2, keepdim=True)
     centered = flat - mean
@@ -139,61 +124,6 @@ def _pca_project(
 
     proj = rearrange(proj, "b c (h w) -> b c h w", h=H, w=W)
     return _normalise(proj)
-
-
-def _embed_nearest_centroid_rgb(
-    emb: torch.Tensor,
-    labels: torch.Tensor,
-) -> torch.Tensor:
-    """Colour each pixel by nearest GT centroid using the golden-angle palette.
-
-    For each batch element:
-      1. Compute the mean embedding per GT instance.
-      2. Assign every foreground pixel to the nearest centroid.
-      3. Look up the golden-angle colour for the assigned GT instance ID.
-      4. Scale brightness by proximity (close → full colour, far → dim).
-
-    Pixels assigned to a *wrong* centroid show up in the wrong colour,
-    making embedding errors immediately visible.
-    """
-    B, E, H, W = emb.shape
-    device = emb.device
-    result = torch.zeros(B, 3, H, W, device=device)
-
-    for b in range(B):
-        emb_flat = rearrange(emb[b], "e h w -> (h w) e").float()  # [N, E]
-        lbl_flat = labels[b].reshape(-1).long()                    # [N]
-
-        fg = lbl_flat > 0
-        if not fg.any():
-            continue
-
-        unique_ids = torch.unique(lbl_flat[fg])
-        K = len(unique_ids)
-
-        centroids = torch.zeros(K, E, device=device, dtype=torch.float32)
-        for i, uid in enumerate(unique_ids):
-            centroids[i] = emb_flat[lbl_flat == uid].mean(dim=0)
-
-        dists = torch.cdist(
-            emb_flat.unsqueeze(0), centroids.unsqueeze(0),
-        ).squeeze(0)                                               # [N, K]
-
-        nearest_k = dists.argmin(dim=1)                            # [N]
-        assigned_ids = unique_ids[nearest_k]                       # [N]
-        assigned_ids[~fg] = 0
-
-        own_dist = dists[torch.arange(dists.shape[0], device=device), nearest_k]
-        cap = own_dist[fg].quantile(0.95).clamp(min=1e-6)
-        brightness = 1.0 - 0.6 * (own_dist / cap).clamp(0, 1)    # [0.4, 1.0]
-        brightness[~fg] = 0.0
-
-        rgb = _golden_angle_rgb(assigned_ids)                      # [N, 3]
-        rgb = rgb * brightness.unsqueeze(1)
-
-        result[b] = rearrange(rgb, "(h w) c -> c h w", h=H, w=W)
-
-    return result
 
 
 # ======================================================================
@@ -277,20 +207,16 @@ def _render_cov_glyphs(
                 if S == 3:
                     T = T[1:, 1:]
 
-                # Eigendecomposition of the 2x2 structure tensor
                 eigvals, eigvecs = np.linalg.eigh(T)
                 abs_eig = np.abs(eigvals)
                 if abs_eig.max() < 1e-8:
                     continue
 
-                # Glyph size ∝ max eigenvalue (large at centres, small at edges)
                 scale = abs_eig.max() / max_eig_global
                 glyph_radius = max_glyph_radius * np.clip(scale, 0.1, 1.0)
 
-                # Aspect ratio = min/max eigenvalue (1 = circle, 0 = line)
                 ratio = abs_eig.min() / max(abs_eig.max(), 1e-8)
 
-                # Angle from major eigenvector (width aligns with major axis)
                 idx_max = int(abs_eig.argmax())
                 angle = np.degrees(np.arctan2(
                     eigvecs[1, idx_max], eigvecs[0, idx_max],
@@ -305,7 +231,6 @@ def _render_cov_glyphs(
                     linewidth=1.2, alpha=0.8,
                 ))
 
-        # Rasterise matplotlib figure → torch tensor
         fig.canvas.draw()
         arr = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
         plt.close(fig)
@@ -369,14 +294,12 @@ def _render_dir_quiver(
         lbl = labels[b].detach().cpu().numpy()
         d = dir_val[b].detach().cpu().float().numpy()
 
-        # Channel layout: 2D → [x, y];  3D → [z, y, x].
-        # For 2D quiver display we need (U=horizontal, V=vertical).
         if S == 3:
-            U = d[2][RR, CC]                                       # x channel (horizontal)
-            V = d[1][RR, CC]                                       # y channel (vertical)
+            U = d[2][RR, CC]
+            V = d[1][RR, CC]
         else:
-            U = d[0][RR, CC]                                       # x channel
-            V = d[1][RR, CC]                                       # y channel
+            U = d[0][RR, CC]
+            V = d[1][RR, CC]
 
         fg = lbl[RR, CC] > 0
 
@@ -384,7 +307,6 @@ def _render_dir_quiver(
         ax.imshow(bg, aspect="equal", interpolation="nearest")
         m = fg.ravel()
         if m.any():
-            # scale: data-units per arrow-length-unit; lower = longer arrows
             ax.quiver(
                 CC.ravel()[m], RR.ravel()[m],
                 U.ravel()[m], V.ravel()[m],
@@ -397,7 +319,6 @@ def _render_dir_quiver(
         ax.axis("off")
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
-        # Rasterise matplotlib figure → torch tensor
         fig.canvas.draw()
         arr = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
         plt.close(fig)
@@ -493,6 +414,7 @@ def _log_predictions(
     epoch: int,
     clusterer: Any = None,
     dir_target: str = "centroid",
+    active_classes: Optional[int] = None,
 ) -> torch.Tensor:
     """Log a standard set of prediction visualisations to TensorBoard.
 
@@ -510,11 +432,14 @@ def _log_predictions(
         epoch: global step for TensorBoard.
         clusterer: optional SoftMeanShift for producing instance_pred.
         dir_target: ``"centroid"`` or ``"skeleton"``.
+        active_classes: number of active semantic channels (from config).
 
     Returns:
         [n, 3, H, W] grayscale image repeated to RGB (for prompt overlay).
     """
     sem = _to_2d(preds["semantic"][:n])
+    if active_classes is not None and active_classes < sem.shape[1]:
+        sem = sem[:, :active_classes]
     inst = _to_2d(preds["instance"][:n])
     geom = _to_2d(preds["geometry"][:n])
 
@@ -525,8 +450,9 @@ def _log_predictions(
     img_gray = _normalise(images).expand(-1, 3, -1, -1).contiguous()
     lbl_rgb = _label_to_rgb(labels.long())
     sem_ids = sem.argmax(dim=1)
-    sem_rgb = _label_to_rgb(sem_ids)
-    inst_rgb = _pca_project(inst, n_components=3, labels=labels)
+    sem_fg = sem[:, :2].softmax(dim=1)[:, 1:]
+    sem_gray = repeat(sem_fg, "b 1 h w -> b 3 h w")
+    inst_rgb = _pca_project(inst, n_components=3)
 
     fg_mask_pred = (sem_ids > 0).long()
 
@@ -543,7 +469,7 @@ def _log_predictions(
 
     tb.add_images(f"{tag}/image", img_gray, global_step=epoch)
     tb.add_images(f"{tag}/label", lbl_rgb, global_step=epoch)
-    tb.add_images(f"{tag}/semantic", sem_rgb, global_step=epoch)
+    tb.add_images(f"{tag}/semantic", sem_gray, global_step=epoch)
     tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
 
     if clusterer is not None:
@@ -563,8 +489,8 @@ def _log_predictions(
                 _to_2d(rearrange(ins_pred, "b ... -> b 1 ...")),
                 "b 1 ... -> b ...",
             )
-        tb.add_images(f"{tag}/instance_pred",
-                      _label_to_rgb(ins_pred.long()), global_step=epoch)
+        ins_rgb = _label_to_rgb(ins_pred.long()) * sem_fg
+        tb.add_images(f"{tag}/instance_pred", ins_rgb, global_step=epoch)
 
     tb.add_images(f"{tag}/geometry_dir_{dir_target}", g_dir_rgb, global_step=epoch)
     tb.add_images(f"{tag}/geometry_cov", g_cov_rgb, global_step=epoch)
@@ -670,6 +596,8 @@ class ImageLogger(pl.Callback):
         criterion = getattr(pl_module, "criterion", None)
         geom_loss = getattr(criterion, "geometry_loss", None) if criterion else None
         dir_target = getattr(geom_loss, "dir_target", "centroid") if geom_loss else "centroid"
+        sem_loss = getattr(criterion, "semantic_loss", None) if criterion else None
+        active_classes = getattr(sem_loss, "active_classes", None) if sem_loss else None
 
         images_2d = _to_2d(images[:n])
         labels_2d = rearrange(
@@ -681,6 +609,7 @@ class ImageLogger(pl.Callback):
             tb, "train_vis_automatic", images_2d, labels_2d,
             preds_auto, self.spatial_dims, n, epoch,
             clusterer=clusterer, dir_target=dir_target,
+            active_classes=active_classes,
         )
         del preds_auto
 
@@ -707,6 +636,7 @@ class ImageLogger(pl.Callback):
             tb, "train_vis_proofread", images_2d, labels_2d,
             preds_proof, self.spatial_dims, n, epoch,
             clusterer=clusterer, dir_target=dir_target,
+            active_classes=active_classes,
         )
         del preds_proof
 
