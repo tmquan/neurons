@@ -111,6 +111,13 @@ class SemanticLoss(nn.Module):
         if class_labels.dim() == logits.dim():
             return probs, class_labels.float(), None
 
+        valid = (class_labels != self.ignore_index)
+        valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
+
+        if C == 1:
+            target = (class_labels > 0).float().unsqueeze(1)       # [B, 1, ...]
+            return probs * valid_mask, target * valid_mask, valid_mask
+
         safe = class_labels.clone().long()
         neg = safe < 0
         safe[neg] = 0
@@ -122,7 +129,6 @@ class SemanticLoss(nn.Module):
         neg_mask = rearrange(neg, "b ... -> b 1 ...")
         target[neg_mask.expand_as(target)] = 0.0
 
-        valid_mask = rearrange((~neg).float(), "b ... -> b 1 ...")
         return probs * valid_mask, target * valid_mask, valid_mask
 
     def _compute_ce(self, logits, class_labels):

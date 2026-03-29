@@ -449,8 +449,12 @@ def _log_predictions(
 
     img_gray = _normalise(images).expand(-1, 3, -1, -1).contiguous()
     lbl_rgb = _label_to_rgb(labels.long())
-    sem_ids = sem.argmax(dim=1)
-    sem_fg = sem[:, :2].softmax(dim=1)[:, 1:]
+    if sem.shape[1] == 1:
+        sem_fg = sem[:, :1].sigmoid()
+        sem_ids = (sem_fg[:, 0] > 0.5).long()
+    else:
+        sem_ids = sem.argmax(dim=1)
+        sem_fg = sem[:, :2].softmax(dim=1)[:, 1:]
     sem_gray = repeat(sem_fg, "b 1 h w -> b 3 h w")
     inst_rgb = _pca_project(inst, n_components=3)
 

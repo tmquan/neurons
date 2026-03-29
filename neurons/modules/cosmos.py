@@ -377,9 +377,15 @@ class BaseCosmosModule(pl.LightningModule):
         active = getattr(self.criterion.semantic_loss, "active_classes", None)
         if active is not None and active < sem_logits.shape[1]:
             sem_logits = sem_logits[:, :active]
-        sem_pred = sem_logits.argmax(dim=1)
         sem_gt = targets["semantic_labels"]
-        n_cls = sem_logits.shape[1]
+
+        sem_mode = getattr(self.criterion.semantic_loss, "mode", "softmax")
+        if sem_mode == "sigmoid" and sem_logits.shape[1] == 1:
+            sem_pred = (sem_logits[:, 0].sigmoid() > 0.5).long()
+            n_cls = 2
+        else:
+            sem_pred = sem_logits.argmax(dim=1)
+            n_cls = sem_logits.shape[1]
 
         self._accum(f"{prefix}/sem_acc", reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
         self._accum(f"{prefix}/sem_iou", compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
