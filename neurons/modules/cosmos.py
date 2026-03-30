@@ -420,7 +420,7 @@ class BaseCosmosModule(pl.LightningModule):
             dist.all_reduce(sums, op=dist.ReduceOp.SUM)
             dist.all_reduce(counts, op=dist.ReduceOp.SUM)
 
-        _PROG_BAR = {f"{prefix}/loss", f"{prefix}/sem_acc", f"{prefix}/sem_iou", f"{prefix}/ins_ari"}
+        _PROG_BAR = {f"{prefix}/loss", f"{prefix}/sem_acc", f"{prefix}/sem_iou", f"{prefix}/sem_dice", f"{prefix}/ins_ari"}
         for i, name in enumerate(names):
             if counts[i] > 0:
                 avg = (sums[i] / counts[i]).item()
