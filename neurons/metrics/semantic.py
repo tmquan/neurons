@@ -1,9 +1,9 @@
 """
-Semantic segmentation metrics.
+Semantic segmentation metrics using MONAI.
 
 Provides per-point and per-batch variants of:
-- Dice coefficient  (2|P∩G| / (|P|+|G|))
-- IoU / Jaccard     (|P∩G| / |P∪G|)
+- Dice coefficient via ``monai.metrics.DiceMetric``
+- IoU / Jaccard  via ``monai.metrics.MeanIoU``
 
 Both support multi-class evaluation with an optional ``ignore_index``.
 """
@@ -11,6 +11,47 @@ Both support multi-class evaluation with an optional ``ignore_index``.
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
+from einops import rearrange
+from monai.metrics import DiceMetric, MeanIoU
+
+
+def _to_onehot_pair(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    num_classes: int,
+    ignore_index: int = -100,
+) -> tuple:
+    """Convert integer label maps to one-hot tensors for MONAI metrics.
+
+    Args:
+        pred:   [*spatial] int/long predicted class labels.
+        target: [*spatial] int/long ground truth class labels.
+        num_classes: Total number of classes.
+        ignore_index: Label to mask out.
+
+    Returns:
+        (pred_oh, target_oh) each shaped [1, num_classes, *spatial] float.
+    """
+    valid = target != ignore_index
+    p = pred.clone().long()
+    t = target.clone().long()
+    p[~valid] = 0
+    t[~valid] = 0
+
+    p_oh = rearrange(
+        F.one_hot(p, num_classes).float(), "... c -> c ...",
+    ).unsqueeze(0)
+    t_oh = rearrange(
+        F.one_hot(t, num_classes).float(), "... c -> c ...",
+    ).unsqueeze(0)
+
+    if not valid.all():
+        mask = valid.float().unsqueeze(0).unsqueeze(0)
+        p_oh = p_oh * mask
+        t_oh = t_oh * mask
+
+    return p_oh, t_oh
 
 
 # ======================================================================
@@ -24,40 +65,12 @@ def compute_per_point_dice(
     ignore_index: int = -100,
     eps: float = 1e-7,
 ) -> float:
-    """Mean Dice coefficient across classes for a single sample.
-
-    Args:
-        pred: Predicted class labels [H, W] or [D, H, W] (int/long).
-        target: Ground truth class labels, same shape.
-        num_classes: Number of classes.
-        ignore_index: Label value to ignore (default -100).
-        eps: Smoothing to avoid division by zero.
-
-    Returns:
-        Mean Dice in [0, 1].
-    """
-    from einops import rearrange as _r
-    pred_flat = _r(pred.cpu().long(), "... -> (...)")
-    tgt_flat = _r(target.cpu().long(), "... -> (...)")
-
-    valid = tgt_flat != ignore_index
-    pred_flat = pred_flat[valid]
-    tgt_flat = tgt_flat[valid]
-
-    classes = torch.arange(num_classes, device=pred_flat.device)
-    pred_onehot = pred_flat.unsqueeze(0) == classes.unsqueeze(1)
-    tgt_onehot = tgt_flat.unsqueeze(0) == classes.unsqueeze(1)
-
-    intersection = (pred_onehot & tgt_onehot).sum(dim=1).float()
-    pred_sum = pred_onehot.sum(dim=1).float()
-    tgt_sum = tgt_onehot.sum(dim=1).float()
-
-    present = (pred_sum > 0) | (tgt_sum > 0)
-    if not present.any():
-        return 0.0
-
-    dice = (2.0 * intersection + eps) / (pred_sum + tgt_sum + eps)
-    return dice[present].mean().item()
+    """Mean Dice coefficient across classes for a single sample."""
+    p_oh, t_oh = _to_onehot_pair(pred.cpu(), target.cpu(), num_classes, ignore_index)
+    metric = DiceMetric(include_background=True, reduction="mean", ignore_empty=True)
+    result = metric(p_oh, t_oh)
+    val = result.nanmean().item()
+    return val if val == val else 0.0  # handle NaN
 
 
 def compute_per_batch_dice(
@@ -86,39 +99,12 @@ def compute_per_point_iou(
     ignore_index: int = -100,
     eps: float = 1e-7,
 ) -> float:
-    """Mean IoU (Jaccard) across classes for a single sample.
-
-    Args:
-        pred: Predicted class labels [H, W] or [D, H, W] (int/long).
-        target: Ground truth class labels, same shape.
-        num_classes: Number of classes.
-        ignore_index: Label value to ignore (default -100).
-        eps: Smoothing to avoid division by zero.
-
-    Returns:
-        Mean IoU in [0, 1].
-    """
-    from einops import rearrange as _r
-    pred_flat = _r(pred.cpu().long(), "... -> (...)")
-    tgt_flat = _r(target.cpu().long(), "... -> (...)")
-
-    valid = tgt_flat != ignore_index
-    pred_flat = pred_flat[valid]
-    tgt_flat = tgt_flat[valid]
-
-    classes = torch.arange(num_classes, device=pred_flat.device)
-    pred_onehot = pred_flat.unsqueeze(0) == classes.unsqueeze(1)
-    tgt_onehot = tgt_flat.unsqueeze(0) == classes.unsqueeze(1)
-
-    intersection = (pred_onehot & tgt_onehot).sum(dim=1).float()
-    union = (pred_onehot | tgt_onehot).sum(dim=1).float()
-
-    present = (pred_onehot.sum(dim=1) > 0) | (tgt_onehot.sum(dim=1) > 0)
-    if not present.any():
-        return 0.0
-
-    iou = (intersection + eps) / (union + eps)
-    return iou[present].mean().item()
+    """Mean IoU (Jaccard) across classes for a single sample."""
+    p_oh, t_oh = _to_onehot_pair(pred.cpu(), target.cpu(), num_classes, ignore_index)
+    metric = MeanIoU(include_background=True, reduction="mean", ignore_empty=True)
+    result = metric(p_oh, t_oh)
+    val = result.nanmean().item()
+    return val if val == val else 0.0  # handle NaN
 
 
 def compute_per_batch_iou(

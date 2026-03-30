@@ -8,7 +8,7 @@ Supports two activation modes:
 - **sigmoid**: independent per-channel binary CE (multi-label).
 - **softmax**: mutually-exclusive CE via ``nn.CrossEntropyLoss``.
 
-Both modes correctly handle ``ignore_index`` in all three sub-losses.
+Uses MONAI's ``DiceLoss`` for both Dice and IoU (Jaccard) sub-losses.
 """
 
 from typing import Dict, List, Optional
@@ -16,7 +16,8 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, reduce
+from einops import rearrange
+from monai.losses import DiceLoss
 
 
 class SemanticLoss(nn.Module):
@@ -66,6 +67,17 @@ class SemanticLoss(nn.Module):
         else:
             self.ce_loss = nn.BCEWithLogitsLoss(pos_weight=cw, reduction="none")
 
+        use_sigmoid = (mode == "sigmoid")
+        use_softmax = (mode == "softmax")
+        self.dice_loss = DiceLoss(
+            sigmoid=use_sigmoid, softmax=use_softmax,
+            include_background=True, reduction="mean",
+        )
+        self.iou_loss = DiceLoss(
+            sigmoid=use_sigmoid, softmax=use_softmax,
+            include_background=True, jaccard=True, reduction="mean",
+        )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -86,95 +98,58 @@ class SemanticLoss(nn.Module):
             class_labels[valid] = class_labels[valid].clamp(0, C - 1)
         return logits, class_labels
 
-    def _to_probs_and_target(self, logits, class_labels):
-        """Convert logits + labels -> (probs [B,C,*], target [B,C,*], valid [B,1,*]).
+    def _make_target(self, logits, class_labels):
+        """Build a channel-wise target matching logits shape for Dice/IoU.
 
-        Returns a valid mask so that callers can exclude ``ignore_index``
-        pixels from soft overlap losses regardless of mode.
+        Returns (target [B, C, *], valid_mask [B, 1, *]).
         """
         C = logits.shape[1]
 
         if self.mode == "softmax":
-            probs = F.softmax(logits, dim=1)
             valid = class_labels != self.ignore_index
             safe = torch.where(valid, class_labels, 0)
             one_hot = rearrange(
-                F.one_hot(safe.long(), C).float(),
-                "b ... c -> b c ...",
+                F.one_hot(safe.long(), C).float(), "b ... c -> b c ...",
             )
             valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
-            return probs * valid_mask, one_hot * valid_mask, valid_mask
+            return one_hot * valid_mask, valid_mask
 
         # sigmoid mode
-        probs = torch.sigmoid(logits)
-
         if class_labels.dim() == logits.dim():
-            return probs, class_labels.float(), None
+            return class_labels.float(), None
 
         valid = (class_labels != self.ignore_index)
         valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
 
         if C == 1:
-            target = (class_labels > 0).float().unsqueeze(1)       # [B, 1, ...]
-            return probs * valid_mask, target * valid_mask, valid_mask
+            target = (class_labels > 0).float().unsqueeze(1)
+            return target * valid_mask, valid_mask
 
         safe = class_labels.clone().long()
         neg = safe < 0
         safe[neg] = 0
         safe = safe.clamp(0, C - 1)
         target = rearrange(
-            F.one_hot(safe, C).float(),
-            "b ... c -> b c ...",
+            F.one_hot(safe, C).float(), "b ... c -> b c ...",
         )
         neg_mask = rearrange(neg, "b ... -> b 1 ...")
         target[neg_mask.expand_as(target)] = 0.0
 
-        return probs * valid_mask, target * valid_mask, valid_mask
+        return target * valid_mask, valid_mask
 
     def _compute_ce(self, logits, class_labels):
         logits, class_labels = self._slice_active(logits, class_labels)
         if self.mode == "softmax":
             return self.ce_loss(logits, class_labels)
 
-        _, target, valid_mask = self._to_probs_and_target(logits, class_labels)
-        per_pixel = self.ce_loss(logits, target)                   # [B, C, *spatial]
+        target, valid_mask = self._make_target(logits, class_labels)
+        per_pixel = self.ce_loss(logits, target)
         if valid_mask is not None:
             per_pixel = per_pixel * valid_mask
             n_valid = valid_mask.sum().clamp(min=1.0) * per_pixel.shape[1]
         else:
             n_valid = max(per_pixel.numel(), 1)
         return per_pixel.sum() / n_valid
-
-    @staticmethod
-    def _iou_from_probs(probs, target, eps=1e-4):
-        """1 - mean(IoU) over present classes from pre-computed probs/target."""
-        inter = reduce(probs * target, "b c ... -> b c", "sum")
-        union = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum") - inter
-        iou_per_class = (inter + eps) / (union + eps)                   # [B, C]
-        present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
-        n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
-        return 1.0 - reduce(iou_per_class * present, "b c -> ", "sum") / n_present
-
-    @staticmethod
-    def _dice_from_probs(probs, target, eps=1e-4):
-        """1 - mean(Dice) over present classes from pre-computed probs/target."""
-        inter = reduce(probs * target, "b c ... -> b c", "sum")
-        card = reduce(probs, "b c ... -> b c", "sum") + reduce(target, "b c ... -> b c", "sum")
-        dice_per_class = (2.0 * inter + eps) / (card + eps)                   # [B, C]
-        present = reduce(target, "b c ... -> b c", "sum") > 0     # [B, C]
-        n_present = reduce(present.float(), "b c -> ", "sum").clamp(min=1.0)
-        return 1.0 - reduce(dice_per_class * present, "b c -> ", "sum") / n_present
-
-    # Keep old method signatures alive for any external callers
-    def _iou_loss(self, logits, class_labels, eps=1e-4):
-        logits, class_labels = self._slice_active(logits, class_labels)
-        probs, target, _ = self._to_probs_and_target(logits, class_labels)
-        return self._iou_from_probs(probs, target, eps)
-
-    def _dice_loss(self, logits, class_labels, eps=1e-4):
-        logits, class_labels = self._slice_active(logits, class_labels)
-        probs, target, _ = self._to_probs_and_target(logits, class_labels)
-        return self._dice_from_probs(probs, target, eps)
 
     # ------------------------------------------------------------------
     # Forward
@@ -189,9 +164,9 @@ class SemanticLoss(nn.Module):
 
         if need_iou or need_dice:
             sliced_logits, sliced_labels = self._slice_active(logits, class_labels)
-            probs, target, _ = self._to_probs_and_target(sliced_logits, sliced_labels)
-            iou = self._iou_from_probs(probs, target) if need_iou else torch.tensor(0.0, device=dev)
-            dice = self._dice_from_probs(probs, target) if need_dice else torch.tensor(0.0, device=dev)
+            target, _ = self._make_target(sliced_logits, sliced_labels)
+            dice = self.dice_loss(sliced_logits, target) if need_dice else torch.tensor(0.0, device=dev)
+            iou = self.iou_loss(sliced_logits, target) if need_iou else torch.tensor(0.0, device=dev)
         else:
             iou = torch.tensor(0.0, device=dev)
             dice = torch.tensor(0.0, device=dev)
