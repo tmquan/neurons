@@ -35,16 +35,16 @@ Crop size estimates (mip0, uint8 EM + uint64 seg, uncompressed):
   2048³ =   8 GB EM +  64 GB seg  =   72 GB total
   4096³ =  64 GB EM + 512 GB seg  =  576 GB total
 
-Pre-defined splits (all 1024^3, disjoint):
-  train1: (120000, 90000, 20000)
-  train2: (124100, 90000, 20000)  -- +4100 X from train1
-  train3: (120000, 93100, 20000)  -- +3100 Y from train1
-  train4: (124100, 93100, 20000)  -- diagonal from train1
-  test1:  (122000, 92000, 20000)  -- disjoint from all train crops
+Pre-defined splits (all 1024^3, disjoint, >=39K margin from seg edges):
+  train1: (90000,  70000, 19000)  -- lower-left,  shallow
+  train2: (154000, 70000, 20000)  -- lower-right, mid-shallow
+  train3: (90000, 120000, 21000)  -- upper-left,  mid-deep
+  train4: (154000,120000, 22000)  -- upper-right, deep
+  test1:  (122000, 95000, 21000)  -- centre of volume
 
 File naming encodes coordinates:
-  minnie65_mip0_1024_x120000_y90000_z20000_volume.h5
-  minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation.h5
+  minnie65_mip0_1024_x90000_y70000_z19000_volume.h5
+  minnie65_mip0_1024_x90000_y70000_z19000_v1300_segmentation.h5
 
 Uses cloud-volume to fetch from AWS / Google Cloud public buckets.
 
@@ -100,14 +100,17 @@ DEFAULT_SEG_VERSION = 1300
 
 # Pre-defined splits in disjoint regions of the minnie65 volume.
 # Coordinates are (X, Y, Z) in mip0 voxels.  All 1024^3.
-# EM bounds:  X=[13824,226816]  Y=[13824,194048]  Z=[14816,27904]
-# Seg bounds: X=[26385,218809]  Y=[30308,161359]  Z=[14850,27858]
+#
+# Placed on a 2x2 XY grid spanning the tissue interior with varied
+# Z-depths to sample different cortical layers.  Every crop has >=39K
+# voxel margin from the segmentation boundary in every axis.
+# Spans 65K x 51K x 4K (XYZ) for maximum tissue diversity.
 SPLITS: Dict[str, Dict[str, Tuple[int, int, int]]] = {
-    "train1": {"start": (120000, 90000, 20000), "size": (1024, 1024, 1024)},
-    "train2": {"start": (124100, 90000, 20000), "size": (1024, 1024, 1024)},
-    "train3": {"start": (120000, 93100, 20000), "size": (1024, 1024, 1024)},
-    "train4": {"start": (124100, 93100, 20000), "size": (1024, 1024, 1024)},
-    "test1":  {"start": (122000, 92000, 20000), "size": (1024, 1024, 1024)},
+    "train1": {"start": (90000, 70000, 19000), "size": (1024, 1024, 1024)},
+    "train2": {"start": (154000, 70000, 20000), "size": (1024, 1024, 1024)},
+    "train3": {"start": (90000, 120000, 21000), "size": (1024, 1024, 1024)},
+    "train4": {"start": (154000, 120000, 22000), "size": (1024, 1024, 1024)},
+    "test1":  {"start": (122000, 95000, 21000), "size": (1024, 1024, 1024)},
 }
 
 TRAIN_SPLITS = ["train1", "train2", "train3", "train4"]
@@ -168,11 +171,11 @@ def make_name(
     """Build coordinate-based file name.
 
     Examples:
-        make_name("volume", 0, 1024, (120000, 90000, 20000))
-        -> "minnie65_mip0_1024_x120000_y90000_z20000_volume.h5"
+        make_name("volume", 0, (1024,1024,1024), (90000, 70000, 19000))
+        -> "minnie65_mip0_1024_x90000_y70000_z19000_volume.h5"
 
-        make_name("segmentation", 0, 1024, (120000, 90000, 20000), seg_version=1300)
-        -> "minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation.h5"
+        make_name("segmentation", 0, (256,256,128), (90000, 70000, 19000), seg_version=1300)
+        -> "minnie65_mip0_256x256x128_x90000_y70000_z19000_v1300_segmentation.h5"
     """
     x, y, z = start
     base = f"minnie65_mip{mip}_{crop_size}_x{x}_y{y}_z{z}"

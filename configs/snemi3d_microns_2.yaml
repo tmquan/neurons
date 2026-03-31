@@ -39,18 +39,18 @@ data:
 
   train_volumes:
     - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
-    - {vol: minnie65_mip0_1024_x120000_y90000_z20000_volume, seg: minnie65_mip0_1024_x120000_y90000_z20000_v1300_segmentation, root: data/MICRONS}
-    - {vol: minnie65_mip0_1024_x124100_y90000_z20000_volume, seg: minnie65_mip0_1024_x124100_y90000_z20000_v1300_segmentation, root: data/MICRONS}
-    - {vol: minnie65_mip0_1024_x120000_y93100_z20000_volume, seg: minnie65_mip0_1024_x120000_y93100_z20000_v1300_segmentation, root: data/MICRONS}
-    - {vol: minnie65_mip0_1024_x124100_y93100_z20000_volume, seg: minnie65_mip0_1024_x124100_y93100_z20000_v1300_segmentation, root: data/MICRONS}
+    - {vol: minnie65_mip0_1024_x90000_y70000_z19000_volume, seg: minnie65_mip0_1024_x90000_y70000_z19000_v1300_segmentation, root: data/MICRONS}
+    - {vol: minnie65_mip0_1024_x154000_y70000_z20000_volume, seg: minnie65_mip0_1024_x154000_y70000_z20000_v1300_segmentation, root: data/MICRONS}
+    - {vol: minnie65_mip0_1024_x90000_y120000_z21000_volume, seg: minnie65_mip0_1024_x90000_y120000_z21000_v1300_segmentation, root: data/MICRONS}
+    - {vol: minnie65_mip0_1024_x154000_y120000_z22000_volume, seg: minnie65_mip0_1024_x154000_y120000_z22000_v1300_segmentation, root: data/MICRONS}
 
   val_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
-    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS}
+    - {vol: minnie65_mip0_1024_x122000_y95000_z21000_volume, seg: minnie65_mip0_1024_x122000_y95000_z21000_v1300_segmentation, root: data/MICRONS}
 
   test_volumes:
     - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
-    - {vol: minnie65_mip0_1024_x122000_y92000_z20000_volume, seg: minnie65_mip0_1024_x122000_y92000_z20000_v1300_segmentation, root: data/MICRONS}
+    - {vol: minnie65_mip0_1024_x122000_y95000_z21000_volume, seg: minnie65_mip0_1024_x122000_y95000_z21000_v1300_segmentation, root: data/MICRONS}
 
 model:
   type: cosmostransfer3d
