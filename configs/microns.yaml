@@ -3,12 +3,9 @@
 #
 # Download all splits: python scripts/download_microns.py --split --seg-version 1300
 #
-# Splits (all 1024^3, disjoint, >=39K margin from seg edges):
-#   train1: (90000,  70000, 19000)
-#   train2: (154000, 70000, 20000)
-#   train3: (90000, 120000, 21000)
-#   train4: (154000,120000, 22000)
-#   test1:  (122000, 95000, 21000)
+# Splits (11 total: 9 train + 2 test, all 1024x1024x2048, disjoint):
+#   train01-10: 5-col x 2-row XY grid, Z varies 16500-24500
+#   test01-02:  XY gap positions, Z=20000/21000
 
 defaults:
   - default
@@ -18,7 +15,7 @@ project_name: neurons-microns
 
 data:
   dataset: microns
-  data_root: /scratch/MICRONS
+  data_root: data/MICRONS
   batch_size: 4
   num_workers: 8
   cache_rate: 0.0
@@ -27,12 +24,18 @@ data:
   find_boundaries: 0.5
   patch_size: [48, 256, 256]
   train_volumes:
-    - {vol: minnie65_mip0_1024_x90000_y70000_z19000_volume, seg: minnie65_mip0_1024_x90000_y70000_z19000_v1300_segmentation}
-    - {vol: minnie65_mip0_1024_x154000_y70000_z20000_volume, seg: minnie65_mip0_1024_x154000_y70000_z20000_v1300_segmentation}
-    - {vol: minnie65_mip0_1024_x90000_y120000_z21000_volume, seg: minnie65_mip0_1024_x90000_y120000_z21000_v1300_segmentation}
-    - {vol: minnie65_mip0_1024_x154000_y120000_z22000_volume, seg: minnie65_mip0_1024_x154000_y120000_z22000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_volume, seg: minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x87000_y67000_z17000_volume, seg: minnie65_mip0_1024x1024x2048_x87000_y67000_z17000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x122000_y67000_z18000_volume, seg: minnie65_mip0_1024x1024x2048_x122000_y67000_z18000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x156000_y67000_z19000_volume, seg: minnie65_mip0_1024x1024x2048_x156000_y67000_z19000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x53000_y122000_z21000_volume, seg: minnie65_mip0_1024x1024x2048_x53000_y122000_z21000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x87000_y122000_z21500_volume, seg: minnie65_mip0_1024x1024x2048_x87000_y122000_z21500_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x122000_y122000_z22500_volume, seg: minnie65_mip0_1024x1024x2048_x122000_y122000_z22500_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x156000_y122000_z23500_volume, seg: minnie65_mip0_1024x1024x2048_x156000_y122000_z23500_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x190000_y122000_z24500_volume, seg: minnie65_mip0_1024x1024x2048_x190000_y122000_z24500_v1300_segmentation}
   test_volumes:
-    - {vol: minnie65_mip0_1024_x122000_y95000_z21000_volume, seg: minnie65_mip0_1024_x122000_y95000_z21000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_volume, seg: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_v1300_segmentation}
+    - {vol: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_volume, seg: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_v1300_segmentation}
 
 model:
   type: vista3d

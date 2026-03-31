@@ -35,16 +35,21 @@ Crop size estimates (mip0, uint8 EM + uint64 seg, uncompressed):
   2048³ =   8 GB EM +  64 GB seg  =   72 GB total
   4096³ =  64 GB EM + 512 GB seg  =  576 GB total
 
-Pre-defined splits (all 1024^3, disjoint, >=39K margin from seg edges):
-  train1: (90000,  70000, 19000)  -- lower-left,  shallow
-  train2: (154000, 70000, 20000)  -- lower-right, mid-shallow
-  train3: (90000, 120000, 21000)  -- upper-left,  mid-deep
-  train4: (154000,120000, 22000)  -- upper-right, deep
-  test1:  (122000, 95000, 21000)  -- centre of volume
+Pre-defined splits (12 total: 10 train + 2 test, all 1024x1024x2048):
+  Arranged in 5-col x 2-row XY grid (train) + 2 gap positions (test).
+  Z varies across crops for cortical-layer diversity (Z=16500..24500).
+  All disjoint, >=26K margin from seg X/Y edges, >=1300 from Z edges.
+
+  train01: ( 53000,  67000, 16500)    train06: ( 53000, 122000, 21000)
+  train02: ( 87000,  67000, 17000)    train07: ( 87000, 122000, 21500)
+  train03: (122000,  67000, 18000)    train08: (122000, 122000, 22500)
+  train04: (156000,  67000, 19000)    train09: (156000, 122000, 23500)
+  train05: (190000, 122000, 24500)
+  test01:  ( 70000,  95000, 20000)    test02:  (139000,  95000, 21000)
 
 File naming encodes coordinates:
-  minnie65_mip0_1024_x90000_y70000_z19000_volume.h5
-  minnie65_mip0_1024_x90000_y70000_z19000_v1300_segmentation.h5
+  minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_volume.h5
+  minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_v1300_segmentation.h5
 
 Uses cloud-volume to fetch from AWS / Google Cloud public buckets.
 
@@ -53,9 +58,9 @@ Usage:
     python scripts/download_microns.py
 
     # Custom size and version
-    python scripts/download_microns.py --size 1024 1024 1024 --seg-version 1300
+    python scripts/download_microns.py --size 1024 1024 2048 --seg-version 1300
 
-    # Download all 5 pre-defined splits (4 train + 1 test)
+    # Download all 11 pre-defined splits (9 train + 2 test)
     python scripts/download_microns.py --split
 
     # All four segmentation versions
@@ -99,22 +104,26 @@ SEG_VERSIONS: Dict[int, str] = {
 DEFAULT_SEG_VERSION = 1300
 
 # Pre-defined splits in disjoint regions of the minnie65 volume.
-# Coordinates are (X, Y, Z) in mip0 voxels.  All 1024^3.
+# Coordinates are (X, Y, Z) in mip0 voxels.  All 1024 x 1024 x 2048.
 #
-# Placed on a 2x2 XY grid spanning the tissue interior with varied
-# Z-depths to sample different cortical layers.  Every crop has >=39K
-# voxel margin from the segmentation boundary in every axis.
-# Spans 65K x 51K x 4K (XYZ) for maximum tissue diversity.
+# 9 train crops + 2 test crops, all 1024x1024x2048, disjoint.
+# Z varies across crops for cortical-layer diversity (16500..24500).
 SPLITS: Dict[str, Dict[str, Tuple[int, int, int]]] = {
-    "train1": {"start": (90000, 70000, 19000), "size": (1024, 1024, 1024)},
-    "train2": {"start": (154000, 70000, 20000), "size": (1024, 1024, 1024)},
-    "train3": {"start": (90000, 120000, 21000), "size": (1024, 1024, 1024)},
-    "train4": {"start": (154000, 120000, 22000), "size": (1024, 1024, 1024)},
-    "test1":  {"start": (122000, 95000, 21000), "size": (1024, 1024, 1024)},
+    "train01": {"start": (53000, 67000, 16500), "size": (1024, 1024, 2048)},
+    "train02": {"start": (87000, 67000, 17000), "size": (1024, 1024, 2048)},
+    "train03": {"start": (122000, 67000, 18000), "size": (1024, 1024, 2048)},
+    "train04": {"start": (156000, 67000, 19000), "size": (1024, 1024, 2048)},
+    "train05": {"start": (190000, 122000, 24500), "size": (1024, 1024, 2048)},
+    "train06": {"start": (53000, 122000, 21000), "size": (1024, 1024, 2048)},
+    "train07": {"start": (87000, 122000, 21500), "size": (1024, 1024, 2048)},
+    "train08": {"start": (122000, 122000, 22500), "size": (1024, 1024, 2048)},
+    "train09": {"start": (156000, 122000, 23500), "size": (1024, 1024, 2048)},
+    "test01": {"start": (70000, 95000, 20000), "size": (1024, 1024, 2048)},
+    "test02": {"start": (139000, 95000, 21000), "size": (1024, 1024, 2048)},
 }
 
-TRAIN_SPLITS = ["train1", "train2", "train3", "train4"]
-TEST_SPLITS = ["test1"]
+TRAIN_SPLITS = [k for k in SPLITS if k.startswith("train")]
+TEST_SPLITS = [k for k in SPLITS if k.startswith("test")]
 
 
 # ---------------------------------------------------------------------------
@@ -164,21 +173,23 @@ def save_h5(arr: np.ndarray, path: Path) -> None:
 def make_name(
     prefix: str,
     mip: int,
-    crop_size: int,
+    crop_size: Tuple[int, int, int],
     start: Tuple[int, int, int],
     seg_version: int = 0,
 ) -> str:
     """Build coordinate-based file name.
 
     Examples:
-        make_name("volume", 0, (1024,1024,1024), (90000, 70000, 19000))
-        -> "minnie65_mip0_1024_x90000_y70000_z19000_volume.h5"
+        make_name("volume", 0, (1024,1024,2048), (53000, 67000, 16500))
+        -> "minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_volume.h5"
 
-        make_name("segmentation", 0, (256,256,128), (90000, 70000, 19000), seg_version=1300)
-        -> "minnie65_mip0_256x256x128_x90000_y70000_z19000_v1300_segmentation.h5"
+        make_name("segmentation", 0, (1024,1024,2048), (53000, 67000, 16500), seg_version=1300)
+        -> "minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_v1300_segmentation.h5"
     """
     x, y, z = start
-    base = f"minnie65_mip{mip}_{crop_size}_x{x}_y{y}_z{z}"
+    sx, sy, sz = crop_size
+    size_tag = str(sx) if sx == sy == sz else f"{sx}x{sy}x{sz}"
+    base = f"minnie65_mip{mip}_{size_tag}_x{x}_y{y}_z{z}"
     if seg_version:
         base = f"{base}_v{seg_version}"
     return f"{base}_{prefix}.h5"
@@ -218,8 +229,8 @@ def main() -> None:
     parser.add_argument(
         "--split", action="store_true",
         help=(
-            "Download all 5 pre-defined splits (4 train + 1 test) from "
-            "disjoint 1024^3 regions. Ignores --size and --start when set."
+            "Download all 11 pre-defined splits (9 train + 2 test) from "
+            "disjoint 1024x1024x2048 regions. Ignores --size and --start when set."
         ),
     )
     args = parser.parse_args()
@@ -271,14 +282,12 @@ def main() -> None:
     print()
 
     for label, bbox_start, bbox_size in crops:
-        crop_size = bbox_size[0]
-
         print(f"--- {label} ---")
         print(f"  start: {bbox_start}  size: {bbox_size}")
         print()
 
         # -- EM imagery --
-        em_file = out_dir / make_name("volume", mip, crop_size, bbox_start)
+        em_file = out_dir / make_name("volume", mip, bbox_size, bbox_start)
         if em_file.exists():
             print(f"  EM: SKIP (already exists: {em_file.name})")
         else:
@@ -293,7 +302,7 @@ def main() -> None:
         # -- Segmentation versions --
         for ver in versions:
             seg_cloud = SEG_VERSIONS[ver]
-            seg_file = out_dir / make_name("segmentation", mip, crop_size, bbox_start, seg_version=ver)
+            seg_file = out_dir / make_name("segmentation", mip, bbox_size, bbox_start, seg_version=ver)
 
             if seg_file.exists():
                 print(f"  Seg v{ver}: SKIP (already exists: {seg_file.name})")

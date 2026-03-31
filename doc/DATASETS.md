@@ -70,8 +70,8 @@ python scripts/download_cremi3d.py --output data/CREMI3D
 | **Modality** | Serial-section EM (ssEM) |
 | **Resolution** | 8 x 8 x 40 nm (mip 0, anisotropic) |
 | **Full volume** | ~175,104 x 108,544 x 21,056 voxels (~117 TB EM) |
-| **Train crops** | 4 × 1,024³ spanning 65K×51K×4K XYZ, ≥39K margin from seg edges |
-| **Test crop** | 1,024³ voxels at (122000, 95000, 21000) — centre of volume |
+| **Train crops** | 10 × 1024×1024×2048 spanning 138K×56K×10K XYZ, ≥26K margin from seg edges |
+| **Test crops** | 2 × 1024×1024×2048 at gap positions in XY grid, disjoint from train |
 | **Labels** | Dense neuron segmentation (proofread, ~200K cells, ~120K neurons) |
 | **Source** | [MICrONS Explorer](https://www.microns-explorer.org/) |
 | **Reference** | MICrONS Consortium (2021) bioRxiv |
@@ -177,12 +177,12 @@ combine = CombineDataModule(
 
 ## Data Location
 
-| Dataset | Default Path | Scratch Path |
-|---|---|---|
-| SNEMI3D | `data/SNEMI3D/` | `/scratch/SNEMI3D/` |
-| CREMI3D | `data/CREMI3D/` | `/scratch/CREMI3D/` |
-| MICrONS | `data/MICRONS/` | `/scratch/MICRONS/` |
-| MitoEM2 | `data/MitoEM2/` | `/scratch/MitoEM2/` |
+| Dataset | Path |
+|---|---|
+| SNEMI3D | `data/SNEMI3D/` |
+| CREMI3D | `data/CREMI3D/` |
+| MICrONS | `data/MICRONS/` |
+| MitoEM2 | `data/MitoEM2/` |
 
 ## Memory-Efficient Volume Loading
 
