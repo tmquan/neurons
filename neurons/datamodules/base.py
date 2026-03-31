@@ -222,6 +222,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
                 Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
             )
 
+        if self.find_boundaries > 0:
+            transforms.append(
+                FindBoundariesd(keys=["label"], prob=1.0),
+            )
+
         transforms.extend([
             *self._original_transforms(sd),
             *self._semantic_transforms(sd),
