@@ -70,7 +70,7 @@ python scripts/download_cremi3d.py --output data/CREMI3D
 | **Modality** | Serial-section EM (ssEM) |
 | **Resolution** | 8 x 8 x 40 nm (mip 0, anisotropic) |
 | **Full volume** | ~175,104 x 108,544 x 21,056 voxels (~117 TB EM) |
-| **Train crops** | 10 × 1024×1024×2048 spanning 138K×56K×10K XYZ, ≥26K margin from seg edges |
+| **Train crops** | 9 × 1024×1024×2048 spanning 138K×56K×10K XYZ, ≥26K margin from seg edges |
 | **Test crops** | 2 × 1024×1024×2048 at gap positions in XY grid, disjoint from train |
 | **Labels** | Dense neuron segmentation (proofread, ~200K cells, ~120K neurons) |
 | **Source** | [MICrONS Explorer](https://www.microns-explorer.org/) |
