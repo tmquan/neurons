@@ -510,12 +510,15 @@ def _log_predictions(
 class ImageLogger(pl.Callback):
     """Log sample images to TensorBoard at the end of every *n*-th epoch.
 
-    Logs visualisations for **automatic** mode (image-only forward) and,
-    when the module has ``"proofread"`` in its ``training_modes``, also
-    for **proofread** mode (with sampled point prompts overlaid).
+    Logs visualisations for both **training** and **validation** batches
+    using **automatic** mode (image-only forward).  When the module has
+    ``"proofread"`` in its ``training_modes``, training visualisations
+    also include proofread mode with sampled point prompts.
 
-    Automatic-mode images are logged under ``train_vis_automatic/``.
-    Proofread-mode images are logged under ``train_vis_proofread/``.
+    Tag prefixes:
+      - ``train_vis_automatic/``   — training batch, automatic mode
+      - ``train_vis_proofread/``   — training batch, proofread mode
+      - ``val_vis_automatic/``     — validation batch, automatic mode
 
     Args:
         every_n_epochs: log every *n* epochs (default 1).
@@ -534,6 +537,14 @@ class ImageLogger(pl.Callback):
         self.max_images = max_images
         self.spatial_dims = spatial_dims
         self._train_batch: Optional[Dict[str, torch.Tensor]] = None
+        self._val_batch: Optional[Dict[str, torch.Tensor]] = None
+
+    @staticmethod
+    def _detach_batch(batch: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            k: v.detach().cpu() if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
 
     def on_train_batch_end(
         self,
@@ -544,10 +555,29 @@ class ImageLogger(pl.Callback):
         batch_idx: int,
     ) -> None:
         if batch_idx == 0 and trainer.global_rank == 0:
-            self._train_batch = {
-                k: v.detach().cpu() if isinstance(v, torch.Tensor) else v
-                for k, v in batch.items()
-            }
+            self._train_batch = self._detach_batch(batch)
+
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: Dict[str, torch.Tensor],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        if batch_idx == 0 and trainer.global_rank == 0:
+            self._val_batch = self._detach_batch(batch)
+
+    def _get_tb(self, trainer: pl.Trainer):
+        """Return TensorBoard SummaryWriter or None."""
+        logger = trainer.logger
+        if logger is None:
+            return None
+        tb = getattr(logger, "experiment", None)
+        if tb is None or not hasattr(tb, "add_images"):
+            return None
+        return tb
 
     @torch.no_grad()
     def on_train_epoch_end(
@@ -563,26 +593,57 @@ class ImageLogger(pl.Callback):
             return
         if self._train_batch is None:
             return
-        logger = trainer.logger
-        if logger is None:
-            return
-        tb = getattr(logger, "experiment", None)
-        if tb is None or not hasattr(tb, "add_images"):
+        tb = self._get_tb(trainer)
+        if tb is None:
             return
 
         batch = self._train_batch
         was_training = pl_module.training
         pl_module.eval()
         try:
-            self._run_visualization(tb, pl_module, batch)
+            self._run_visualization(tb, pl_module, batch, prefix="train_vis")
         finally:
             self._train_batch = None
             if was_training:
                 pl_module.train()
 
-    def _run_visualization(self, tb, pl_module, batch):
+    @torch.no_grad()
+    def on_validation_epoch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> None:
+        if trainer.global_rank != 0:
+            self._val_batch = None
+            return
+        epoch = trainer.current_epoch
+        if epoch % self.every_n_epochs != 0:
+            return
+        if self._val_batch is None:
+            return
+        tb = self._get_tb(trainer)
+        if tb is None:
+            return
+
+        was_training = pl_module.training
+        pl_module.eval()
+        try:
+            self._run_visualization(
+                tb, pl_module, self._val_batch, prefix="val_vis",
+                include_proofread=False,
+            )
+        finally:
+            self._val_batch = None
+            if was_training:
+                pl_module.train()
+
+    def _run_visualization(
+        self, tb, pl_module, batch, *, prefix: str = "train_vis",
+        include_proofread: bool = True,
+    ):
         epoch = pl_module.current_epoch
-        with torch.no_grad(), torch.amp.autocast(device_type=str(pl_module.device).split(":")[0], enabled=torch.cuda.is_available()):
+        device_type = str(pl_module.device).split(":")[0]
+        with torch.no_grad(), torch.amp.autocast(device_type=device_type, enabled=torch.cuda.is_available()):
             images = batch["image"].to(pl_module.device)
             if images.dim() == self.spatial_dims + 1:
                 images = rearrange(images, "b ... -> b 1 ...")
@@ -610,21 +671,24 @@ class ImageLogger(pl.Callback):
         )
 
         _log_predictions(
-            tb, "train_vis_automatic", images_2d, labels_2d,
+            tb, f"{prefix}_automatic", images_2d, labels_2d,
             preds_auto, self.spatial_dims, n, epoch,
             clusterer=clusterer, dir_target=dir_target,
             active_classes=active_classes,
         )
         del preds_auto
 
-        # --- Proofread mode (only if enabled) ---
+        # --- Proofread mode (only for training, when enabled) ---
+        if not include_proofread:
+            return
+
         training_modes = getattr(pl_module, "training_modes", [])
         if "proofread" not in training_modes:
             return
 
         from neurons.utils.point_sampling import sample_point_prompts
 
-        with torch.no_grad(), torch.amp.autocast(device_type=str(pl_module.device).split(":")[0], enabled=torch.cuda.is_available()):
+        with torch.no_grad(), torch.amp.autocast(device_type=device_type, enabled=torch.cuda.is_available()):
             sem_labels = (labels[:n] > 0).long()
             point_prompts = sample_point_prompts(
                 sem_labels, labels[:n],
@@ -637,7 +701,7 @@ class ImageLogger(pl.Callback):
         preds_proof = {k: v.float() if isinstance(v, torch.Tensor) and v.is_floating_point() else v for k, v in preds_proof.items()}
 
         img_gray = _log_predictions(
-            tb, "train_vis_proofread", images_2d, labels_2d,
+            tb, f"{prefix}_proofread", images_2d, labels_2d,
             preds_proof, self.spatial_dims, n, epoch,
             clusterer=clusterer, dir_target=dir_target,
             active_classes=active_classes,
@@ -652,4 +716,4 @@ class ImageLogger(pl.Callback):
             spatial_dims=self.spatial_dims,
             center_depth=center_d,
         )
-        tb.add_images("train_vis_proofread/prompt_overlay", overlay, global_step=epoch)
+        tb.add_images(f"{prefix}_proofread/prompt_overlay", overlay, global_step=epoch)
