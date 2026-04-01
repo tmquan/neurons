@@ -90,7 +90,7 @@ training:
 
 optimizer: 
   type: adamw
-  lr: 2.0e-4
+  lr: 1.0e-4
   dit_backbone_lr: 1.0e-4
   weight_decay: 3.0e-4
   scheduler:
