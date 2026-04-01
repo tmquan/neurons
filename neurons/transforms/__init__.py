@@ -17,10 +17,12 @@ from neurons.transforms.label import Labeld
 from neurons.transforms.direction import Directiond
 from neurons.transforms.covariance import Covarianced
 from neurons.transforms.find_boundaries import FindBoundariesd
+from neurons.transforms.rand_crop_foreground import RandSpatialCropForegroundd
 
 __all__ = [
     "Labeld",
     "Directiond",
     "Covarianced",
     "FindBoundariesd",
+    "RandSpatialCropForegroundd",
 ]

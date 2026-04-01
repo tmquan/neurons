@@ -13,7 +13,6 @@ from monai.transforms import (
     EnsureChannelFirstd,
     EnsureTyped,
     RandAdjustContrastd,
-    RandCropByPosNegLabeld,
     RandFlipd,
     RandGaussianNoised,
     RandRotate90d,
@@ -23,14 +22,10 @@ from monai.transforms import (
 )
 
 from neurons.datasets.base import CircuitDataset
-from neurons.transforms import FindBoundariesd, Labeld, Directiond, Covarianced
-
-
-class _UnpackSingleCrop:
-    """Unwrap the single-element list returned by ``RandCropByPosNegLabeld(num_samples=1)``."""
-
-    def __call__(self, data):
-        return data[0] if isinstance(data, list) and len(data) == 1 else data
+from neurons.transforms import (
+    FindBoundariesd, Labeld, Directiond, Covarianced,
+    RandSpatialCropForegroundd,
+)
 
 
 class CircuitDataModule(pl.LightningDataModule, ABC):
@@ -197,18 +192,14 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         if self.patch_size is not None:
             transforms.append(SpatialPadd(keys=io_keys, spatial_size=self.patch_size))
             if self.min_foreground > 0:
-                pos = self.min_foreground
-                transforms.extend([
-                    RandCropByPosNegLabeld(
+                transforms.append(
+                    RandSpatialCropForegroundd(
                         keys=io_keys,
-                        label_key="label",
                         spatial_size=self.patch_size,
-                        pos=pos,
-                        neg=1.0 - pos,
-                        num_samples=1,
-                    ),
-                    _UnpackSingleCrop(),
-                ])
+                        label_key="label",
+                        min_foreground=self.min_foreground,
+                    )
+                )
             else:
                 transforms.append(
                     RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
