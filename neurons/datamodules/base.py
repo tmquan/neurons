@@ -135,8 +135,8 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         targets (e.g. boundary maps, class maps).
         """
         return [
-            RandGaussianNoised(keys=["image"], prob=1.0, mean=0.0, std=0.02),
-            RandAdjustContrastd(keys=["image"], prob=1.0, gamma=(0.9, 1.1)),
+            RandGaussianNoised(keys=["image"], prob=1.0, mean=0.0, std=0.05),
+            RandAdjustContrastd(keys=["image"], prob=1.0, gamma=(0.5, 2.0)),
         ]
 
     def _instance_transforms(self, spatial_dims: int) -> list:
