@@ -15,7 +15,7 @@
 defaults:
   - default
 
-experiment_name: snemi3d_microns_phase2
+experiment_name: snemi3d_microns
 project_name: neurons-combined
 output_dir: outputs
 
