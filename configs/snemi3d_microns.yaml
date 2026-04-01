@@ -111,7 +111,7 @@ loss:
   weight_instance: 1.0
   weight_pull: 2.0
   weight_push: 2.0
-  weight_norm: 0.0
+  weight_norm: 0.001
   delta_v: 0.5
   delta_d: 1.5
   weight_edge: 2.0

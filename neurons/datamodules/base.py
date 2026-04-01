@@ -122,10 +122,10 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         io_keys = ["image", "label"]
         rot_axes = (0, 1) if spatial_dims == 2 else (1, 2)
         return [
-            RandFlipd(keys=io_keys, prob=1.0, spatial_axis=0),
-            RandFlipd(keys=io_keys, prob=1.0, spatial_axis=1),
-            RandFlipd(keys=io_keys, prob=1.0, spatial_axis=2 if spatial_dims == 3 else 1),
-            RandRotate90d(keys=io_keys, prob=1.0, spatial_axes=rot_axes),
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=0),
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
+            RandFlipd(keys=io_keys, prob=0.5, spatial_axis=2 if spatial_dims == 3 else 1),
+            RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
         ]
 
     def _semantic_transforms(self, spatial_dims: int) -> list:
