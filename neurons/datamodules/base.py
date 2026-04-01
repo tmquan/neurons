@@ -13,6 +13,7 @@ from monai.transforms import (
     EnsureChannelFirstd,
     EnsureTyped,
     RandAdjustContrastd,
+    RandCropByPosNegLabeld,
     RandFlipd,
     RandGaussianNoised,
     RandRotate90d,
@@ -23,6 +24,13 @@ from monai.transforms import (
 
 from neurons.datasets.base import CircuitDataset
 from neurons.transforms import FindBoundariesd, Labeld, Directiond, Covarianced
+
+
+class _UnpackSingleCrop:
+    """Unwrap the single-element list returned by ``RandCropByPosNegLabeld(num_samples=1)``."""
+
+    def __call__(self, data):
+        return data[0] if isinstance(data, list) and len(data) == 1 else data
 
 
 class CircuitDataModule(pl.LightningDataModule, ABC):
@@ -72,6 +80,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         persistent_workers: bool = True,
         compute_geometry: bool = True,
         find_boundaries: float = 0.0,
+        min_foreground: float = 0.0,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -89,6 +98,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.persistent_workers = persistent_workers and num_workers > 0
         self.compute_geometry = compute_geometry
         self.find_boundaries = float(find_boundaries)
+        self.min_foreground = float(min_foreground)
 
         self.train_dataset: Optional[CircuitDataset] = None
         self.val_dataset: Optional[CircuitDataset] = None
@@ -179,19 +189,33 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
         ]
 
-        if self.patch_size is not None:
-            transforms.extend([
-                SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
-                RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
-            ])
-        elif self.image_size is not None:
-            transforms.append(
-                Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
-            )
-
         if self.find_boundaries > 0:
             transforms.append(
                 FindBoundariesd(keys=["label"], prob=self.find_boundaries),
+            )
+
+        if self.patch_size is not None:
+            transforms.append(SpatialPadd(keys=io_keys, spatial_size=self.patch_size))
+            if self.min_foreground > 0:
+                pos = self.min_foreground
+                transforms.extend([
+                    RandCropByPosNegLabeld(
+                        keys=io_keys,
+                        label_key="label",
+                        spatial_size=self.patch_size,
+                        pos=pos,
+                        neg=1.0 - pos,
+                        num_samples=1,
+                    ),
+                    _UnpackSingleCrop(),
+                ])
+            else:
+                transforms.append(
+                    RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
+                )
+        elif self.image_size is not None:
+            transforms.append(
+                Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
             )
 
         transforms.extend([
@@ -212,6 +236,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
         ]
 
+        if self.find_boundaries > 0:
+            transforms.append(
+                FindBoundariesd(keys=["label"], prob=1.0),
+            )
+
         if self.patch_size is not None:
             transforms.extend([
                 SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
@@ -220,11 +249,6 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         elif self.image_size is not None:
             transforms.append(
                 Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
-            )
-
-        if self.find_boundaries > 0:
-            transforms.append(
-                FindBoundariesd(keys=["label"], prob=1.0),
             )
 
         transforms.extend([

@@ -31,7 +31,7 @@ data:
   num_samples: 16000
   patch_size: [48, 256, 256]
   find_boundaries: 1.0
-  min_foreground: 0.70
+  min_foreground: 0.90
 
   train_volumes:
     - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
