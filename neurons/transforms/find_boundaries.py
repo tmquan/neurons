@@ -1,6 +1,6 @@
 """Boundary detection with cucim GPU acceleration and skimage fallback."""
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 import numpy as np
 import torch
@@ -67,6 +67,94 @@ def find_boundaries(
     return _skimage_fb(label_np, mode=mode, connectivity=connectivity, **kwargs)
 
 
+# ------------------------------------------------------------------
+# Anisotropy-aware boundary detection
+# ------------------------------------------------------------------
+
+def _find_boundaries_xy(
+    label_3d: np.ndarray,
+    mode: str = "inner",
+    connectivity: int = 1,
+) -> np.ndarray:
+    """Detect boundaries only in the xy plane (z-neighbours ignored).
+
+    For anisotropic volumes where z-resolution is much coarser than xy
+    (e.g. 6 × 6 × 30 nm), 3-D boundary detection creates boundaries
+    that are physically 5× thicker along z.  This function checks only
+    xy-neighbours via vectorised numpy shifts over the full volume —
+    no Python loop over depth slices.
+
+    Args:
+        label_3d: ``[D, H, W]`` integer label array.
+        mode: ``'inner'`` (foreground boundary), ``'outer'`` (background
+            boundary), or ``'thick'`` (both sides).
+        connectivity: 1 = 4-connected in xy (face-adjacent, thinnest).
+            2 = 8-connected (adds diagonal xy neighbours).
+
+    Returns:
+        Boolean boundary mask, same shape as *label_3d*.
+    """
+    padded = np.pad(label_3d, ((0, 0), (1, 1), (1, 1)), mode="edge")
+    center = padded[:, 1:-1, 1:-1]
+
+    boundary = (
+        (center != padded[:, 1:-1, 2:])
+        | (center != padded[:, 1:-1, :-2])
+        | (center != padded[:, 2:, 1:-1])
+        | (center != padded[:, :-2, 1:-1])
+    )
+
+    if connectivity >= 2:
+        boundary |= (
+            (center != padded[:, 2:, 2:])
+            | (center != padded[:, 2:, :-2])
+            | (center != padded[:, :-2, 2:])
+            | (center != padded[:, :-2, :-2])
+        )
+
+    if mode == "inner":
+        boundary &= label_3d > 0
+    elif mode == "outer":
+        boundary &= label_3d == 0
+
+    return boundary
+
+
+# ------------------------------------------------------------------
+# Small-instance preservation
+# ------------------------------------------------------------------
+
+def _erode_preserving_small(
+    label: np.ndarray,
+    boundaries: np.ndarray,
+) -> np.ndarray:
+    """Zero boundary voxels but keep instances that would be fully erased.
+
+    After zeroing boundary voxels, any instance whose voxels were *all*
+    on the boundary (and would therefore vanish entirely) is restored.
+
+    Args:
+        label: Integer label array (will not be modified).
+        boundaries: Boolean boundary mask, same shape as *label*.
+
+    Returns:
+        New label array with boundary voxels zeroed for large instances;
+        small instances that would have been completely erased are intact.
+    """
+    eroded = label.copy()
+    eroded[boundaries] = 0
+
+    original_ids = set(np.unique(label))
+    surviving_ids = set(np.unique(eroded))
+    lost_ids = original_ids - surviving_ids - {0}
+
+    if lost_ids:
+        restore_mask = np.isin(label, list(lost_ids))
+        eroded[restore_mask] = label[restore_mask]
+
+    return eroded
+
+
 def boundary_mask_batch(
     labels: torch.Tensor,
     mode: str = "inner",
@@ -95,10 +183,23 @@ def boundary_mask_batch(
 class FindBoundariesd(MapTransform, Randomizable):
     """Zero out boundary voxels in instance labels (label × (1 − boundary)).
 
-    Uses thinnest boundary (connectivity=1, 6-connected in 3D) so boundary
-    voxels are multiplied out: label[boundary] = 0.
+    Uses thinnest boundary (connectivity=1) so boundary voxels are
+    zeroed: ``label[boundary] = 0``.
 
-    Wraps :func:`find_boundaries` as a MONAI dictionary transform.
+    **Anisotropy handling** — When ``pixel_size`` is provided and the
+    z-resolution is more than 2× coarser than xy, boundary detection is
+    restricted to the xy plane (no z-neighbours).  This prevents
+    physically thick boundaries along the low-resolution axis.
+
+    **Small-instance preservation** — When ``preserve_small=True``
+    (default), instances that would be *completely* erased by boundary
+    detection are left untouched.
+
+    **Semantic mask** — When ``semantic_key`` is set (default
+    ``"semantic_ids"``), the pre-erosion foreground mask ``(label > 0)``
+    is saved under that key *before* boundary voxels are zeroed so that
+    downstream modules can use the uneroded mask as the semantic target.
+
     Expects input labels in ``[C, *spatial]`` format (post
     ``EnsureChannelFirstd``).  Each channel is processed independently.
 
@@ -107,6 +208,13 @@ class FindBoundariesd(MapTransform, Randomizable):
         mode: Boundary mode (``'inner'``, ``'outer'``, ``'thick'``).
         connectivity: 1 = face-adjacent only (thinnest boundaries).
         prob: Probability of applying the transform per sample.
+        semantic_key: If not ``None``, store the pre-erosion foreground
+            mask ``(label > 0)`` under this key.
+        pixel_size: Voxel dimensions ``(z, y, x)`` in physical units,
+            matching the array dimension order.  When z is >2× coarser
+            than xy, xy-only boundary detection is used automatically.
+        preserve_small: If ``True``, instances that would be fully
+            erased by boundary detection are preserved.
     """
 
     def __init__(
@@ -115,12 +223,24 @@ class FindBoundariesd(MapTransform, Randomizable):
         mode: str = "inner",
         connectivity: int = 1,
         prob: float = 1.0,
+        semantic_key: Optional[str] = "semantic_ids",
+        pixel_size: Optional[Sequence[float]] = None,
+        preserve_small: bool = True,
     ) -> None:
         super().__init__(keys)
         self.mode = mode
         self.connectivity = connectivity
         self.prob = prob
         self._do_transform = True
+        self.semantic_key = semantic_key
+        self.preserve_small = preserve_small
+
+        self._xy_only = False
+        if pixel_size is not None and len(pixel_size) == 3:
+            z_res = float(pixel_size[0])
+            xy_min = float(min(pixel_size[1], pixel_size[2]))
+            if xy_min > 0 and z_res / xy_min > 2.0:
+                self._xy_only = True
 
     def randomize(self, data: Optional[Dict] = None) -> None:  # type: ignore[override]
         self._do_transform = self.R.random() < self.prob
@@ -128,10 +248,17 @@ class FindBoundariesd(MapTransform, Randomizable):
     def __call__(self, data: Dict) -> Dict:
         self.randomize(data)
 
-        if not self._do_transform:
-            return data
-
         d = dict(data)
+
+        if self.semantic_key:
+            arr = d[self.keys[0]]
+            if isinstance(arr, torch.Tensor):
+                d[self.semantic_key] = (arr > 0).to(torch.long)
+            else:
+                d[self.semantic_key] = (np.asarray(arr) > 0).astype(np.int64)
+
+        if not self._do_transform:
+            return d
 
         for key in self.key_iterator(d):
             arr = d[key]
@@ -145,15 +272,9 @@ class FindBoundariesd(MapTransform, Randomizable):
 
             if label_np.ndim > 1:
                 for c in range(label_np.shape[0]):
-                    boundaries = find_boundaries(
-                        label_np[c], mode=self.mode, connectivity=self.connectivity
-                    )
-                    label_np[c][boundaries] = 0
+                    label_np[c] = self._process_volume(label_np[c])
             else:
-                boundaries = find_boundaries(
-                    label_np, mode=self.mode, connectivity=self.connectivity
-                )
-                label_np[boundaries] = 0
+                label_np = self._process_volume(label_np)
 
             if is_tensor:
                 label_np = torch.from_numpy(label_np).to(device)
@@ -161,3 +282,21 @@ class FindBoundariesd(MapTransform, Randomizable):
             d[key] = label_np
 
         return d
+
+    def _process_volume(self, vol: np.ndarray) -> np.ndarray:
+        """Detect boundaries and zero them for a single spatial volume."""
+        if self._xy_only and vol.ndim == 3:
+            boundaries = _find_boundaries_xy(
+                vol, mode=self.mode, connectivity=self.connectivity,
+            )
+        else:
+            bnd = find_boundaries(
+                vol, mode=self.mode, connectivity=self.connectivity,
+            )
+            boundaries = bnd if isinstance(bnd, np.ndarray) else np.asarray(bnd)
+
+        if self.preserve_small:
+            return _erode_preserving_small(vol, boundaries)
+
+        vol[boundaries] = 0
+        return vol

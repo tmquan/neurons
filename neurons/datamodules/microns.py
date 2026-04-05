@@ -45,6 +45,7 @@ class MICRONSDataModule(CircuitDataModule):
         test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
         find_boundaries: float = 0.0,
+        pixel_size: Optional[Tuple[float, ...]] = None,
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
@@ -62,6 +63,7 @@ class MICRONSDataModule(CircuitDataModule):
             test_volumes=test_volumes,
             persistent_workers=persistent_workers,
             find_boundaries=find_boundaries,
+            pixel_size=pixel_size,
         )
 
     @property

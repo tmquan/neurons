@@ -76,6 +76,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         compute_geometry: bool = True,
         find_boundaries: float = 0.0,
         min_foreground: float = 0.0,
+        pixel_size: Optional[Tuple[float, ...]] = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -94,6 +95,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.compute_geometry = compute_geometry
         self.find_boundaries = float(find_boundaries)
         self.min_foreground = float(min_foreground)
+        self.pixel_size = tuple(pixel_size) if pixel_size is not None else None
 
         self.train_dataset: Optional[CircuitDataset] = None
         self.val_dataset: Optional[CircuitDataset] = None
@@ -119,12 +121,20 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
     # Label-target transform hooks  (override to customise)
     # ------------------------------------------------------------------
 
+    @property
+    def _spatial_keys(self) -> list:
+        """Keys that must go through every spatial transform (pad/crop/flip/rotate)."""
+        keys = ["image", "label"]
+        if self.find_boundaries > 0:
+            keys.append("semantic_ids")
+        return keys
+
     def _original_transforms(self, spatial_dims: int) -> list:
         """Spatial augmentations applied to both image and label.
 
         Flips and rotations.  Override to customise augmentation strategy.
         """
-        io_keys = ["image", "label"]
+        io_keys = self._spatial_keys
         rot_axes = (0, 1) if spatial_dims == 2 else (1, 2)
         return [
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=0),
@@ -172,41 +182,51 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
     def _output_keys(self) -> list:
         """All keys that must pass through ``EnsureTyped``."""
         keys = ["image", "label"]
+        if self.find_boundaries > 0:
+            keys.append("semantic_ids")
         if self.compute_geometry:
             keys.extend(["label_direction", "label_covariance"])
         return keys
 
     def get_train_transforms(self) -> Compose:
-        io_keys = ["image", "label"]
+        base_keys = ["image", "label"]
         sd = self._get_spatial_dims()
+        has_boundaries = self.find_boundaries > 0
 
         transforms: list = [
-            EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
+            EnsureChannelFirstd(keys=base_keys, channel_dim="no_channel"),
         ]
 
-        if self.find_boundaries > 0:
+        if has_boundaries:
             transforms.append(
-                FindBoundariesd(keys=["label"], prob=self.find_boundaries),
+                FindBoundariesd(
+                    keys=["label"],
+                    prob=self.find_boundaries,
+                    pixel_size=self.pixel_size,
+                ),
             )
 
+        spatial_keys = self._spatial_keys
+
         if self.patch_size is not None:
-            transforms.append(SpatialPadd(keys=io_keys, spatial_size=self.patch_size))
+            transforms.append(SpatialPadd(keys=spatial_keys, spatial_size=self.patch_size))
             if self.min_foreground > 0:
                 transforms.append(
                     RandSpatialCropForegroundd(
-                        keys=io_keys,
+                        keys=spatial_keys,
                         spatial_size=self.patch_size,
-                        label_key="label",
+                        label_key="semantic_ids" if has_boundaries else "label",
                         min_foreground=self.min_foreground,
                     )
                 )
             else:
                 transforms.append(
-                    RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
+                    RandSpatialCropd(keys=spatial_keys, roi_size=self.patch_size, random_size=False),
                 )
         elif self.image_size is not None:
+            resize_modes = ["bilinear", "nearest"] + (["nearest"] if has_boundaries else [])
             transforms.append(
-                Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
+                Resized(keys=spatial_keys, spatial_size=self.image_size, mode=resize_modes),
             )
 
         transforms.extend([
@@ -220,26 +240,34 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         return Compose(transforms)
 
     def get_val_transforms(self) -> Compose:
-        io_keys = ["image", "label"]
+        base_keys = ["image", "label"]
         sd = self._get_spatial_dims()
+        has_boundaries = self.find_boundaries > 0
 
         transforms: list = [
-            EnsureChannelFirstd(keys=io_keys, channel_dim="no_channel"),
+            EnsureChannelFirstd(keys=base_keys, channel_dim="no_channel"),
         ]
 
-        if self.find_boundaries > 0:
+        if has_boundaries:
             transforms.append(
-                FindBoundariesd(keys=["label"], prob=1.0),
+                FindBoundariesd(
+                    keys=["label"],
+                    prob=1.0,
+                    pixel_size=self.pixel_size,
+                ),
             )
+
+        spatial_keys = self._spatial_keys
 
         if self.patch_size is not None:
             transforms.extend([
-                SpatialPadd(keys=io_keys, spatial_size=self.patch_size),
-                CenterSpatialCropd(keys=io_keys, roi_size=self.patch_size),
+                SpatialPadd(keys=spatial_keys, spatial_size=self.patch_size),
+                CenterSpatialCropd(keys=spatial_keys, roi_size=self.patch_size),
             ])
         elif self.image_size is not None:
+            resize_modes = ["bilinear", "nearest"] + (["nearest"] if has_boundaries else [])
             transforms.append(
-                Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
+                Resized(keys=spatial_keys, spatial_size=self.image_size, mode=resize_modes),
             )
 
         transforms.extend([

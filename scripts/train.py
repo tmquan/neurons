@@ -21,6 +21,7 @@ Usage:
 """
 
 import collections
+import datetime
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -79,6 +80,10 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     val_volumes = _to_vol_list(data_cfg.get("val_volumes"))
     test_volumes = _to_vol_list(data_cfg.get("test_volumes"))
 
+    pixel_size = data_cfg.get("pixel_size")
+    if pixel_size is not None:
+        pixel_size = tuple(pixel_size)
+
     common_args: Dict[str, Any] = {
         "data_root": data_cfg.get("data_root", "data"),
         "batch_size": data_cfg.get("batch_size", 4),
@@ -90,6 +95,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         "val_volumes": val_volumes,
         "test_volumes": test_volumes,
         "find_boundaries": float(data_cfg.get("find_boundaries", 0.0)),
+        "pixel_size": pixel_size,
     }
 
     image_size = data_cfg.get("image_size")
@@ -365,6 +371,14 @@ def main(cfg: DictConfig) -> None:
     print("=" * 60)
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
+
+    output_base = cfg.get("output_dir", "outputs")
+    experiment = cfg.get("experiment_name", "run")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = str(Path(output_base) / f"{timestamp}_{experiment}")
+    OmegaConf.update(cfg, "output_dir", run_dir, force_add=True)
+    Path(run_dir).mkdir(parents=True, exist_ok=True)
+    print(f"\nRun directory: {run_dir}")
 
     seed = cfg.get("seed", 42)
     pl.seed_everything(seed, workers=True)

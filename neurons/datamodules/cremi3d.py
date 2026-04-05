@@ -47,6 +47,7 @@ class CREMI3DDataModule(CircuitDataModule):
         test_volumes: Optional[List[Dict[str, str]]] = None,
         persistent_workers: bool = True,
         find_boundaries: float = 0.0,
+        pixel_size: Optional[Tuple[float, ...]] = None,
     ) -> None:
         self.include_clefts = include_clefts
         self.include_mito = include_mito
@@ -64,6 +65,7 @@ class CREMI3DDataModule(CircuitDataModule):
             test_volumes=test_volumes,
             persistent_workers=persistent_workers,
             find_boundaries=find_boundaries,
+            pixel_size=pixel_size,
         )
 
     @property

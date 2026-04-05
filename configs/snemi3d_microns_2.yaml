@@ -30,7 +30,7 @@ data:
   slice_mode: false
   num_samples: 16000
   patch_size: [48, 256, 256]
-  find_boundaries: 1.0
+  find_boundaries: 0.0
   pixel_size: [30, 6, 6]   # z, y, x in nm — matches array dim order
   min_foreground: 0.90
 
@@ -105,7 +105,7 @@ loss:
   active_classes: 1
   class_weights: [1.0]
   label_smoothing: 0.0
-  weight_semantic: 1.0
+  weight_semantic: 0.0
   weight_ce: 0.0
   weight_iou: 1.0
   weight_dice: 2.0
