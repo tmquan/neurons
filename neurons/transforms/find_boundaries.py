@@ -156,10 +156,10 @@ class FindBoundariesd(MapTransform, Randomizable):
     restricted to the xy plane (no z-neighbours).  This prevents
     physically thick boundaries along the low-resolution axis.
 
-    **Semantic mask** — When ``semantic_key`` is set (default
-    ``"semantic_ids"``), the pre-erosion foreground mask ``(label > 0)``
-    is saved under that key *before* boundary voxels are zeroed so that
-    downstream modules can use the uneroded mask as the semantic target.
+    For single-channel (binary) semantic segmentation, boundary voxels
+    become 0 (background) in both ``label`` and the derived semantic
+    target ``(label > 0)``.  This teaches the semantic head to predict
+    thin gaps between touching instances, aiding instance separation.
 
     Expects input labels in ``[C, *spatial]`` format (post
     ``EnsureChannelFirstd``).  Each channel is processed independently.
@@ -169,8 +169,6 @@ class FindBoundariesd(MapTransform, Randomizable):
         mode: Boundary mode (``'inner'``, ``'outer'``, ``'thick'``).
         connectivity: 1 = face-adjacent only (thinnest boundaries).
         prob: Probability of applying the transform per sample.
-        semantic_key: If not ``None``, store the pre-erosion foreground
-            mask ``(label > 0)`` under this key.
         pixel_size: Voxel dimensions ``(z, y, x)`` in physical units,
             matching the array dimension order.  When z is >2× coarser
             than xy, xy-only boundary detection is used automatically.
@@ -182,7 +180,6 @@ class FindBoundariesd(MapTransform, Randomizable):
         mode: str = "inner",
         connectivity: int = 1,
         prob: float = 1.0,
-        semantic_key: Optional[str] = "semantic_ids",
         pixel_size: Optional[Sequence[float]] = None,
     ) -> None:
         super().__init__(keys)
@@ -190,7 +187,6 @@ class FindBoundariesd(MapTransform, Randomizable):
         self.connectivity = connectivity
         self.prob = prob
         self._do_transform = True
-        self.semantic_key = semantic_key
 
         self._xy_only = False
         if pixel_size is not None and len(pixel_size) == 3:
@@ -206,13 +202,6 @@ class FindBoundariesd(MapTransform, Randomizable):
         self.randomize(data)
 
         d = dict(data)
-
-        if self.semantic_key:
-            arr = d[self.keys[0]]
-            if isinstance(arr, torch.Tensor):
-                d[self.semantic_key] = (arr > 0).to(torch.long)
-            else:
-                d[self.semantic_key] = (np.asarray(arr) > 0).astype(np.int64)
 
         if not self._do_transform:
             return d
