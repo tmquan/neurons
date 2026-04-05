@@ -120,41 +120,6 @@ def _find_boundaries_xy(
     return boundary
 
 
-# ------------------------------------------------------------------
-# Small-instance preservation
-# ------------------------------------------------------------------
-
-def _erode_preserving_small(
-    label: np.ndarray,
-    boundaries: np.ndarray,
-) -> np.ndarray:
-    """Zero boundary voxels but keep instances that would be fully erased.
-
-    After zeroing boundary voxels, any instance whose voxels were *all*
-    on the boundary (and would therefore vanish entirely) is restored.
-
-    Args:
-        label: Integer label array (will not be modified).
-        boundaries: Boolean boundary mask, same shape as *label*.
-
-    Returns:
-        New label array with boundary voxels zeroed for large instances;
-        small instances that would have been completely erased are intact.
-    """
-    eroded = label.copy()
-    eroded[boundaries] = 0
-
-    original_ids = set(np.unique(label))
-    surviving_ids = set(np.unique(eroded))
-    lost_ids = original_ids - surviving_ids - {0}
-
-    if lost_ids:
-        restore_mask = np.isin(label, list(lost_ids))
-        eroded[restore_mask] = label[restore_mask]
-
-    return eroded
-
-
 def boundary_mask_batch(
     labels: torch.Tensor,
     mode: str = "inner",
@@ -191,10 +156,6 @@ class FindBoundariesd(MapTransform, Randomizable):
     restricted to the xy plane (no z-neighbours).  This prevents
     physically thick boundaries along the low-resolution axis.
 
-    **Small-instance preservation** — When ``preserve_small=True``
-    (default), instances that would be *completely* erased by boundary
-    detection are left untouched.
-
     **Semantic mask** — When ``semantic_key`` is set (default
     ``"semantic_ids"``), the pre-erosion foreground mask ``(label > 0)``
     is saved under that key *before* boundary voxels are zeroed so that
@@ -213,8 +174,6 @@ class FindBoundariesd(MapTransform, Randomizable):
         pixel_size: Voxel dimensions ``(z, y, x)`` in physical units,
             matching the array dimension order.  When z is >2× coarser
             than xy, xy-only boundary detection is used automatically.
-        preserve_small: If ``True``, instances that would be fully
-            erased by boundary detection are preserved.
     """
 
     def __init__(
@@ -225,7 +184,6 @@ class FindBoundariesd(MapTransform, Randomizable):
         prob: float = 1.0,
         semantic_key: Optional[str] = "semantic_ids",
         pixel_size: Optional[Sequence[float]] = None,
-        preserve_small: bool = True,
     ) -> None:
         super().__init__(keys)
         self.mode = mode
@@ -233,7 +191,6 @@ class FindBoundariesd(MapTransform, Randomizable):
         self.prob = prob
         self._do_transform = True
         self.semantic_key = semantic_key
-        self.preserve_small = preserve_small
 
         self._xy_only = False
         if pixel_size is not None and len(pixel_size) == 3:
@@ -294,9 +251,6 @@ class FindBoundariesd(MapTransform, Randomizable):
                 vol, mode=self.mode, connectivity=self.connectivity,
             )
             boundaries = bnd if isinstance(bnd, np.ndarray) else np.asarray(bnd)
-
-        if self.preserve_small:
-            return _erode_preserving_small(vol, boundaries)
 
         vol[boundaries] = 0
         return vol
