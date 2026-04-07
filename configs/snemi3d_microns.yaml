@@ -110,18 +110,18 @@ loss:
   weight_iou: 0.0
   weight_dice: 10.0
   weight_instance: 1.0
-  weight_pull: 2.0
-  weight_push: 2.0
+  weight_pull: 5.0
+  weight_push: 5.0
   weight_norm: 0.001
   delta_v: 0.5
   delta_d: 1.5
-  weight_edge: 2.0
-  weight_bone: 2.0
+  weight_edge: 5.0
+  weight_bone: 5.0
   weight_geometry: 1.0
   dir_target: centroid
   weight_dir: 1.0
   weight_cov: 2.0
-  weight_raw: 2.0
+  weight_raw: 5.0
   loss_dir: smooth_l1
   loss_cov: smooth_l1
   loss_raw: smooth_l1 
