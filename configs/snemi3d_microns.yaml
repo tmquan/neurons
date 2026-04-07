@@ -35,7 +35,7 @@ data:
   min_foreground: 0.90
 
   train_volumes:
-    - {vol: AC4_inputs, seg: AC4_labels, root: data/SNEMI3D}
+    - {vol: AC4_thin_inputs, seg: AC4_thin_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_volume, seg: minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_v1300_segmentation, root: data/MICRONS}
     - {vol: minnie65_mip0_1024x1024x2048_x87000_y67000_z17000_volume, seg: minnie65_mip0_1024x1024x2048_x87000_y67000_z17000_v1300_segmentation, root: data/MICRONS}
     - {vol: minnie65_mip0_1024x1024x2048_x122000_y67000_z18000_volume, seg: minnie65_mip0_1024x1024x2048_x122000_y67000_z18000_v1300_segmentation, root: data/MICRONS}
@@ -47,12 +47,12 @@ data:
     - {vol: minnie65_mip0_1024x1024x2048_x190000_y122000_z24500_volume, seg: minnie65_mip0_1024x1024x2048_x190000_y122000_z24500_v1300_segmentation, root: data/MICRONS}
 
   val_volumes:
-    # - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
+    # - {vol: AC3_thin_inputs, seg: AC3_thin_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_volume, seg: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_v1300_segmentation, root: data/MICRONS}
     - {vol: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_volume, seg: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_v1300_segmentation, root: data/MICRONS}
 
   test_volumes:
-    # - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
+    # - {vol: AC3_thin_inputs, seg: AC3_thin_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_volume, seg: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_v1300_segmentation, root: data/MICRONS}
     - {vol: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_volume, seg: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_v1300_segmentation, root: data/MICRONS}
 
