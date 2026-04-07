@@ -47,12 +47,12 @@ data:
     - {vol: minnie65_mip0_1024x1024x2048_x190000_y122000_z24500_volume, seg: minnie65_mip0_1024x1024x2048_x190000_y122000_z24500_v1300_segmentation, root: data/MICRONS}
 
   val_volumes:
-    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
+    # - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_volume, seg: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_v1300_segmentation, root: data/MICRONS}
     - {vol: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_volume, seg: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_v1300_segmentation, root: data/MICRONS}
 
   test_volumes:
-    - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
+    # - {vol: AC3_inputs, seg: AC3_labels, root: data/SNEMI3D}
     - {vol: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_volume, seg: minnie65_mip0_1024x1024x2048_x70000_y95000_z20000_v1300_segmentation, root: data/MICRONS}
     - {vol: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_volume, seg: minnie65_mip0_1024x1024x2048_x139000_y95000_z21000_v1300_segmentation, root: data/MICRONS}
 
@@ -107,8 +107,8 @@ loss:
   label_smoothing: 0.0
   weight_semantic: 1.0
   weight_ce: 0.0
-  weight_iou: 1.0
-  weight_dice: 2.0
+  weight_iou: 0.0
+  weight_dice: 10.0
   weight_instance: 1.0
   weight_pull: 2.0
   weight_push: 2.0
