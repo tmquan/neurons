@@ -103,12 +103,12 @@ optimizer:
 loss:
   semantic_mode: sigmoid
   active_classes: 1
-  class_weights: [1.0]
+  class_weights: [0.01]
   label_smoothing: 0.0
   weight_semantic: 1.0
-  weight_ce: 0.0
+  weight_ce: 5.0
   weight_iou: 0.0
-  weight_dice: 10.0
+  weight_dice: 5.0
   weight_instance: 1.0
   weight_pull: 5.0
   weight_push: 5.0
