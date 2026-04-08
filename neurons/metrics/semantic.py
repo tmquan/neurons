@@ -65,9 +65,9 @@ def compute_per_point_dice(
     ignore_index: int = -100,
     eps: float = 1e-7,
 ) -> float:
-    """Mean Dice coefficient across classes for a single sample."""
+    """Mean Dice coefficient across foreground classes for a single sample."""
     p_oh, t_oh = _to_onehot_pair(pred.cpu(), target.cpu(), num_classes, ignore_index)
-    metric = DiceMetric(include_background=True, reduction="mean", ignore_empty=True)
+    metric = DiceMetric(include_background=False, reduction="mean", ignore_empty=True)
     result = metric(p_oh, t_oh)
     val = result.nanmean().item()
     return val if val == val else 0.0  # handle NaN
@@ -99,9 +99,9 @@ def compute_per_point_iou(
     ignore_index: int = -100,
     eps: float = 1e-7,
 ) -> float:
-    """Mean IoU (Jaccard) across classes for a single sample."""
+    """Mean IoU (Jaccard) across foreground classes for a single sample."""
     p_oh, t_oh = _to_onehot_pair(pred.cpu(), target.cpu(), num_classes, ignore_index)
-    metric = MeanIoU(include_background=True, reduction="mean", ignore_empty=True)
+    metric = MeanIoU(include_background=False, reduction="mean", ignore_empty=True)
     result = metric(p_oh, t_oh)
     val = result.nanmean().item()
     return val if val == val else 0.0  # handle NaN
