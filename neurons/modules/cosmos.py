@@ -481,10 +481,8 @@ class BaseCosmosModule(pl.LightningModule):
             {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
         ]
         param_groups = [g for g in param_groups if len(g["params"]) > 0]
-        clip_val = self.training_config.get("gradient_clip_val")
         use_fused = (
             torch.cuda.is_available()
-            and not clip_val
             and all(p.is_cuda for g in param_groups for p in g["params"])
         )
         optimizer = torch.optim.AdamW(

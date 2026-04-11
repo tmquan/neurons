@@ -404,8 +404,8 @@ def main(cfg: DictConfig) -> None:
             )
 
     if cfg.get("training", {}).get("compile", False):
-        module.model = torch.compile(module.model, mode="default")
-        print("  torch.compile enabled (reduce-overhead)")
+        module.model = torch.compile(module.model, mode="max-autotune")
+        print("  torch.compile enabled (max-autotune)")
 
     callbacks = setup_callbacks(cfg)
     print(f"\nCallbacks: {len(callbacks)} registered")
@@ -423,7 +423,7 @@ def main(cfg: DictConfig) -> None:
         strategy = DDPStrategy(
             find_unused_parameters=False,
             static_graph=True,
-            gradient_as_bucket_view=False,
+            gradient_as_bucket_view=True,
         )
     elif strategy_name == "fsdp":
         strategy = FSDPStrategy(
