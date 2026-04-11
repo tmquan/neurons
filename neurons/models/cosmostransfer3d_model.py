@@ -1032,6 +1032,12 @@ class CosmosTransfer3DWrapper(nn.Module):
 
         d_tok, h_tok, w_tok = D_p // p_t, H_p // p_h, W_p // p_w
 
+        # Strip MONAI MetaTensor wrapping before entering the compiled DiT.
+        # MetaTensor.__torch_function__ causes dynamo to crash with '__objclass__'
+        # when torch.compile traces through the DiT attention ops.
+        if hasattr(latent, "as_tensor"):
+            latent = latent.as_tensor()
+
         timestep = torch.zeros(B, device=latent.device, dtype=latent.dtype)
 
         if self._backend in ("diffusers", "cosmos_transfer2"):
