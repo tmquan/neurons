@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional
 warnings.filterwarnings("ignore", message=r".*isinstance.*LeafSpec.*is deprecated.*")
 warnings.filterwarnings("ignore", message=r".*AccumulateGrad.*stream.*mismatch.*")
 warnings.filterwarnings("ignore", message=".*lru_cache.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=r".*sync_dist=True.*when logging on epoch level.*")
+warnings.filterwarnings("ignore", message=r".*module.*in eval mode at the start of training.*")
 
 import hydra
 import pytorch_lightning as pl
@@ -409,11 +411,11 @@ def main(cfg: DictConfig) -> None:
         # inference_mode, producing tensors that cannot be saved for backward.
         dit = getattr(getattr(module, "model", None), "dit", None)
         if dit is not None:
-            module.model.dit = torch.compile(dit, mode="max-autotune")
-            print("  torch.compile enabled on DiT backbone (max-autotune)")
+            module.model.dit = torch.compile(dit, mode="reduce-overhead")
+            print("  torch.compile enabled on DiT backbone (reduce-overhead)")
         else:
-            module.model = torch.compile(module.model, mode="max-autotune")
-            print("  torch.compile enabled (max-autotune)")
+            module.model = torch.compile(module.model, mode="reduce-overhead")
+            print("  torch.compile enabled (reduce-overhead)")
 
     callbacks = setup_callbacks(cfg)
     print(f"\nCallbacks: {len(callbacks)} registered")
@@ -427,11 +429,12 @@ def main(cfg: DictConfig) -> None:
 
     training_cfg = cfg.training
     strategy_name = training_cfg.get("strategy", "auto")
+    use_compile = cfg.get("training", {}).get("compile", False)
     if strategy_name == "ddp":
         strategy = DDPStrategy(
             find_unused_parameters=False,
             static_graph=True,
-            gradient_as_bucket_view=True,
+            gradient_as_bucket_view=not use_compile,
         )
     elif strategy_name == "fsdp":
         strategy = FSDPStrategy(
