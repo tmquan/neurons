@@ -309,7 +309,7 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
         )
 
     callbacks.append(RichProgressBar())
-    callbacks.append(ModelSummary(max_depth=2))
+    callbacks.append(ModelSummary(max_depth=2 + bool(cfg.get("training", {}).get("compile", False))))
 
     return callbacks
 
