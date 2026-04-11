@@ -72,6 +72,8 @@ model:
 
 callbacks:
   cuda_empty_cache_before_val: true
+  image_logger:
+    max_images: 8
 
 training:
   max_epochs: 100
