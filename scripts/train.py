@@ -411,11 +411,11 @@ def main(cfg: DictConfig) -> None:
         # inference_mode, producing tensors that cannot be saved for backward.
         dit = getattr(getattr(module, "model", None), "dit", None)
         if dit is not None:
-            module.model.dit = torch.compile(dit, mode="reduce-overhead")
-            print("  torch.compile enabled on DiT backbone (reduce-overhead)")
+            module.model.dit = torch.compile(dit, mode="max-autotune")
+            print("  torch.compile enabled on DiT backbone (max-autotune)")
         else:
-            module.model = torch.compile(module.model, mode="reduce-overhead")
-            print("  torch.compile enabled (reduce-overhead)")
+            module.model = torch.compile(module.model, mode="max-autotune")
+            print("  torch.compile enabled (max-autotune)")
 
     callbacks = setup_callbacks(cfg)
     print(f"\nCallbacks: {len(callbacks)} registered")

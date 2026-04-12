@@ -39,12 +39,14 @@ class SoftMeanShift(nn.Module):
         num_iters: int = 10,
         temperature: float = 1.0,
         min_cluster_size: int = 50,
+        normalize_embeddings: bool = False,
     ) -> None:
         super().__init__()
         self.bandwidth = bandwidth
         self.num_iters = num_iters
         self.temperature = temperature
         self.min_cluster_size = min_cluster_size
+        self.normalize_embeddings = normalize_embeddings
 
     def _init_seeds(
         self,
@@ -93,6 +95,8 @@ class SoftMeanShift(nn.Module):
         device = embedding.device
 
         emb_flat = rearrange(embedding, "b e ... -> b e (...)")
+        if self.normalize_embeddings:
+            emb_flat = F.normalize(emb_flat, dim=1, eps=1e-6)
         N = emb_flat.shape[2]
 
         if foreground_mask is not None:

@@ -38,6 +38,9 @@ class BaseCombinedLoss(nn.Module):
         weight_bone: float = 10.0,
         delta_v: float = 0.5,
         delta_d: float = 1.5,
+        normalize_embeddings: bool = False,
+        max_hard_pairs: int = 0,
+        learned_task_weights: bool = False,
         weight_ce: float = 1.0,
         weight_iou: float = 0.0,
         weight_dice: float = 0.0,
@@ -51,6 +54,13 @@ class BaseCombinedLoss(nn.Module):
         self.weight_semantic = weight_semantic
         self.weight_instance = weight_instance
         self.weight_geometry = weight_geometry
+        self.learned_task_weights = learned_task_weights
+
+        if learned_task_weights:
+            import math
+            self.log_var_sem = nn.Parameter(torch.tensor(math.log(1.0 / max(weight_semantic, 1e-8))))
+            self.log_var_ins = nn.Parameter(torch.tensor(math.log(1.0 / max(weight_instance, 1e-8))))
+            self.log_var_geom = nn.Parameter(torch.tensor(math.log(1.0 / max(weight_geometry, 1e-8))))
 
         self.semantic_loss = SemanticLoss(
             mode=semantic_mode,
@@ -71,6 +81,8 @@ class BaseCombinedLoss(nn.Module):
             weight_bone=weight_bone,
             delta_v=delta_v,
             delta_d=delta_d,
+            normalize_embeddings=normalize_embeddings,
+            max_hard_pairs=max_hard_pairs,
         )
         self.geometry_loss: Optional[GeometryLoss] = (
             GeometryLoss(spatial_dims=self._SPATIAL_DIMS, **geom_kwargs)
@@ -131,10 +143,34 @@ class BaseCombinedLoss(nn.Module):
             weight_bone=w_bone,
         )
 
-        total = (
-            self.weight_semantic * sem["loss"]
-            + self.weight_instance * ins["loss"]
-        )
+        has_geom = self.geometry_loss is not None and "geometry" in predictions
+        geom_loss_val = None
+        if has_geom:
+            geom = self.geometry_loss(
+                predictions["geometry"],
+                labels,
+                raw_image=targets.get("raw_image"),
+                cached_targets=geom_targets,
+            )
+            geom_loss_val = geom["loss"]
+
+        if self.learned_task_weights:
+            w_sem = torch.exp(-self.log_var_sem)
+            w_ins = torch.exp(-self.log_var_ins)
+            total = (
+                w_sem * sem["loss"] + self.log_var_sem
+                + w_ins * ins["loss"] + self.log_var_ins
+            )
+            if has_geom:
+                w_geom = torch.exp(-self.log_var_geom)
+                total = total + w_geom * geom_loss_val + self.log_var_geom
+        else:
+            total = (
+                self.weight_semantic * sem["loss"]
+                + self.weight_instance * ins["loss"]
+            )
+            if has_geom:
+                total = total + self.weight_geometry * geom_loss_val
 
         out: Dict[str, torch.Tensor] = {
             "loss_sem": sem["loss"],
@@ -147,18 +183,17 @@ class BaseCombinedLoss(nn.Module):
             "loss_ins/norm": ins["norm"],
         }
 
-        if self.geometry_loss is not None and "geometry" in predictions:
-            geom = self.geometry_loss(
-                predictions["geometry"],
-                labels,
-                raw_image=targets.get("raw_image"),
-                cached_targets=geom_targets,
-            )
-            total = total + self.weight_geometry * geom["loss"]
+        if has_geom:
             out["loss_geom"] = geom["loss"]
             out["loss_geom/dir"] = geom["dir"]
             out["loss_geom/cov"] = geom["cov"]
             out["loss_geom/raw"] = geom["raw"]
+
+        if self.learned_task_weights:
+            out["eff_w/sem"] = torch.exp(-self.log_var_sem).detach()
+            out["eff_w/ins"] = torch.exp(-self.log_var_ins).detach()
+            if has_geom:
+                out["eff_w/geom"] = torch.exp(-self.log_var_geom).detach()
 
         out["loss"] = total
         return out
@@ -186,6 +221,9 @@ class BaseCombinedLossWithConsistency(BaseCombinedLoss):
         weight_bone: float = 10.0,
         delta_v: float = 0.5,
         delta_d: float = 1.5,
+        normalize_embeddings: bool = False,
+        max_hard_pairs: int = 0,
+        learned_task_weights: bool = False,
         weight_ce: float = 1.0,
         weight_iou: float = 0.0,
         weight_dice: float = 0.0,
@@ -212,6 +250,9 @@ class BaseCombinedLossWithConsistency(BaseCombinedLoss):
             weight_bone=weight_bone,
             delta_v=delta_v,
             delta_d=delta_d,
+            normalize_embeddings=normalize_embeddings,
+            max_hard_pairs=max_hard_pairs,
+            learned_task_weights=learned_task_weights,
             weight_ce=weight_ce,
             weight_iou=weight_iou,
             weight_dice=weight_dice,

@@ -52,6 +52,13 @@ class InstanceLoss(nn.Module):
         weight_bone: Medial-axis pixel weight multiplier (1.0 = disabled).
         delta_v: Pull margin (hinge threshold per embedding).
         delta_d: Push margin (half of the minimum centroid separation).
+        normalize_embeddings: L2-normalize embeddings to the unit
+            hypersphere before computing pull/push.  Eliminates the
+            need for norm regularisation and bounds all distances to
+            [0, 2].
+        max_hard_pairs: When > 0, only the top-k hardest centroid pairs
+            (smallest distance) contribute to the push loss.  Focuses
+            gradient on pairs that actually need separation.
     """
 
     def __init__(
@@ -64,6 +71,8 @@ class InstanceLoss(nn.Module):
         weight_bone: float = 10.0,
         delta_v: float = 0.5,
         delta_d: float = 1.5,
+        normalize_embeddings: bool = False,
+        max_hard_pairs: int = 0,
     ) -> None:
         super().__init__()
         self.spatial_dims = spatial_dims
@@ -74,6 +83,8 @@ class InstanceLoss(nn.Module):
         self.weight_bone = weight_bone
         self.delta_v = delta_v
         self.delta_d = delta_d
+        self.normalize_embeddings = normalize_embeddings
+        self.max_hard_pairs = max_hard_pairs
 
         self._pool = _pool_fn(spatial_dims)
         self._pad = _pad_tuple(spatial_dims)
@@ -251,6 +262,8 @@ class InstanceLoss(nn.Module):
             w_bone: [B, *spatial]
         """
         emb_flat = rearrange(embed, "b e ... -> b e (...)")
+        if self.normalize_embeddings:
+            emb_flat = F.normalize(emb_flat, dim=1, eps=1e-6)
         lbl_flat = rearrange(label, "b ... -> b (...)")
         if w_edge is not None and w_bone is not None:
             wgt_flat = rearrange(w_edge * w_bone, "b ... -> b (...)")
@@ -306,12 +319,13 @@ class InstanceLoss(nn.Module):
                            rearrange(centers, "j e -> 1 j e"))
                 pw = (pw_diff ** 2).sum(dim=2).clamp(min=1e-12).sqrt()
                 triu = torch.triu_indices(K, K, offset=1, device=device)
-                loss_push = loss_push + reduce(
-                    (2 * self.delta_d - pw[triu[0], triu[1]]).clamp(min=0).pow(2),
-                    "n -> ", "mean",
-                )
+                hinge = (2 * self.delta_d - pw[triu[0], triu[1]]).clamp(min=0).pow(2)
+                if self.max_hard_pairs > 0 and hinge.numel() > self.max_hard_pairs:
+                    hinge, _ = hinge.topk(self.max_hard_pairs)
+                loss_push = loss_push + hinge.mean()
 
-            loss_norm = loss_norm + (centers ** 2).sum(dim=1).clamp(min=1e-12).sqrt().mean()
+            if not self.normalize_embeddings:
+                loss_norm = loss_norm + (centers ** 2).sum(dim=1).clamp(min=1e-12).sqrt().mean()
 
         n = max(n_valid, 1)
         pull = loss_pull / n

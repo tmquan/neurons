@@ -55,6 +55,7 @@ def cluster_embeddings_meanshift(
     foreground_mask: Optional[torch.Tensor] = None,
     bandwidth: float = 0.5,
     min_cluster_size: int = 50,
+    normalize_embeddings: bool = False,
 ) -> torch.Tensor:
     """Cluster pixel embeddings via sklearn MeanShift.
 
@@ -63,13 +64,18 @@ def cluster_embeddings_meanshift(
     Args:
         embedding: ``[E, *spatial]`` embedding tensor (2-D or 3-D).
         foreground_mask: Optional ``[*spatial]`` bool mask.
+        normalize_embeddings: L2-normalize before clustering (must match training).
 
     Returns:
         ``[*spatial]`` integer cluster labels.
     """
+    import torch.nn.functional as F
+
     device = embedding.device
     spatial_shape = embedding.shape[1:]
 
+    if normalize_embeddings:
+        embedding = F.normalize(embedding, dim=0, eps=1e-6)
     emb_flat = rearrange(embedding, "e ... -> (...) e")
 
     if foreground_mask is not None:
@@ -98,6 +104,7 @@ def cluster_embeddings_soft(
     num_iters: int = 10,
     temperature: float = 1.0,
     min_cluster_size: int = 50,
+    normalize_embeddings: bool = False,
 ) -> torch.Tensor:
     """Cluster pixel embeddings using differentiable soft mean-shift."""
     from neurons.inference.soft_clustering import SoftMeanShift
@@ -113,6 +120,7 @@ def cluster_embeddings_soft(
         num_iters=num_iters,
         temperature=temperature,
         min_cluster_size=min_cluster_size,
+        normalize_embeddings=normalize_embeddings,
     )
     labels, _, _ = clusterer(embedding, foreground_mask)
 

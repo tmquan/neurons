@@ -106,7 +106,10 @@ class BaseVistaModule(pl.LightningModule):
 
         self.criterion = self._loss_cls(**loss_config)
 
-        self.clusterer = SoftMeanShift(bandwidth=loss_config.get("delta_v", 0.5))
+        self.clusterer = SoftMeanShift(
+            bandwidth=loss_config.get("delta_v", 0.5),
+            normalize_embeddings=loss_config.get("normalize_embeddings", False),
+        )
         self._ignore_index = loss_config.get("ignore_index", -100)
 
         self.training_modes: List[str] = list(
