@@ -7,8 +7,13 @@ Dimension-agnostic — parameterized by ``spatial_dims`` to handle both
 Boundary and skeleton pixels receive boosted weights so the model
 pays extra attention to separating touching instances and
 reconstructing the medial axis.
+
+Supports an optional **centroid-anchoring** mode where each instance's
+pull target is a deterministic sinusoidal positional encoding of its
+spatial center-of-mass, replacing the unstable empirical mean embedding.
 """
 
+import math
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -59,6 +64,15 @@ class InstanceLoss(nn.Module):
         max_hard_pairs: When > 0, only the top-k hardest centroid pairs
             (smallest distance) contribute to the push loss.  Focuses
             gradient on pairs that actually need separation.
+        anchor_to_centroid: Snap each instance's pull target to a
+            deterministic sinusoidal encoding of its spatial
+            center-of-mass instead of the empirical mean embedding.
+            Push still operates on the empirical mean for gradient
+            flow.  Incompatible with ``normalize_embeddings``.
+        centroid_scale: Multiplier on the sinusoidal encoding so that
+            the typical anchor separation matches the push margin
+            ``2 * delta_d``.  Higher values resolve spatially closer
+            centroids but increase the target norm.
     """
 
     def __init__(
@@ -73,8 +87,15 @@ class InstanceLoss(nn.Module):
         delta_d: float = 1.5,
         normalize_embeddings: bool = False,
         max_hard_pairs: int = 0,
+        anchor_to_centroid: bool = False,
+        centroid_scale: float = 5.0,
     ) -> None:
         super().__init__()
+        if anchor_to_centroid and normalize_embeddings:
+            raise ValueError(
+                "anchor_to_centroid and normalize_embeddings are mutually "
+                "exclusive: anchored targets live in unbounded space."
+            )
         self.spatial_dims = spatial_dims
         self.weight_pull = weight_pull
         self.weight_push = weight_push
@@ -85,6 +106,8 @@ class InstanceLoss(nn.Module):
         self.delta_d = delta_d
         self.normalize_embeddings = normalize_embeddings
         self.max_hard_pairs = max_hard_pairs
+        self.anchor_to_centroid = anchor_to_centroid
+        self.centroid_scale = centroid_scale
 
         self._pool = _pool_fn(spatial_dims)
         self._pad = _pad_tuple(spatial_dims)
@@ -216,6 +239,102 @@ class InstanceLoss(nn.Module):
         return torch.from_numpy(weight_np).to(label.device)
 
     # ------------------------------------------------------------------
+    # Centroid-anchoring helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @torch.no_grad()
+    def _compute_spatial_centroids(
+        fg_indices: torch.Tensor,
+        inverse: torch.Tensor,
+        K: int,
+        spatial_shape: Tuple[int, ...],
+    ) -> torch.Tensor:
+        """Center-of-mass for each instance via scatter (no Python loops).
+
+        Args:
+            fg_indices: ``[M]`` flat indices of foreground pixels into the
+                volume of shape ``spatial_shape``.
+            inverse: ``[M]`` zero-based instance index for each fg pixel.
+            K: number of instances.
+            spatial_shape: spatial dimension sizes (D, H, W) or (H, W).
+
+        Returns:
+            ``[K, S]`` centroid coordinates in voxel space.
+        """
+        device = fg_indices.device
+        S = len(spatial_shape)
+        M = fg_indices.shape[0]
+
+        coords = torch.zeros(M, S, device=device, dtype=torch.float32)
+        remainder = fg_indices.clone()
+        for d in range(S - 1, -1, -1):
+            coords[:, d] = (remainder % spatial_shape[d]).float()
+            remainder = remainder // spatial_shape[d]
+
+        inv_expand = inverse.unsqueeze(1).expand(-1, S)
+        centroid_sum = torch.zeros(K, S, device=device, dtype=torch.float32)
+        centroid_sum.scatter_add_(0, inv_expand, coords)
+        counts = torch.bincount(inverse, minlength=K).float().clamp(min=1)
+
+        return centroid_sum / counts.unsqueeze(1)
+
+    @staticmethod
+    @torch.no_grad()
+    def _sinusoidal_centroid_encoding(
+        centroids: torch.Tensor,
+        spatial_shape: Tuple[int, ...],
+        emb_dim: int,
+        scale: float,
+    ) -> torch.Tensor:
+        """Multi-octave sinusoidal encoding of spatial centroids.
+
+        Distributes frequency bands across spatial dimensions proportional
+        to ``log2(resolution)``, giving higher-resolution axes more octaves
+        for finer discrimination.
+
+        Args:
+            centroids: ``[K, S]`` centroids in voxel coordinates.
+            spatial_shape: spatial dimension sizes (D, H, W) or (H, W).
+            emb_dim: target embedding dimensionality E.
+            scale: output multiplier to match pull/push margins.
+
+        Returns:
+            ``[K, E]`` deterministic target embedding vectors.
+        """
+        K, S = centroids.shape
+        device = centroids.device
+
+        shape_t = torch.tensor(spatial_shape, device=device, dtype=torch.float32)
+        c_norm = centroids / shape_t.unsqueeze(0).clamp(min=1)
+
+        total_pairs = emb_dim // 2
+        log_res = [math.log2(max(s, 2)) for s in spatial_shape]
+        total_log = sum(log_res)
+
+        raw_alloc = [lr / total_log * total_pairs for lr in log_res]
+        pairs_per_dim = [int(a) for a in raw_alloc]
+        remainder = total_pairs - sum(pairs_per_dim)
+        fracs = sorted(
+            ((raw_alloc[d] - pairs_per_dim[d], d) for d in range(S)),
+            reverse=True,
+        )
+        for i in range(remainder):
+            pairs_per_dim[fracs[i][1]] += 1
+
+        features = []
+        for d in range(S):
+            for f in range(pairs_per_dim[d]):
+                freq = (2.0 ** f) * math.pi
+                features.append(torch.sin(freq * c_norm[:, d]))
+                features.append(torch.cos(freq * c_norm[:, d]))
+
+        while len(features) < emb_dim:
+            features.append(torch.zeros(K, device=device))
+
+        return scale * torch.stack(features[:emb_dim], dim=1)
+
+    # ------------------------------------------------------------------
     # Core discriminative loss
     # ------------------------------------------------------------------
 
@@ -260,7 +379,16 @@ class InstanceLoss(nn.Module):
             label:  [B, *spatial]
             w_edge: [B, *spatial]
             w_bone: [B, *spatial]
+
+        When ``anchor_to_centroid`` is enabled, **pull** drives each pixel
+        toward a deterministic sinusoidal encoding of the instance's
+        spatial center-of-mass (stable fixed target), while **push** and
+        **norm** still operate on the empirical mean embedding (for
+        gradient flow through the model).
         """
+        spatial_shape = embed.shape[2:]
+        E = embed.shape[1]
+
         emb_flat = rearrange(embed, "b e ... -> b e (...)")
         if self.normalize_embeddings:
             emb_flat = F.normalize(emb_flat, dim=1, eps=1e-6)
@@ -298,9 +426,21 @@ class InstanceLoss(nn.Module):
             emb_b = emb_flat[b]                        # [E, N]
             wgt_b = wgt_flat[b] if wgt_flat is not None else None
 
-            centers = self._scatter_weighted_mean(emb_b, remap, wgt_b, K)  # [K, E]
+            mean_centers = self._scatter_weighted_mean(emb_b, remap, wgt_b, K)  # [K, E]
 
-            center_per_pixel = centers[inverse]        # [M, E]
+            if self.anchor_to_centroid:
+                fg_indices = torch.where(fg)[0]
+                spatial_c = self._compute_spatial_centroids(
+                    fg_indices, inverse, K, spatial_shape,
+                )
+                pull_centers = self._sinusoidal_centroid_encoding(
+                    spatial_c, spatial_shape, E, self.centroid_scale,
+                )
+            else:
+                pull_centers = mean_centers
+
+            # --- Pull: toward anchored or empirical centers ---
+            center_per_pixel = pull_centers[inverse]   # [M, E]
             emb_fg = emb_b[:, fg].T                    # [M, E]
 
             dist = ((emb_fg - center_per_pixel) ** 2).sum(dim=1).clamp(min=1e-12).sqrt()  # [M]
@@ -314,9 +454,10 @@ class InstanceLoss(nn.Module):
             b_pull = (pull_sum / pull_count).mean()
             loss_pull = loss_pull + b_pull
 
+            # --- Push: always on empirical mean_centers for gradient ---
             if K > 1:
-                pw_diff = (rearrange(centers, "i e -> i 1 e") -
-                           rearrange(centers, "j e -> 1 j e"))
+                pw_diff = (rearrange(mean_centers, "i e -> i 1 e") -
+                           rearrange(mean_centers, "j e -> 1 j e"))
                 pw = (pw_diff ** 2).sum(dim=2).clamp(min=1e-12).sqrt()
                 triu = torch.triu_indices(K, K, offset=1, device=device)
                 hinge = (2 * self.delta_d - pw[triu[0], triu[1]]).clamp(min=0).pow(2)
@@ -324,8 +465,9 @@ class InstanceLoss(nn.Module):
                     hinge, _ = hinge.topk(self.max_hard_pairs)
                 loss_push = loss_push + hinge.mean()
 
+            # --- Norm: on empirical mean_centers ---
             if not self.normalize_embeddings:
-                loss_norm = loss_norm + (centers ** 2).sum(dim=1).clamp(min=1e-12).sqrt().mean()
+                loss_norm = loss_norm + (mean_centers ** 2).sum(dim=1).clamp(min=1e-12).sqrt().mean()
 
         n = max(n_valid, 1)
         pull = loss_pull / n

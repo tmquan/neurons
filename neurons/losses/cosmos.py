@@ -40,6 +40,8 @@ class BaseCombinedLoss(nn.Module):
         delta_d: float = 1.5,
         normalize_embeddings: bool = False,
         max_hard_pairs: int = 0,
+        anchor_to_centroid: bool = False,
+        centroid_scale: float = 5.0,
         learned_task_weights: bool = False,
         weight_ce: float = 1.0,
         weight_iou: float = 0.0,
@@ -83,6 +85,8 @@ class BaseCombinedLoss(nn.Module):
             delta_d=delta_d,
             normalize_embeddings=normalize_embeddings,
             max_hard_pairs=max_hard_pairs,
+            anchor_to_centroid=anchor_to_centroid,
+            centroid_scale=centroid_scale,
         )
         self.geometry_loss: Optional[GeometryLoss] = (
             GeometryLoss(spatial_dims=self._SPATIAL_DIMS, **geom_kwargs)
@@ -223,6 +227,8 @@ class BaseCombinedLossWithConsistency(BaseCombinedLoss):
         delta_d: float = 1.5,
         normalize_embeddings: bool = False,
         max_hard_pairs: int = 0,
+        anchor_to_centroid: bool = False,
+        centroid_scale: float = 5.0,
         learned_task_weights: bool = False,
         weight_ce: float = 1.0,
         weight_iou: float = 0.0,
@@ -252,6 +258,8 @@ class BaseCombinedLossWithConsistency(BaseCombinedLoss):
             delta_d=delta_d,
             normalize_embeddings=normalize_embeddings,
             max_hard_pairs=max_hard_pairs,
+            anchor_to_centroid=anchor_to_centroid,
+            centroid_scale=centroid_scale,
             learned_task_weights=learned_task_weights,
             weight_ce=weight_ce,
             weight_iou=weight_iou,
