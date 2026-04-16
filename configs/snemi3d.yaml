@@ -122,7 +122,7 @@ loss:
   weight_push: 3.0
   weight_norm: 0.01
   delta_v: 0.5
-  delta_d: 1.0
+  delta_d: 1.5
   normalize_embeddings: false
   anchor_to_centroid: false
   learned_task_weights: false
