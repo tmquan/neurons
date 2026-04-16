@@ -53,6 +53,7 @@ class MitoEM2DataModule(CircuitDataModule):
         elastic_magnitude_range: Tuple[float, float] = (10.0, 40.0),
         resolution_zoom_prob: float = 0.0,
         resolution_zoom_range: Optional[Tuple[Tuple[float, float], ...]] = None,
+        resolution_map: Optional[Dict[str, Tuple[float, float, float]]] = None,
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
@@ -77,6 +78,7 @@ class MitoEM2DataModule(CircuitDataModule):
             elastic_magnitude_range=elastic_magnitude_range,
             resolution_zoom_prob=resolution_zoom_prob,
             resolution_zoom_range=resolution_zoom_range,
+            resolution_map=resolution_map,
         )
 
     @property

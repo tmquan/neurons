@@ -25,7 +25,7 @@ from monai.transforms import (
 from neurons.datasets.base import CircuitDataset
 from neurons.transforms import (
     FindBoundariesd, Labeld, Directiond, Covarianced,
-    RandSpatialCropForegroundd, RandResolutionZoomd,
+    RandSpatialCropForegroundd, RandResolutionZoomd, RandTransposeXYd,
 )
 
 
@@ -89,6 +89,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         elastic_magnitude_range: Tuple[float, float] = (10.0, 40.0),
         resolution_zoom_prob: float = 0.0,
         resolution_zoom_range: Optional[Tuple[Tuple[float, float], ...]] = None,
+        resolution_map: Optional[Dict[str, Tuple[float, float, float]]] = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -115,6 +116,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.resolution_zoom_range = (
             tuple(tuple(r) for r in resolution_zoom_range)
             if resolution_zoom_range is not None
+            else None
+        )
+        self.resolution_map = (
+            {k: tuple(v) for k, v in resolution_map.items()}
+            if resolution_map is not None
             else None
         )
 
@@ -211,6 +217,8 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         }
         if target_range is not None:
             kwargs["target_range"] = target_range
+        if self.resolution_map is not None:
+            kwargs["resolution_map"] = self.resolution_map
         return [RandResolutionZoomd(**kwargs)]
 
     def _original_transforms(self, spatial_dims: int) -> list:
@@ -227,6 +235,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=2 if spatial_dims == 3 else 1),
             RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
+            RandTransposeXYd(keys=io_keys, prob=0.5),
         ]
         if spatial_dims == 3 and self.elastic_prob > 0:
             xforms.append(
@@ -304,8 +313,9 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         safe_size = self._safe_patch_size()
 
         if safe_size is not None:
-            # Crop to a larger safe patch, zoom, then center-crop to final
-            # size so that downsampled patches contain no zero-padded edges.
+            # Crop to a larger safe patch, relabel to compact IDs (avoids
+            # float32 precision loss for large uint64 segment IDs during
+            # zoom), zoom, then center-crop to final size.
             transforms.append(SpatialPadd(keys=io_keys, spatial_size=safe_size))
             if self.min_foreground > 0:
                 transforms.append(
@@ -320,6 +330,7 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
                 transforms.append(
                     RandSpatialCropd(keys=io_keys, roi_size=safe_size, random_size=False),
                 )
+            transforms.append(Labeld(keys=["label"], spatial_dims=sd))
             transforms.extend(self._resolution_zoom_transforms(sd))
             transforms.append(
                 CenterSpatialCropd(keys=io_keys, roi_size=self.patch_size),
@@ -340,7 +351,10 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
                 transforms.append(
                     RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
                 )
-            transforms.extend(self._resolution_zoom_transforms(sd))
+            zoom_xforms = self._resolution_zoom_transforms(sd)
+            if zoom_xforms:
+                transforms.append(Labeld(keys=["label"], spatial_dims=sd))
+                transforms.extend(zoom_xforms)
 
         elif self.image_size is not None:
             transforms.append(

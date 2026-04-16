@@ -5,11 +5,15 @@
 #   SNEMI3D / Neurite11: 30×6×6 nm    MICrONS: 40×8×8 nm
 #
 # Resolution zoom harmonises all to 30–40 nm Z, 6–8 nm XY.
+# Each dataset is zoomed from its native resolution into the target
+# range via resolution_map (prefix → [Z, Y, X] nm):
+#   SNEMI3D/Neurite11 (30×6×6) → zooms out (0.75–1.0×)
+#   MICrONS           (40×8×8) → zooms in  (1.0–1.33×)
 #
 # Volumes (download_snemi3d.py --source all, download_microns.py --split):
 #   train: AC4 + Neurite11 + MICrONS train01–04
-#   val:   SNEMI3D AC4_thin + MICrONS test01
-#   test:  SNEMI3D AC4_thin + MICrONS test01
+#   val:   SNEMI3D AC4 + MICrONS test01
+#   test:  SNEMI3D AC4 + MICrONS test01
 #
 # Usage:
 #   python scripts/train.py --config-name combine
@@ -21,6 +25,13 @@ experiment_name: combine
 project_name: neurons-combined
 
 data:
+  resolution_zoom_prob: 1.0
+  resolution_zoom_range: [[30, 40], [6, 8], [6, 8]]
+  resolution_map:
+    minnie65: [40, 8, 8]
+    AC: [30, 6, 6]
+    neurite11: [30, 6, 6]
+
   train_volumes:
     - vol: neurite11_5000x2900x300_x3000_y7200_z950_volume
       seg: neurite11_5000x2900x300_x3000_y7200_z950_segmentation

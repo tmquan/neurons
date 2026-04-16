@@ -110,6 +110,11 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             if data_cfg.get("resolution_zoom_range") is not None
             else None
         ),
+        "resolution_map": (
+            {str(k): tuple(v) for k, v in data_cfg.get("resolution_map").items()}
+            if data_cfg.get("resolution_map") is not None
+            else None
+        ),
     }
 
     image_size = data_cfg.get("image_size")

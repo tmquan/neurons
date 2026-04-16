@@ -17,6 +17,7 @@ from neurons.transforms.direction import Directiond
 from neurons.transforms.covariance import Covarianced
 from neurons.transforms.find_boundaries import FindBoundariesd
 from neurons.transforms.rand_crop_foreground import RandSpatialCropForegroundd
+from neurons.transforms.rand_transpose_xy import RandTransposeXYd
 from neurons.transforms.resolution_zoom import RandResolutionZoomd
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "Covarianced",
     "FindBoundariesd",
     "RandSpatialCropForegroundd",
+    "RandTransposeXYd",
     "RandResolutionZoomd",
 ]

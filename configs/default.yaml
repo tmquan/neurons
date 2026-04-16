@@ -27,6 +27,7 @@ data:
   elastic_magnitude_range: [10, 40]   # displacement magnitude range (kept low for gentle warps)
   resolution_zoom_prob: 0.0   # probability of random resolution zoom (0 = off)
   resolution_zoom_range: null # per-axis [[z_min,z_max],[y_min,y_max],[x_min,x_max]] in nm; null = [30,40],[6,8],[6,8]
+  resolution_map: null  # prefix→[Z,Y,X] nm for per-volume native resolution; null = use pixel_size for all
   # Keep false on multi-GPU jobs if host RAM is tight (each rank × num_workers processes).
   persistent_workers: true
   train_volumes: null  # List of {vol, seg} dicts; null = dataset defaults

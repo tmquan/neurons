@@ -20,6 +20,11 @@ The target resolution is sampled once (Y axis) and the other axes are
 derived from the native anisotropy ratio, so ``pixel_size`` proportions
 are preserved (e.g. all datasets keep their 5:1 Z:XY ratio).
 
+When training on mixed datasets with different native resolutions,
+use ``resolution_map`` to specify per-volume resolutions.  The
+transform reads the ``"volume"`` key from the sample dict and looks
+up the matching entry (longest prefix match).
+
 Output spatial size is preserved via center-crop / zero-pad.
 """
 
@@ -46,13 +51,38 @@ def _zoom_volume(
     zoom: Sequence[float],
     mode: str = "trilinear",
 ) -> torch.Tensor:
-    """Zoom a (C, D, H, W) tensor and crop/pad back to the original size."""
+    """Zoom a (C, D, H, W) tensor and crop/pad back to the original size.
+
+    For nearest-neighbour mode (labels), large integer IDs are remapped
+    to compact sequential values before the float32 interpolation and
+    restored afterwards.  This avoids precision loss that would merge
+    distinct segment IDs (e.g. MICrONS uint64 IDs ~8.6e17).
+    """
     orig_shape = vol.shape[1:]  # (D, H, W)
     new_shape = [max(1, round(s * z)) for s, z in zip(orig_shape, zoom)]
 
+    # For nearest-neighbour, remap to small IDs to avoid float32 precision loss
+    remap_lut = None
+    work = vol
+    if mode == "nearest":
+        uniq = torch.unique(vol)
+        if uniq.numel() > 0 and (uniq.max().item() > 2**23 or uniq.min().item() < -(2**23)):
+            remap_lut = uniq  # original IDs, sorted
+            fwd = torch.zeros(int(uniq.max().item()) + 1, dtype=vol.dtype,
+                              device=vol.device) if uniq.max().item() < 1_000_000 else None
+            if fwd is not None:
+                for i, uid in enumerate(uniq):
+                    fwd[uid.item()] = i
+                work = fwd[vol]
+            else:
+                work = torch.zeros_like(vol)
+                for i, uid in enumerate(uniq):
+                    work[vol == uid] = i
+
     # Interpolate
-    vol_5d = vol.unsqueeze(0).float()  # (1, C, D, H, W)
-    zoomed = F.interpolate(vol_5d, size=new_shape, mode=mode, align_corners=False if mode != "nearest" else None)
+    vol_5d = work.unsqueeze(0).float()  # (1, C, D, H, W)
+    zoomed = F.interpolate(vol_5d, size=new_shape, mode=mode,
+                           align_corners=False if mode != "nearest" else None)
     zoomed = zoomed.squeeze(0)  # (C, D', H', W')
 
     # Center-crop / zero-pad back to orig_shape
@@ -67,7 +97,11 @@ def _zoom_volume(
             pad_before = (os - zs) // 2
             zoomed = _pad_dim(zoomed, d + 1, pad_before, os - zs - pad_before)
 
-    out[:] = zoomed
+    if remap_lut is not None:
+        idx = zoomed.long().clamp(0, remap_lut.numel() - 1)
+        out[:] = remap_lut[idx]
+    else:
+        out[:] = zoomed
     return out
 
 
@@ -94,12 +128,21 @@ class RandResolutionZoomd(MapTransform, Randomizable):
 
     Args:
         keys: Keys to apply the zoom to (e.g. ``["image", "label"]``).
-        native_resolution: Native voxel size in nm, ``(Z, Y, X)`` order.
+        native_resolution: Default native voxel size in nm, ``(Z, Y, X)``.
         target_range: Per-axis ``(min_nm, max_nm)`` in ``(Z, Y, X)`` order.
             Default covers the SNEMI3D–MICrONS range (30–40 Z, 6–8 XY).
         prob: Probability of applying the zoom (0–1).
         label_keys: Subset of *keys* that should use nearest-neighbour
             interpolation (default: ``{"label"}``).
+        resolution_map: Optional mapping from volume-name prefixes to
+            native resolutions ``(Z, Y, X)``.  When the sample contains
+            a ``"volume"`` key, the longest matching prefix is used
+            instead of *native_resolution*.  Example::
+
+                {"minnie65": (40, 8, 8), "AC4": (30, 6, 6)}
+
+        volume_key: Sample dict key that holds the volume name
+            (default ``"volume"``).
     """
 
     def __init__(
@@ -109,33 +152,55 @@ class RandResolutionZoomd(MapTransform, Randomizable):
         target_range: Tuple[Tuple[float, float], ...] = DEFAULT_TARGET_RANGE,
         prob: float = 1.0,
         label_keys: Optional[set] = None,
+        resolution_map: Optional[Dict[str, Tuple[float, float, float]]] = None,
+        volume_key: str = "volume",
     ) -> None:
         super().__init__(keys)
         self.native_resolution = np.asarray(native_resolution, dtype=np.float64)
         self.target_range = np.asarray(target_range, dtype=np.float64)  # (3, 2)
         self.prob = float(prob)
         self.label_keys = label_keys or {"label"}
+        self.resolution_map: Optional[Dict[str, np.ndarray]] = None
+        if resolution_map:
+            self.resolution_map = {
+                k: np.asarray(v, dtype=np.float64) for k, v in resolution_map.items()
+            }
+        self.volume_key = volume_key
 
         self._do_zoom = False
         self._zoom: Optional[np.ndarray] = None
 
+    def _resolve_native(self, data: Optional[Dict]) -> np.ndarray:
+        """Look up per-volume native resolution, falling back to default."""
+        if data is None or self.resolution_map is None:
+            return self.native_resolution
+        vol_name = data.get(self.volume_key, "")
+        if not vol_name:
+            return self.native_resolution
+        best_prefix = ""
+        for prefix in self.resolution_map:
+            if vol_name.startswith(prefix) and len(prefix) > len(best_prefix):
+                best_prefix = prefix
+        if best_prefix:
+            return self.resolution_map[best_prefix]
+        return self.native_resolution
+
     def randomize(self, data=None) -> None:  # noqa: D102
         self._do_zoom = self.R.random() < self.prob
         if self._do_zoom:
-            # Sample one reference axis (Y) and derive the others so the
-            # native anisotropy ratio is preserved (e.g. 5:1 Z:XY).
+            native = self._resolve_native(data)
             ref_lo, ref_hi = self.target_range[1]  # Y range
             ref_target = self.R.uniform(ref_lo, ref_hi)
-            ratios = self.native_resolution / self.native_resolution[1]
+            ratios = native / native[1]
             target = np.clip(
                 ref_target * ratios,
                 self.target_range[:, 0],
                 self.target_range[:, 1],
             )
-            self._zoom = self.native_resolution / target
+            self._zoom = native / target
 
     def __call__(self, data: Dict) -> Dict:
-        self.randomize()
+        self.randomize(data)
         if not self._do_zoom or self._zoom is None:
             return data
 
