@@ -85,7 +85,7 @@ class CreateClassIds(Dataset):
 
     Per-dataset mapping rules
     -------------------------
-    **snemi3d**
+    **snemi3d** / **neurite**
         foreground (label > 0) -> 1 (neuron)
 
     **cremi3d**
@@ -109,7 +109,7 @@ class CreateClassIds(Dataset):
 
     Args:
         dataset: Base dataset to wrap.
-        dataset_type: One of 'snemi3d', 'cremi3d', 'microns', 'mitoem2'.
+        dataset_type: One of 'snemi3d', 'cremi3d', 'microns', 'neurite', 'mitoem2'.
         default_class: Fallback class for unknown dataset types.
         ignore_classes: Optional set of union class names to ignore.
             Pixels that would be mapped to an ignored class are set to 0
@@ -149,7 +149,7 @@ class CreateClassIds(Dataset):
 
         dt = self.dataset_type
 
-        if dt == "snemi3d" or dt == "microns":
+        if dt in ("snemi3d", "microns", "neurite"):
             semantic_ids[label_np > 0] = UNION_LABEL_MAP["neuron"]
 
         elif dt == "cremi3d":
@@ -193,6 +193,7 @@ class CombineDataModule(pl.LightningDataModule):
     - SNEMI3DDataModule
     - CREMI3DDataModule
     - MICRONSDataModule
+    - NeuriteDataModule
     - MitoEM2DataModule
 
     Each source dataset's labels are mapped to the union label space

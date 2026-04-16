@@ -6,8 +6,8 @@ The CREMI (Circuit Reconstruction from Electron Microscopy Images) challenge
 provides 3 EM volumes (A, B, C) with neuron and synapse annotations.
 
 Volumes:
-- sample_A, sample_B: Training (125 slices, 1250x1250, 4x4x40 nm)
-- sample_C: Test (125 slices, 1250x1250, 4x4x40 nm)
+- sample_A, sample_B, sample_C: Training (125 slices, 1250x1250, 4x4x40 nm)
+- sample_A+, sample_B+, sample_C+: Test (padded/realigned, disjoint)
 
 Source: https://cremi.org/
 

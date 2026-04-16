@@ -41,9 +41,11 @@ def _cc_label(label_np: np.ndarray, connectivity: int = 1) -> np.ndarray:
 class Labeld(MapTransform):
     """Connected-component relabeling for instance labels.
 
-    After cropping, instances that were previously connected may become
-    disconnected.  This transform splits them via connected-component
-    analysis and renumbers labels sequentially.
+    After cropping (and optionally elastic deformation), a single instance
+    can become split into disconnected parts that share the same label
+    value.  This transform runs connected-component analysis to assign
+    each disconnected part a unique label, removes fragments smaller than
+    ``min_voxels``, then renumbers sequentially.
 
     Uses ``cucim.skimage.measure.label`` (GPU) or
     ``skimage.measure.label`` (CPU) which treats two pixels as connected
@@ -53,6 +55,8 @@ class Labeld(MapTransform):
         keys: Keys of instance label maps.
         spatial_dims: Number of spatial dimensions (2 or 3).
         connectivity: 1 = face-adjacent only (6-connected in 3D, thinnest).
+        min_voxels: Components with fewer voxels are set to background.
+            Cleans up tiny slivers created by elastic deformation.
     """
 
     def __init__(
@@ -60,10 +64,12 @@ class Labeld(MapTransform):
         keys: KeysCollection,
         spatial_dims: int = 3,
         connectivity: int = 1,
+        min_voxels: int = 0,
     ) -> None:
         super().__init__(keys)
         self.spatial_dims = spatial_dims
         self.connectivity = connectivity
+        self.min_voxels = min_voxels
 
     def __call__(self, data: Dict) -> Dict:
         d = dict(data)
@@ -82,6 +88,14 @@ class Labeld(MapTransform):
                 label_np = label_np[0]
 
             relabeled = _cc_label(label_np.astype(np.int64), connectivity=self.connectivity)
+
+            if self.min_voxels > 0:
+                ids, counts = np.unique(relabeled, return_counts=True)
+                for cid, cnt in zip(ids, counts):
+                    if cid == 0:
+                        continue
+                    if cnt < self.min_voxels:
+                        relabeled[relabeled == cid] = 0
 
             if had_channel:
                 relabeled = relabeled[np.newaxis]

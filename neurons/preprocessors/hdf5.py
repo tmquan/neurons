@@ -76,7 +76,7 @@ class HDF5Preprocessor(BasePreprocessor):
         file_path = self._check_file_exists(path)
 
         try:
-            with h5py.File(str(file_path), "r") as f:
+            with h5py.File(str(file_path), "r", locking=False) as f:
                 if key is not None:
                     dataset_key = key
                 elif self.default_key in f:
@@ -143,7 +143,7 @@ class HDF5Preprocessor(BasePreprocessor):
             return False
 
         try:
-            with h5py.File(str(file_path), "r") as f:
+            with h5py.File(str(file_path), "r", locking=False) as f:
                 _ = list(f.keys())
             return True
         except Exception:
@@ -222,7 +222,7 @@ class HDF5Preprocessor(BasePreprocessor):
 
         file_path = self._check_file_exists(path)
 
-        with h5py.File(str(file_path), "r") as f:
+        with h5py.File(str(file_path), "r", locking=False) as f:
             return self._find_datasets(f)
 
     def get_metadata(self, path: str) -> Dict[str, Any]:
@@ -241,7 +241,7 @@ class HDF5Preprocessor(BasePreprocessor):
         metadata = super().get_metadata(path)
 
         try:
-            with h5py.File(str(file_path), "r") as f:
+            with h5py.File(str(file_path), "r", locking=False) as f:
                 datasets = self._find_datasets(f)
                 metadata.update(
                     {
@@ -287,7 +287,7 @@ class HDF5Preprocessor(BasePreprocessor):
         import h5py
 
         try:
-            with h5py.File(str(path), "r") as f:
+            with h5py.File(str(path), "r", locking=False) as f:
                 if key is not None:
                     dataset_key = key
                 elif self.default_key in f:

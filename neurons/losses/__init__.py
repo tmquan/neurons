@@ -1,7 +1,7 @@
 """
 Loss functions for connectomics segmentation.
 
-Three standalone losses (each in its own module):
+Standalone losses (each in its own module):
 - SemanticLoss: CE + IoU + Dice (``losses.semantic``)
 - InstanceLoss: pull / push / norm (``losses.instance``)
 - GeometryLoss: dir / cov / raw  (``losses.geometry``)
@@ -11,10 +11,6 @@ Combined losses:
 - Vista2DLoss: composes all three for image training
 - CosmosPredict3DLoss: composes all three + optional flow-consistency (3D)
 - CosmosTransfer3DLoss: composes all three + optional flow-consistency (3D)
-
-Legacy embedding losses (``losses.discriminative``):
-- CentroidEmbeddingLoss, SkeletonEmbeddingLoss
-- DiscriminativeLoss, DiscriminativeLossVectorized (aliases)
 """
 
 from neurons.losses.semantic import SemanticLoss

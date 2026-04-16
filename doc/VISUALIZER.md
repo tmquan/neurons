@@ -297,11 +297,11 @@ python -m neurons.visualizer \
     --seg data/cremi3d/sample_A.h5:volumes/labels/neuron_ids \
     --spacing 40,4,4
 
-# MICrONS — minnie65 crop (resolution 4x4x40 nm)
+# MICrONS — minnie65 crop (resolution 8x8x40 nm)
 python -m neurons.visualizer \
-    --raw data/microns/volume.h5 \
-    --seg data/microns/segmentation.h5 \
-    --spacing 40,4,4
+    --raw data/MICRONS/volume.h5 \
+    --seg data/MICRONS/segmentation.h5 \
+    --spacing 40,8,8
 
 # Raw volume only (no segmentation overlay)
 python -m neurons.visualizer \

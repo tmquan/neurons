@@ -65,7 +65,7 @@ Trainer.fit(module, datamodule)
 
 ## 3. Training Modes
 
-All three model families support the same two training modes:
+Training modes (proofread is currently Vista-only; Cosmos raises ``NotImplementedError``):
 
 - **automatic**: model sees only the image; predicts from scratch.
 - **proofread**: model receives extra context. Sub-modes:
@@ -554,5 +554,5 @@ Directiond + Covarianced → intensity augmentations → ToTensord.
 2. `modules/cosmospredict3d_module.py` or `modules/cosmostransfer3d_module.py`
   → `training_step`, `configure_optimizers` (differential LR)
 3. `losses/cosmospredict3d_losses.py` → feature-consistency loss
-4. `configs/snemi3d_microns.yaml` → example combined config with model selection
+4. `configs/combine.yaml` → example combined config with model selection
 

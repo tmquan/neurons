@@ -52,7 +52,7 @@ def _extract_spacing_hdf5(path: str) -> Optional[Tuple[float, ...]]:
     """Try to read spacing / resolution from HDF5 root attrs."""
     import h5py
     try:
-        with h5py.File(path, "r") as f:
+        with h5py.File(path, "r", locking=False) as f:
             for attr_name in ("spacing", "resolution", "voxel_size"):
                 if attr_name in f.attrs:
                     return tuple(float(v) for v in f.attrs[attr_name])

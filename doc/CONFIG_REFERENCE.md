@@ -11,13 +11,12 @@ Configs in `configs/` compose via Hydra `defaults`:
 
 ```
 configs/
-├── default.yaml          # Base: data, model, optimizer, loss, training, callbacks
-├── snemi3d.yaml         # SNEMI3D single-dataset
-├── snemi3d_microns.yaml # Combined SNEMI3D + MICRONS (CosmosTransfer3D)
-├── cremi3d.yaml
-├── microns.yaml
-├── combine.yaml
-└── profiler.yaml
+├── default.yaml     # Base: data, model, optimizer, loss, training, callbacks
+├── snemi3d.yaml     # SNEMI3D (CosmosTransfer3D)
+├── snemi2d.yaml     # SNEMI3D 2D slices (Vista2D)
+├── cremi3d.yaml     # CREMI3D
+├── microns.yaml     # MICrONS
+└── combine.yaml     # Combined SNEMI3D + Neurite11 + MICrONS
 ```
 
 Use `--config-name <name>` to select a config. Override any key via CLI:
@@ -29,7 +28,7 @@ Use `--config-name <name>` to select a config. Override any key via CLI:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `dataset` | str | `snemi3d` | `snemi3d`, `cremi3d`, `microns`, `combine` |
+| `dataset` | str | `snemi3d` | `snemi3d`, `cremi3d`, `microns`, `mitoem2`, `neurite`, `combine` |
 | `data_root` | str | `data` | Default root for volumes without explicit `root` |
 | `batch_size` | int | 4 | Per-GPU batch size |
 | `num_workers` | int | 16 | DataLoader workers per process |
@@ -148,7 +147,7 @@ Supported formats: HDF5, TIFF, NRRD, NIfTI (auto-detected by extension).
 | `num_sanity_val_steps` | int | 2 | Sanity check steps |
 | `log_every_n_steps` | int | 50 | Logging interval |
 | `benchmark` | bool | true | cudnn.benchmark |
-| `training_modes` | list | `[automatic]` | `automatic`, `proofread` |
+| `training_modes` | list | `[automatic]` | `automatic`, `proofread` (proofread: Vista only; Cosmos raises NotImplementedError) |
 
 ---
 
@@ -162,49 +161,24 @@ Checkpointing and early stopping keys live under `callbacks.checkpoint` and `cal
 
 ---
 
-## 8. snemi3d_microns Quick Reference
+## 8. combine Quick Reference
 
-The `snemi3d_microns` config trains CosmosTransfer3D on combined SNEMI3D + MICRONS:
+The `combine` config inherits `snemi3d` and adds Neurite11 + MICrONS volumes:
 
 ```yaml
-# Key overrides from default
+# Key additions over snemi3d
 data:
-  dataset: snemi3d
-  data_root: data/SNEMI3D
-  batch_size: 4
-  num_workers: 4
-  persistent_workers: false
-  cache_rate: 0.0
-  slice_mode: false
-  num_samples: 16000
-  patch_size: [48, 256, 256]
-  train_volumes: [...]  # SNEMI3D AC4 + 4 MICRONS crops
-  val_volumes: [...]     # SNEMI3D AC3 + 1 MICRONS crop
-
-model:
-  type: cosmostransfer3d
-  variant: "2B"
-  freeze_vae_encoder: true
-  freeze_dit_backbone: false
-  freeze_vae_decoder: false
-  gradient_checkpointing: true
-
-callbacks:
-  cuda_empty_cache_before_val: true
-
-optimizer:
-  lr: 2.0e-4
-  dit_backbone_lr: 2.0e-5
-  scheduler:
-    type: cosine_warmup
-    warmup_epochs: 5
-    T_max: 100
+  train_volumes:   # Neurite11 (30×6×6 nm) + 4 MICrONS crops (40×8×8 nm)
+  val_volumes:     # SNEMI3D AC4_thin + MICrONS test01
+  test_volumes:    # SNEMI3D AC4_thin + MICrONS test01
 ```
+
+Resolution zoom harmonises the different native resolutions.
 
 **Run:**
 
 ```bash
-python scripts/train.py --config-name snemi3d_microns
-python scripts/train.py --config-name snemi3d_microns data.batch_size=8 +ckpt_path=outputs/checkpoints/last.ckpt
-python scripts/train.py --config-name snemi3d_microns training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
+python scripts/train.py --config-name combine
+python scripts/train.py --config-name combine data.batch_size=8 +ckpt_path=outputs/checkpoints/last.ckpt
+python scripts/train.py --config-name combine training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
 ```

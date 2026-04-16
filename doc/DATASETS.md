@@ -1,6 +1,6 @@
 # Datasets
 
-This document describes the four connectomics datasets supported by the **neurons** codebase, their label semantics, and how they are unified through the combined datamodule.
+This document describes the six connectomics datasets supported by the **neurons** codebase, their label semantics, and how they are unified through the combined datamodule.
 
 ---
 
@@ -11,8 +11,8 @@ This document describes the four connectomics datasets supported by the **neuron
 | **Tissue** | Mouse somatosensory cortex |
 | **Modality** | Serial-section TEM (ssTEM) |
 | **Resolution** | 6 x 6 x 30 nm (anisotropic) |
-| **Volumes** | AC3 (test), AC4 (train) |
-| **Slices** | 100 per volume, 1024 x 1024 px |
+| **Volumes** | AC4 (train, EM + labels), AC3 (test, EM only — labels never released) |
+| **Slices** | AC4: 100, AC3: 100 (1024 x 1024 px) |
 | **Labels** | Neuron instance segmentation |
 | **Source** | [SNEMI3D Grand Challenge](https://snemi3d.grand-challenge.org/) |
 | **Reference** | Kasthuri et al. (2015) Cell 162(3) |
@@ -24,9 +24,41 @@ This document describes the four connectomics datasets supported by the **neuron
 | 0 | Background |
 | > 0 | Neuron instance ID |
 
+AC3/AC4 GCS coordinates (verified, OCP scale 1 = GCS mip0):
+  AC4: x=[4400,5424], y=[5440,6464], z=[1099,1199] — outside ground_truth cylinder.
+  AC3/AC4 segmentations were separate OCP annotation tokens (now offline).
+  Labels only available via snemi.zip from rhoana/Zenodo.
+
 **Download:**
 ```bash
-python scripts/download_snemi3d.py --output data/SNEMI3D
+# AC3 EM + AC4 EM/labels from snemi.zip
+python scripts/download_snemi3d.py --source snemi
+```
+
+### 1b. Neurite11 (SNEMI3D extended)
+
+Neurite11 (Kasthuri et al. 2015, "kasthuri11") is the **parent volume**
+of SNEMI3D — AC3 and AC4 are tiny 1024×1024×100 crops from it. The full
+volume is much larger (~10752×13312×1850) and has dense annotation
+(`ground_truth`) at exactly 6×6×30 nm, the same resolution as SNEMI3D.
+
+| Property | Value |
+|---|---|
+| **Tissue** | Mouse somatosensory cortex (same as SNEMI3D) |
+| **Resolution** | 6 x 6 x 30 nm (mip1, identical to SNEMI3D) |
+| **Full volume** | 10752 × 13312 × 1850 voxels (mip0) |
+| **Annotated cylinder** | ~5000 × 2900 × 300 voxels (X=3000–8000, Y=7200–10100, Z=950–1250) |
+| **Train crop** | 1 × 5000×2900×300 (full annotated cylinder) |
+| **Labels** | Neuron instances (`ground_truth`), synapses, vesicles, mito |
+| **Source** | [neuroglancer-public-data](gs://neuroglancer-public-data/kasthuri2011/) |
+
+**Download:**
+```bash
+# Probe volume info first
+python scripts/download_snemi3d.py --probe
+
+# Download (saved alongside AC3/AC4 in data/SNEMI3D/)
+python scripts/download_snemi3d.py --source neurite11
 ```
 
 ---
@@ -70,8 +102,8 @@ python scripts/download_cremi3d.py --output data/CREMI3D
 | **Modality** | Serial-section EM (ssEM) |
 | **Resolution** | 8 x 8 x 40 nm (mip 0, anisotropic) |
 | **Full volume** | ~175,104 x 108,544 x 21,056 voxels (~117 TB EM) |
-| **Train crops** | 9 × 1024×1024×2048 spanning 138K×56K×10K XYZ, ≥26K margin from seg edges |
-| **Test crops** | 2 × 1024×1024×2048 at gap positions in XY grid, disjoint from train |
+| **Train crops** | 4 × 4096×4096×800 at disjoint XY positions across dense-tissue region |
+| **Test crops** | 1 × 4096×4096×800 at center-left, upper-Y (disjoint from train) |
 | **Labels** | Dense neuron segmentation (proofread, ~200K cells, ~120K neurons) |
 | **Source** | [MICrONS Explorer](https://www.microns-explorer.org/) |
 | **Reference** | MICrONS Consortium (2021) bioRxiv |
@@ -94,11 +126,11 @@ python scripts/download_cremi3d.py --output data/CREMI3D
 
 **Download:**
 ```bash
-# Train (1024^3) + test (1024^3) from disjoint regions
+# All 5 splits (4 train + 1 test, 4096×4096×800 each)
 python scripts/download_microns.py --split --seg-version 1300
 
 # Custom single crop
-python scripts/download_microns.py --size 1024 1024 1024 --seg-version 1300
+python scripts/download_microns.py --size 4096 4096 800 --seg-version 1300
 
 # Multiple versions
 python scripts/download_microns.py --split --seg-version 117 1300
@@ -106,7 +138,37 @@ python scripts/download_microns.py --split --seg-version 117 1300
 
 ---
 
-## 4. MitoEM2
+## 4. Neurite (Kasthuri14 s1colEM)
+
+| Property | Value |
+|---|---|
+| **Tissue** | Mouse somatosensory cortex (S1), layer 4 |
+| **Modality** | Serial-section EM (sEM) |
+| **Resolution** | 2 x 2 x 10 nm (mip1, anisotropic) |
+| **Full volume** | 24576 x 16384 x 254 voxels (mip1) |
+| **Train crops** | 3 × 4096×4096×254 at Y=4096 + 1 × at Y=8192 (volume center) |
+| **Test crops** | 1 × 4096×4096×254 centered in top row (x=12288, Y=4096) |
+| **Labels** | Neuron instance segmentation |
+| **Source** | [Open Neurodata](https://open-neurodata.s3.amazonaws.com/kasthuri/kasthuri14s1colEM) |
+| **Reference** | Kasthuri et al. (2015) Cell 162(3) |
+
+**Label scheme** (2 classes):
+
+| Value | Class |
+|---|---|
+| 0 | Background |
+| > 0 | Neuron instance ID |
+
+**Download:**
+
+No automated download script is available yet. Image and segmentation
+volumes can be fetched manually via `cloud-volume` from the
+[Open Neurodata](https://open-neurodata.s3.amazonaws.com/kasthuri/kasthuri14s1colEM)
+S3 bucket (image at mip1, segmentation at mip0 then downsampled 2× in XY).
+
+---
+
+## 5. MitoEM2
 
 | Property | Value |
 |---|---|
@@ -154,7 +216,7 @@ When training on multiple datasets simultaneously via `CombineDataModule`, all n
 | Union ID | Class Name | Source Datasets |
 |---|---|---|
 | 0 | background | All datasets (native label 0) |
-| 1 | neuron | SNEMI3D (fg), CREMI3D (< 1M), MICrONS (fg) |
+| 1 | neuron | SNEMI3D (fg), CREMI3D (< 1M), MICrONS (fg), Neurite (fg) |
 | 2 | cleft | CREMI3D (1M -- 2M) |
 | 3 | mitochondria | CREMI3D (>= 2M), MitoEM2 (native 1) |
 | 4 | mito_boundary | MitoEM2 (native 2) |
@@ -182,6 +244,7 @@ combine = CombineDataModule(
 | SNEMI3D | `data/SNEMI3D/` |
 | CREMI3D | `data/CREMI3D/` |
 | MICrONS | `data/MICRONS/` |
+| Neurite | `data/NEURITE/` |
 | MitoEM2 | `data/MitoEM2/` |
 
 ## Memory-Efficient Volume Loading
@@ -236,13 +299,14 @@ cached instead of 100.  The DataLoader still iterates 100 steps per epoch, and
 random transforms (e.g. `RandCropByPosNegLabel`) produce different crops each
 time.
 
-This applies uniformly to all four datasets:
+This applies uniformly to all six datasets:
 
 | Dataset | 3D volume mode | Slice mode with `num_samples` |
 |---|---|---|
-| SNEMI3D | 1 entry, virtual len | N_slices entries, virtual len |
+| SNEMI3D (incl. Neurite11) | 1 entry, virtual len | N_slices entries, virtual len |
 | CREMI3D | 1 entry, virtual len | N/A (always 3D) |
 | MICrONS | 1 entry, virtual len | N_slices entries, virtual len |
+| Neurite (Kasthuri14) | 1 entry, virtual len | N_slices entries, virtual len |
 | MitoEM2 | per-volume entries, virtual len | per-slice entries, virtual len |
 
 ---
@@ -255,3 +319,4 @@ This applies uniformly to all four datasets:
 | `notebooks/02_explore_cremi3d.ipynb` | CREMI3D (samples A, B, C) |
 | `notebooks/03_explore_microns.ipynb` | MICrONS minnie65 (mip 0) |
 | `notebooks/04_explore_mitoem2.ipynb` | MitoEM2 (all 8 sub-datasets) |
+| `notebooks/05_explore_neurite.ipynb` | Neurite (Kasthuri14 s1colEM, mip1) |

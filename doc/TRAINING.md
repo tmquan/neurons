@@ -4,6 +4,10 @@ The training loop supports two modes that run **in the same step** on every batc
 When both are enabled the losses are averaged and a single backward pass updates all
 weights (backbone, task heads, and point prompt encoder together).
 
+> **Note:** Proofread mode is currently implemented for the **Vista** family only
+> (Vista3D / Vista2D).  The Cosmos modules (`BaseCosmosModule`) raise
+> `NotImplementedError` if proofread is enabled.
+
 All Lightning modules inherit from `BaseVistaModule` (Vista family) in
 `modules/vista.py` or `BaseCosmosModule` (Cosmos family) in `modules/cosmos.py`,
 which centralise the shared `training_step` / `validation_step` logic, target
@@ -371,7 +375,7 @@ Run a single epoch on one GPU to verify visualizations render correctly:
 
 ```bash
 env CUDA_VISIBLE_DEVICES='0' PYTHONPATH=$(pwd) python scripts/train.py \
-    --config-name snemi3d_microns \
+    --config-name snemi3d \
     training.max_epochs=1 \
     training.devices=1 \
     training.strategy=auto \
@@ -390,7 +394,7 @@ callback, and produces all visualization panels. Open TensorBoard at
 Multi-GPU training on 4 GPUs with default hyperparameters:
 
 ```bash
-env CUDA_VISIBLE_DEVICES='0,1,2,3' PYTHONPATH=$(pwd) python scripts/train.py --config-name snemi3d_microns
+env CUDA_VISIBLE_DEVICES='0,1,2,3' PYTHONPATH=$(pwd) python scripts/train.py --config-name combine
 ```
 
 ---
@@ -545,7 +549,7 @@ checkpoint via Hydra or PyTorch Lightning's `ckpt_path` mechanism:
 
 ```bash
 PYTHONPATH=$(pwd) python scripts/train.py \
-    --config-name snemi3d_microns \
+    --config-name combine \
     model.freeze_dit_backbone=false \
     optimizer.dit_backbone_lr=1.0e-5 \
     optimizer.scheduler.type=cosine_warmup \
@@ -618,7 +622,7 @@ config between runs without hitting state-dict mismatches.
 ```bash
 # Full resume (optimizer, LR schedule, epoch, global_step) — same config
 PYTHONPATH=$(pwd) python scripts/train.py \
-    --config-name snemi3d_microns \
+    --config-name snemi3d \
     training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
 ```
 
@@ -626,7 +630,7 @@ PYTHONPATH=$(pwd) python scripts/train.py \
 
 ```bash
 PYTHONPATH=$(pwd) python scripts/train.py \
-    --config-name snemi3d_microns \
+    --config-name snemi3d \
     +ckpt_path=outputs/checkpoints/last.ckpt
 ```
 

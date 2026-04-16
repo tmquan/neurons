@@ -14,6 +14,7 @@ from neurons.datasets.snemi3d import SNEMI3DDataset
 from neurons.datasets.cremi3d import CREMI3DDataset
 from neurons.datasets.microns import MICRONSDataset
 from neurons.datasets.mitoem2 import MitoEM2Dataset
+from neurons.datasets.neurite import NeuriteDataset
 
 __all__ = [
     "CircuitDataset",
@@ -22,4 +23,5 @@ __all__ = [
     "CREMI3DDataset",
     "MICRONSDataset",
     "MitoEM2Dataset",
+    "NeuriteDataset",
 ]

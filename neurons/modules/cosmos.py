@@ -9,8 +9,7 @@ scheduling and optimiser logic lives here.
 Supports two training modes that can be combined in a single step:
 
 - **automatic**: predict from the volume alone.
-- **proofread**: additional context via fractionary labels or interactive
-  point prompts.
+- **proofread**: (not yet implemented) additional context via point prompts.
 """
 
 import logging
@@ -90,6 +89,17 @@ class BaseCosmosModule(pl.LightningModule):
         loss_config = loss_config or {}
         training_config = self.training_config
 
+        disabled_heads: set = set()
+        if loss_config.get("weight_semantic", 1.0) == 0:
+            disabled_heads.add("semantic")
+        if loss_config.get("weight_instance", 1.0) == 0:
+            disabled_heads.add("instance")
+        if loss_config.get("weight_geometry", 1.0) == 0:
+            disabled_heads.add("geometry")
+        self._disabled_heads: frozenset = frozenset(disabled_heads)
+        if disabled_heads:
+            logger.info("Heads disabled (weight=0): %s", sorted(disabled_heads))
+
         self.model = self._model_cls(
             in_channels=model_config.get("in_channels", 1),
             num_classes=model_config.get("num_classes", 16),
@@ -105,6 +115,7 @@ class BaseCosmosModule(pl.LightningModule):
             cache_dir=model_config.get("cache_dir"),
             hf_token=model_config.get("hf_token"),
             dropout=model_config.get("dropout", 0.0),
+            disabled_heads=self._disabled_heads or None,
         )
 
         self.criterion = self._loss_cls(**loss_config)
@@ -219,48 +230,6 @@ class BaseCosmosModule(pl.LightningModule):
         return targets
 
     # ------------------------------------------------------------------
-    # Proofread helpers
-    # ------------------------------------------------------------------
-
-    def _get_proofread_sub_mode(self, targets: Dict[str, torch.Tensor]) -> str:
-        """Return ``"fractionary"`` for partial annotations, else ``"interactive"``."""
-        labels = targets["labels"]
-        has_ignore = (labels == self._ignore_index).any()
-        has_valid_fg = (labels > 0).any() & (labels != self._ignore_index).any()
-        if has_ignore and has_valid_fg:
-            return "fractionary"
-        return "interactive"
-
-    def _resolve_fractionary_labels(
-        self, targets: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        """Remap a fractionary-annotated patch to contiguous instance IDs."""
-        targets = dict(targets)
-        labels = targets["labels"]
-        unknown = labels == self._ignore_index
-
-        sem = targets["semantic_labels"].clone()
-        sem[unknown] = self._ignore_index
-        targets["semantic_labels"] = sem
-        targets["semantic_ids"] = sem
-
-        inst = labels.clone()
-        inst[unknown] = 0
-        known_ids = inst.unique()
-        known_ids = known_ids[known_ids > 0]
-        remap = torch.zeros(
-            int(known_ids.max().item()) + 1 if known_ids.numel() > 0 else 1,
-            dtype=torch.long, device=labels.device,
-        )
-        remap[known_ids] = torch.arange(1, known_ids.numel() + 1, device=labels.device)
-        inst = inst.contiguous()
-        flat = rearrange(inst, "... -> (...)")
-        mask = flat > 0
-        flat[mask] = remap[flat[mask]]
-        targets["labels"] = inst
-        return targets
-
-    # ------------------------------------------------------------------
     # Batch sanitisation
     # ------------------------------------------------------------------
 
@@ -290,22 +259,8 @@ class BaseCosmosModule(pl.LightningModule):
     def _run_proofread(
         self, images: torch.Tensor, targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
-        sub_mode = self._get_proofread_sub_mode(targets)
-        if sub_mode == "fractionary":
-            targets = self._resolve_fractionary_labels(targets)
-            targets.pop("_cached_weights", None)
-            predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
-        else:
-            from neurons.utils.point_sampling import sample_point_prompts
-            point_prompts = sample_point_prompts(
-                targets["semantic_labels"],
-                targets["labels"],
-                num_pos=self._num_pos_points,
-                num_neg=self._num_neg_points,
-                sample_mode=self._point_sample_mode,
-            )
-            predictions = self.model(images, point_prompts=point_prompts)
-        return self.criterion(predictions, targets)
+        """Proofread mode (VISTA3D-style point-prompt training)."""
+        raise NotImplementedError("Proofread training mode is not yet implemented.")
 
     # ------------------------------------------------------------------
     # Training step
@@ -333,11 +288,25 @@ class BaseCosmosModule(pl.LightningModule):
             if fn is None:
                 raise ValueError(f"Unknown training mode: {mode}")
             losses = getattr(self, fn)(images, targets)
+            if losses["loss"].isnan().any():
+                nan_keys = [k for k, v in losses.items()
+                            if isinstance(v, torch.Tensor) and v.isnan().any()]
+                logger.warning(
+                    "NaN in %s mode at step %d: keys=%s",
+                    mode, self.global_step, nan_keys,
+                )
             mode_losses.append(losses["loss"])
             for k, v in losses.items():
                 all_losses[f"train/{mode}/{k}"] = v
 
         total_loss = mode_losses[0] if len(mode_losses) == 1 else torch.stack(mode_losses).mean()
+
+        if total_loss.isnan().any() or total_loss.isinf().any():
+            logger.warning(
+                "NaN/Inf total loss at step %d — skipping backward.",
+                self.global_step,
+            )
+            return None
 
         for name, val in all_losses.items():
             self.log(name, val, on_step=False, on_epoch=True, batch_size=bs)
@@ -376,39 +345,56 @@ class BaseCosmosModule(pl.LightningModule):
         for name, val in losses.items():
             self._accum(f"{prefix}/{name}", val, bs)
 
-        sem_logits = predictions["semantic"]
-        active = getattr(self.criterion.semantic_loss, "active_classes", None)
-        if active is not None and active < sem_logits.shape[1]:
-            sem_logits = sem_logits[:, :active]
-        sem_gt = targets["semantic_labels"]
+        if "semantic" in predictions:
+            sem_logits = predictions["semantic"]
+            sem_loss = self.criterion.semantic_loss
+            active = getattr(sem_loss, "active_classes", None) if sem_loss is not None else None
+            if active is not None and active < sem_logits.shape[1]:
+                sem_logits = sem_logits[:, :active]
+            sem_gt = targets["semantic_labels"]
 
-        sem_mode = getattr(self.criterion.semantic_loss, "mode", "softmax")
-        if sem_mode == "sigmoid" and sem_logits.shape[1] == 1:
-            sem_pred = (sem_logits[:, 0].sigmoid() > 0.5).long()
-            n_cls = 2
-        else:
-            sem_pred = sem_logits.argmax(dim=1)
-            n_cls = sem_logits.shape[1]
+            sem_mode = getattr(sem_loss, "mode", "softmax") if sem_loss is not None else "softmax"
+            if sem_mode == "sigmoid" and sem_logits.shape[1] == 1:
+                sem_pred = (sem_logits[:, 0].sigmoid() > 0.5).long()
+                n_cls = 2
+            else:
+                sem_pred = sem_logits.argmax(dim=1)
+                n_cls = sem_logits.shape[1]
 
-        self._accum(f"{prefix}/sem_acc", reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
-        self._accum(f"{prefix}/sem_iou", compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
-        self._accum(f"{prefix}/sem_dice", compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls), bs)
+            self._accum(f"{prefix}/sem_acc", reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
+            self._accum(f"{prefix}/sem_iou", compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
+            self._accum(f"{prefix}/sem_dice", compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls), bs)
 
-        fg_mask = targets["labels"] > 0
-        if fg_mask.any():
-            ins_pred, _, _ = self.clusterer(predictions["instance"].float(), fg_mask)
-            ins_gt = targets["labels"]
+        if "instance" in predictions:
+            fg_mask = targets["labels"] > 0
+            if fg_mask.any():
+                ins_pred, _, _ = self.clusterer(predictions["instance"].float(), fg_mask)
+                ins_gt = targets["labels"]
 
-            self._accum(f"{prefix}/ins_ari", compute_per_batch_ari(ins_pred, ins_gt), bs)
-            self._accum(f"{prefix}/ins_ami", compute_per_batch_ami(ins_pred, ins_gt), bs)
-            voi = compute_per_batch_voi(ins_pred, ins_gt)
-            self._accum(f"{prefix}/ins_voi", voi.total, bs)
-            self._accum(f"{prefix}/ins_voi_split", voi.split, bs)
-            self._accum(f"{prefix}/ins_voi_merge", voi.merge, bs)
-            self._accum(f"{prefix}/ins_ted", compute_per_batch_ted(ins_pred, ins_gt), bs)
-            del ins_pred
+                self._accum(f"{prefix}/ins_ari", compute_per_batch_ari(ins_pred, ins_gt), bs)
+                self._accum(f"{prefix}/ins_ami", compute_per_batch_ami(ins_pred, ins_gt), bs)
+                voi = compute_per_batch_voi(ins_pred, ins_gt)
+                self._accum(f"{prefix}/ins_voi", voi.total, bs)
+                self._accum(f"{prefix}/ins_voi_split", voi.split, bs)
+                self._accum(f"{prefix}/ins_voi_merge", voi.merge, bs)
+                self._accum(f"{prefix}/ins_ted", compute_per_batch_ted(ins_pred, ins_gt), bs)
+                del ins_pred
+
+        # Geometry: regression sub-losses (dir/cov/raw) are already
+        # captured above via self.criterion → losses dict.  No extra
+        # discrete metrics apply to continuous geometry outputs.
 
         del predictions, losses
+
+    @torch.inference_mode()
+    def _eval_proofread_and_accumulate(
+        self,
+        batch: Dict[str, torch.Tensor],
+        prefix: str,
+        num_trials: int = 3,
+    ) -> None:
+        """Proofread evaluation (VISTA3D-style point-prompt dice)."""
+        raise NotImplementedError("Proofread evaluation is not yet implemented.")
 
     def _reduce_and_log_accum(self, prefix: str) -> None:
         """All-reduce accumulated metrics once and log epoch averages."""
@@ -461,6 +447,29 @@ class BaseCosmosModule(pl.LightningModule):
     # ------------------------------------------------------------------
     # Optimizer
     # ------------------------------------------------------------------
+
+    def configure_gradient_clipping(
+        self, optimizer, gradient_clip_val=None, gradient_clip_algorithm=None,
+    ) -> None:
+        """Clip gradients, zeroing any NaN/Inf grads first to protect weights."""
+        nan_count = 0
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                if p.grad is not None and (
+                    p.grad.isnan().any() or p.grad.isinf().any()
+                ):
+                    p.grad.zero_()
+                    nan_count += 1
+        if nan_count > 0:
+            logger.warning(
+                "Zeroed NaN/Inf gradients in %d parameters at step %d.",
+                nan_count, self.global_step,
+            )
+        self.clip_gradients(
+            optimizer,
+            gradient_clip_val=gradient_clip_val,
+            gradient_clip_algorithm=gradient_clip_algorithm,
+        )
 
     def configure_optimizers(self) -> Any:
         lr = self.optimizer_config.get("lr", 1e-4)

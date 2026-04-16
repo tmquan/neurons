@@ -106,7 +106,7 @@ def load_volume(
     if format in ("h5", "hdf5", "hdf"):
         import h5py
 
-        with h5py.File(path, "r") as f:
+        with h5py.File(path, "r", locking=False) as f:
             if key in f:
                 return f[key][:]
             else:
@@ -171,7 +171,7 @@ def save_volume(
     if format in ("h5", "hdf5", "hdf"):
         import h5py
 
-        with h5py.File(path, "w") as f:
+        with h5py.File(path, "w", locking=False) as f:
             f.create_dataset(key, data=data, compression=compression)
 
     elif format in ("tiff", "tif"):

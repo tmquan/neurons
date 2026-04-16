@@ -51,7 +51,7 @@ class _VolumeHandle:
 def _resolve_hdf5_key(path: Path) -> Optional[str]:
     """Find the first dataset key in an HDF5 file without loading data."""
     import h5py
-    with h5py.File(str(path), "r") as f:
+    with h5py.File(str(path), "r", locking=False) as f:
         for k in ("main", "data", "raw", "volume", "image", "label"):
             if k in f:
                 return k
@@ -68,7 +68,7 @@ def _get_shape(path: Path, key: Optional[str] = None) -> Tuple[int, ...]:
         import h5py
         if key is None:
             key = _resolve_hdf5_key(path)
-        with h5py.File(str(path), "r") as f:
+        with h5py.File(str(path), "r", locking=False) as f:
             return tuple(f[key].shape)
     elif suffix in (".tif", ".tiff"):
         import tifffile
@@ -93,7 +93,7 @@ def _get_h5_handle(path: str):
         _thread_local.h5_cache = cache
     handle = cache.get(path)
     if handle is None:
-        handle = h5py.File(path, "r", swmr=True)
+        handle = h5py.File(path, "r", swmr=True, locking=False)
         cache[path] = handle
     return handle
 
@@ -158,6 +158,11 @@ class LazyVolDataset(Dataset):
         num_samples: Virtual epoch length (random patches per epoch).
         normalize: Whether to normalize images to [0, 1] using per-volume
             min/max (pre-computed from metadata, not full load).
+        min_foreground: Minimum fraction of non-zero voxels in the label
+            patch.  When > 0, patches below this threshold are rejected
+            and re-sampled (up to ``max_foreground_retries`` attempts).
+        max_foreground_retries: Maximum re-sampling attempts before
+            accepting whatever patch was drawn.
     """
 
     def __init__(
@@ -169,6 +174,8 @@ class LazyVolDataset(Dataset):
         num_samples: int = 16000,
         normalize: bool = True,
         deterministic: bool = False,
+        min_foreground: float = 0.0,
+        max_foreground_retries: int = 50,
     ) -> None:
         super().__init__()
         self.root_dir = Path(root_dir)
@@ -177,6 +184,8 @@ class LazyVolDataset(Dataset):
         self.deterministic = deterministic
         self.num_samples = num_samples
         self.normalize = normalize
+        self.min_foreground = float(min_foreground)
+        self.max_foreground_retries = int(max_foreground_retries)
 
         self._handles: List[_VolumeHandle] = []
         self._cum_voxels: List[int] = []
@@ -190,8 +199,9 @@ class LazyVolDataset(Dataset):
         total = sum(np.prod(h.shape) for h in self._handles)
         logger.info(
             "LazyVolDataset: %d volumes, %s total voxels, "
-            "patch_size=%s, num_samples=%d, ~%.1f MB metadata",
+            "patch_size=%s, num_samples=%d, min_fg=%.0f%%, ~%.1f MB metadata",
             len(self._handles), f"{total:,}", patch_size, num_samples,
+            self.min_foreground * 100,
             len(self._handles) * 0.001,
         )
 
@@ -285,18 +295,40 @@ class LazyVolDataset(Dataset):
             return shape[1:]
         return shape
 
+    def _check_foreground(
+        self, handle: _VolumeHandle, crop_slices: Tuple[slice, ...],
+    ) -> bool:
+        """Return True if the label patch has enough foreground."""
+        if self.min_foreground <= 0 or handle.label_path is None:
+            return True
+        label = _read_patch(
+            handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
+        )
+        fg_frac = float(np.count_nonzero(label)) / label.size
+        return fg_frac >= self.min_foreground
+
     def __getitem__(self, index: int) -> Dict[str, Any]:
         seed = index if self.deterministic else index + int(torch.randint(0, 2**31, (1,)).item())
         rng = np.random.RandomState(seed)
         handle = self._pick_volume(index)
-
         spatial = self._spatial_shape(handle)
+
         crop_slices = self._random_patch_slices(spatial, rng)
         if len(handle.shape) > len(spatial):
-            crop_slices = (slice(None),) + crop_slices
+            full_slices = (slice(None),) + crop_slices
+        else:
+            full_slices = crop_slices
+
+        for _ in range(self.max_foreground_retries):
+            if self._check_foreground(handle, full_slices):
+                break
+            crop_slices = self._random_patch_slices(spatial, rng)
+            full_slices = ((slice(None),) + crop_slices
+                           if len(handle.shape) > len(spatial)
+                           else crop_slices)
 
         image = _read_patch(
-            handle.image_path, crop_slices, handle.image_key, dtype=np.float32,
+            handle.image_path, full_slices, handle.image_key, dtype=np.float32,
         )
 
         if self.normalize and handle.name in self._norm_params:
@@ -311,7 +343,7 @@ class LazyVolDataset(Dataset):
 
         if handle.label_path is not None:
             label = _read_patch(
-                handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
+                handle.label_path, full_slices, handle.label_key, dtype=np.int64,
             )
             sample["label"] = label
 

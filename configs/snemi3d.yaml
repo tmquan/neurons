@@ -1,91 +1,140 @@
 # SNEMI3D Configuration
-# Volumetric neuron segmentation (3D patches)
+# Trains CosmosTransfer3D on the SNEMI3D neuron EM dataset.
+#
+# Usage:
+#   python scripts/train.py --config-name snemi3d
+#   python scripts/train.py --config-name snemi3d data.batch_size=8
+#
+# Full resume (optimizer + epoch) after interruption:
+#   python scripts/train.py --config-name snemi3d \
+#     training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
 
 defaults:
   - default
 
-experiment_name: snemi3d_instance_seg
-project_name: neurons-snemi3d
+experiment_name: snemi3d
+project_name: neurons
+output_dir: outputs
 
 data:
   dataset: snemi3d
   data_root: data/SNEMI3D
   batch_size: 8
-  num_workers: 8
+  num_workers: 16
+  persistent_workers: true
   cache_rate: 0.0
+  pin_memory: true
   slice_mode: false
-  train_volumes:
-    - {vol: AC4_inputs, seg: AC4_labels}
-  test_volumes:
-    - {vol: AC3_inputs, seg: AC3_labels}
-  find_boundaries: 1.0  # Probability of zeroing boundary pixels (0.0=off, 0.5=50%, 1.0=always)
-  num_samples: 16000     # Number of random 3D crops per epoch (volume has 100 Z-slices)
+  num_samples: 16000
   patch_size: [48, 256, 256]
-    
+  find_boundaries: 1.0
+  pixel_size: [30, 6, 6]   # z, y, x in nm — SNEMI3D resolution
+  min_foreground: 0.80
+  resolution_zoom_prob: 0.00
+  resolution_zoom_range: [[30, 30], [6, 6], [6, 6]]
+  elastic_prob: 0.00
+  elastic_sigma_range: [5, 8]
+  elastic_magnitude_range: [50, 150]
+
+  train_volumes:
+    # AC4 (SNEMI3D train, 1024×1024×100, 401 instance IDs)
+    # Download: python scripts/download_snemi3d.py --source snemi
+    # Neurite11 full annotated cylinder (same 6×6×30 nm resolution)
+    # Download: python scripts/download_snemi3d.py --source neurite11
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+    - vol: neurite11_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurite11_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+  val_volumes:
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+    - vol: neurite11_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurite11_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+  test_volumes:
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+    - vol: neurite11_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurite11_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
 
 model:
-  type: vista3d
+  type: cosmostransfer3d
   in_channels: 1
   num_classes: 16
   emb_dim: 16
-  feature_size: 48
+  feature_size: 64
+  variant: "2B"
+  dtype: "bf16"
+  freeze_vae_encoder: true
+  freeze_dit_backbone: false
+  freeze_vae_decoder: false
+  gradient_checkpointing: false
   dropout: 0.2
 
-optimizer:
-  type: adamw
-  lr: 1.0e-4
-  weight_decay: 1.0e-5
-  scheduler:
-    type: cosine
-    T_max: 100
-    eta_min: 1.0e-6
-
-loss:
-  semantic_mode: sigmoid     # sigmoid (multi-label: mito inside neuron) or softmax (mutually exclusive)
-  weight_semantic: 1.0
-  weight_ce: 1.0
-  weight_iou: 1.0
-  weight_dice: 1.0
-  weight_instance: 1.0
-  weight_pull: 1.0
-  weight_push: 1.0
-  weight_norm: .01
-  delta_v: 0.5
-  delta_d: 1.5
-  weight_edge: 10.0
-  weight_bone: 10.0
-  weight_geometry: 1.0
-  dir_target: centroid         # skeleton (geometry-aware) or centroid
-  weight_dir: 1.0
-  weight_cov: 1.0
-  weight_raw: 1.0
-  loss_dir: smooth_l1          # smooth_l1 (robust offsets), mse, or l1
-  loss_cov: mse                # mse (Frobenius-norm), l1, or smooth_l1
-  loss_raw: l1                 # l1 (sharp reconstruction), mse, or smooth_l1
-  ignore_index: -100
+callbacks:
+  cuda_empty_cache_before_val: true
+  image_logger:
+    max_images: 8
 
 training:
   max_epochs: 100
-  accelerator: auto  # Options: cpu, gpu, tpu, auto
+  accelerator: auto
   devices: auto
-  strategy: ddp  # Explicit DDP for even GPU memory distribution
-  precision: bf16-mixed  # Options: 32-true, 16-mixed, bf16-mixed
+  strategy: ddp
+  precision: bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  val_check_interval: 1.0
-  limit_val_batches: 100
-  check_val_every_n_epoch: 1
+  limit_val_batches: 50
   num_sanity_val_steps: 2
   log_every_n_steps: 50
-  enable_progress_bar: true
-  enable_model_summary: true
-  deterministic: false
   benchmark: true
-  fast_dev_run: false
+  compile: false
   training_modes:
     - automatic
-  #   - proofread
-  # num_pos_points: 5
-  # num_neg_points: 5
-  # point_sample_mode: "instance"  # Options: class, instance
-  
+
+optimizer:
+  type: adamw
+  lr: 1e-4
+  dit_backbone_lr: 1e-4
+  weight_decay: 1.0e-4
+  scheduler:
+    type: cosine_warmup
+    warmup_epochs: 5
+    T_max: 100
+    eta_min: 1.0e-5
+
+loss:
+  semantic_mode: sigmoid
+  active_classes: 1
+  class_weights: [0.2]
+  label_smoothing: 0.0
+  weight_semantic: 1.0
+  weight_ce: 3.0
+  weight_iou: 0.0
+  weight_dice: 3.0
+  weight_instance: 1.0
+  weight_pull: 3.0
+  weight_push: 3.0
+  weight_norm: 0.01
+  delta_v: 0.5
+  delta_d: 1.0
+  normalize_embeddings: false
+  anchor_to_centroid: false
+  learned_task_weights: false
+  max_hard_pairs: 0
+  weight_edge: 10.0
+  weight_bone: 10.0
+  weight_geometry: 0.0
+  dir_target: centroid
+  weight_dir: 2.0
+  weight_cov: 2.0
+  weight_raw: 2.0
+  loss_dir: smooth_l1
+  loss_cov: smooth_l1
+  loss_raw: smooth_l1
+  ignore_index: -100

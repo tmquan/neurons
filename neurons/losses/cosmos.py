@@ -60,33 +60,50 @@ class BaseCombinedLoss(nn.Module):
 
         if learned_task_weights:
             import math
-            self.log_var_sem = nn.Parameter(torch.tensor(math.log(1.0 / max(weight_semantic, 1e-8))))
-            self.log_var_ins = nn.Parameter(torch.tensor(math.log(1.0 / max(weight_instance, 1e-8))))
-            self.log_var_geom = nn.Parameter(torch.tensor(math.log(1.0 / max(weight_geometry, 1e-8))))
+            self.log_var_sem = nn.Parameter(
+                torch.tensor(math.log(1.0 / max(weight_semantic, 1e-8))),
+                requires_grad=weight_semantic > 0,
+            )
+            self.log_var_ins = nn.Parameter(
+                torch.tensor(math.log(1.0 / max(weight_instance, 1e-8))),
+                requires_grad=weight_instance > 0,
+            )
+            self.log_var_geom = nn.Parameter(
+                torch.tensor(math.log(1.0 / max(weight_geometry, 1e-8))),
+                requires_grad=weight_geometry > 0,
+            )
 
-        self.semantic_loss = SemanticLoss(
-            mode=semantic_mode,
-            weight_ce=weight_ce,
-            weight_iou=weight_iou,
-            weight_dice=weight_dice,
-            class_weights=class_weights,
-            ignore_index=ignore_index,
-            active_classes=active_classes,
-            label_smoothing=label_smoothing,
+        self.semantic_loss: Optional[SemanticLoss] = (
+            SemanticLoss(
+                mode=semantic_mode,
+                weight_ce=weight_ce,
+                weight_iou=weight_iou,
+                weight_dice=weight_dice,
+                class_weights=class_weights,
+                ignore_index=ignore_index,
+                active_classes=active_classes,
+                label_smoothing=label_smoothing,
+            )
+            if weight_semantic > 0
+            else None
         )
-        self.instance_loss = InstanceLoss(
-            spatial_dims=self._SPATIAL_DIMS,
-            weight_pull=weight_pull,
-            weight_push=weight_push,
-            weight_norm=weight_norm,
-            weight_edge=weight_edge,
-            weight_bone=weight_bone,
-            delta_v=delta_v,
-            delta_d=delta_d,
-            normalize_embeddings=normalize_embeddings,
-            max_hard_pairs=max_hard_pairs,
-            anchor_to_centroid=anchor_to_centroid,
-            centroid_scale=centroid_scale,
+        self.instance_loss: Optional[InstanceLoss] = (
+            InstanceLoss(
+                spatial_dims=self._SPATIAL_DIMS,
+                weight_pull=weight_pull,
+                weight_push=weight_push,
+                weight_norm=weight_norm,
+                weight_edge=weight_edge,
+                weight_bone=weight_bone,
+                delta_v=delta_v,
+                delta_d=delta_d,
+                normalize_embeddings=normalize_embeddings,
+                max_hard_pairs=max_hard_pairs,
+                anchor_to_centroid=anchor_to_centroid,
+                centroid_scale=centroid_scale,
+            )
+            if weight_instance > 0
+            else None
         )
         self.geometry_loss: Optional[GeometryLoss] = (
             GeometryLoss(spatial_dims=self._SPATIAL_DIMS, **geom_kwargs)
@@ -100,10 +117,13 @@ class BaseCombinedLoss(nn.Module):
         targets: Optional[Dict[str, torch.Tensor]] = None,
     ):
         """Derive instance weights and geometry targets from label maps."""
-        ins_weights = self.instance_loss.compute_weights(labels)
+        if self.weight_instance > 0:
+            ins_weights = self.instance_loss.compute_weights(labels)
+        else:
+            ins_weights = (None, None)
 
         if (
-            self.geometry_loss is not None
+            self.weight_geometry > 0
             and targets is not None
             and "label_direction" in targets
             and "label_covariance" in targets
@@ -112,7 +132,7 @@ class BaseCombinedLoss(nn.Module):
                 targets["label_direction"],
                 targets["label_covariance"],
             )
-        elif self.geometry_loss is not None:
+        elif self.weight_geometry > 0:
             geom_targets = self.geometry_loss.compute_targets(labels)
         else:
             geom_targets = None
@@ -125,81 +145,91 @@ class BaseCombinedLoss(nn.Module):
         targets: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
         labels = targets["labels"]
+        device = labels.device
+        zero = torch.tensor(0.0, device=device)
         cached = targets.get("_cached_weights")
         if cached is not None:
             (w_edge, w_bone), geom_targets = cached
         else:
             (w_edge, w_bone), geom_targets = self._compute_targets(labels, targets)
 
-        sem = self.semantic_loss(
-            predictions["semantic"], targets["semantic_labels"],
-        )
+        if self.weight_semantic > 0 and "semantic" in predictions:
+            sem = self.semantic_loss(
+                predictions["semantic"], targets["semantic_labels"],
+            )
+        else:
+            sem = {"loss": zero, "ce": zero, "iou": zero, "dice": zero}
 
-        sem_ids = targets.get("semantic_ids")
-        if sem_ids is None:
-            sem_ids = predictions.get("semantic_ids")
+        if self.weight_instance > 0 and "instance" in predictions:
+            sem_ids = targets.get("semantic_ids")
+            if sem_ids is None:
+                sem_ids = predictions.get("semantic_ids")
+            ins = self.instance_loss(
+                predictions["instance"],
+                labels,
+                semantic_ids=sem_ids,
+                weight_edge=w_edge,
+                weight_bone=w_bone,
+            )
+        else:
+            ins = {"loss": zero, "pull": zero, "push": zero, "norm": zero}
 
-        ins = self.instance_loss(
-            predictions["instance"],
-            labels,
-            semantic_ids=sem_ids,
-            weight_edge=w_edge,
-            weight_bone=w_bone,
-        )
-
-        has_geom = self.geometry_loss is not None and "geometry" in predictions
-        geom_loss_val = None
-        if has_geom:
+        if self.weight_geometry > 0 and "geometry" in predictions:
             geom = self.geometry_loss(
                 predictions["geometry"],
                 labels,
                 raw_image=targets.get("raw_image"),
                 cached_targets=geom_targets,
             )
-            geom_loss_val = geom["loss"]
+        else:
+            geom = {"loss": zero, "dir": zero, "cov": zero, "raw": zero}
 
         if self.learned_task_weights:
-            w_sem = torch.exp(-self.log_var_sem)
-            w_ins = torch.exp(-self.log_var_ins)
-            total = (
-                w_sem * sem["loss"] + self.log_var_sem
-                + w_ins * ins["loss"] + self.log_var_ins
-            )
-            if has_geom:
+            total = zero.clone()
+            if self.weight_semantic > 0:
+                w_sem = torch.exp(-self.log_var_sem)
+                total = total + w_sem * sem["loss"] + self.log_var_sem
+            if self.weight_instance > 0:
+                w_ins = torch.exp(-self.log_var_ins)
+                total = total + w_ins * ins["loss"] + self.log_var_ins
+            if self.weight_geometry > 0:
                 w_geom = torch.exp(-self.log_var_geom)
-                total = total + w_geom * geom_loss_val + self.log_var_geom
+                total = total + w_geom * geom["loss"] + self.log_var_geom
         else:
             total = (
                 self.weight_semantic * sem["loss"]
                 + self.weight_instance * ins["loss"]
+                + self.weight_geometry * geom["loss"]
             )
-            if has_geom:
-                total = total + self.weight_geometry * geom_loss_val
 
-        out: Dict[str, torch.Tensor] = {
-            "loss_sem": sem["loss"],
-            "loss_sem/ce": sem["ce"],
-            "loss_sem/iou": sem["iou"],
-            "loss_sem/dice": sem["dice"],
-            "loss_ins": ins["loss"],
-            "loss_ins/pull": ins["pull"],
-            "loss_ins/push": ins["push"],
-            "loss_ins/norm": ins["norm"],
-        }
+        out: Dict[str, torch.Tensor] = {"loss": total}
 
-        if has_geom:
+        if self.weight_semantic > 0:
+            out["loss_sem"] = sem["loss"]
+            out["loss_sem/ce"] = sem["ce"]
+            out["loss_sem/iou"] = sem["iou"]
+            out["loss_sem/dice"] = sem["dice"]
+
+        if self.weight_instance > 0:
+            out["loss_ins"] = ins["loss"]
+            out["loss_ins/pull"] = ins["pull"]
+            out["loss_ins/push"] = ins["push"]
+            out["loss_ins/norm"] = ins["norm"]
+
+        if self.weight_geometry > 0:
             out["loss_geom"] = geom["loss"]
             out["loss_geom/dir"] = geom["dir"]
             out["loss_geom/cov"] = geom["cov"]
             out["loss_geom/raw"] = geom["raw"]
 
         if self.learned_task_weights:
-            out["eff_w/sem"] = torch.exp(-self.log_var_sem).detach()
-            out["eff_w/ins"] = torch.exp(-self.log_var_ins).detach()
-            if has_geom:
+            if self.weight_semantic > 0:
+                out["eff_w/sem"] = torch.exp(-self.log_var_sem).detach()
+            if self.weight_instance > 0:
+                out["eff_w/ins"] = torch.exp(-self.log_var_ins).detach()
+            if self.weight_geometry > 0:
                 out["eff_w/geom"] = torch.exp(-self.log_var_geom).detach()
 
-        out["loss"] = total
         return out
 
 
@@ -306,10 +336,11 @@ class BaseCombinedLossWithConsistency(BaseCombinedLoss):
         out = super().forward(predictions, targets)
         total = out["loss"]
 
-        if self.semantic_loss.weight_iou <= 0:
-            out.pop("loss_sem/iou", None)
-        if self.semantic_loss.weight_dice <= 0:
-            out.pop("loss_sem/dice", None)
+        if self.semantic_loss is not None:
+            if self.semantic_loss.weight_iou <= 0:
+                out.pop("loss_sem/iou", None)
+            if self.semantic_loss.weight_dice <= 0:
+                out.pop("loss_sem/dice", None)
 
         if (
             self.weight_flow_consistency > 0

@@ -1,11 +1,8 @@
 """
 Cosmos-Predict2.5 **3D** Lightning Module for volumetric segmentation training.
 
-Supports two training modes (combinable in a single step):
-
-- **automatic**: predict from the volume alone.
-- **proofread**: additional context via fractionary labels or interactive
-  point prompts.
+Currently supports **automatic** mode only (predict from the volume alone).
+Proofread mode is reserved but not yet implemented (raises ``NotImplementedError``).
 
 Includes :meth:`compatibility_check` to verify that the selected 2B / 14B
 variant can handle 3-D input within memory constraints.

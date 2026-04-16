@@ -46,6 +46,13 @@ class MICRONSDataModule(CircuitDataModule):
         persistent_workers: bool = True,
         find_boundaries: float = 0.0,
         pixel_size: Optional[Tuple[float, ...]] = None,
+        min_foreground: float = 0.0,
+        compute_geometry: bool = True,
+        elastic_prob: float = 0.0,
+        elastic_sigma_range: Tuple[float, float] = (35.0, 50.0),
+        elastic_magnitude_range: Tuple[float, float] = (10.0, 40.0),
+        resolution_zoom_prob: float = 0.0,
+        resolution_zoom_range: Optional[Tuple[Tuple[float, float], ...]] = None,
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
@@ -64,6 +71,13 @@ class MICRONSDataModule(CircuitDataModule):
             persistent_workers=persistent_workers,
             find_boundaries=find_boundaries,
             pixel_size=pixel_size,
+            min_foreground=min_foreground,
+            compute_geometry=compute_geometry,
+            elastic_prob=elastic_prob,
+            elastic_sigma_range=elastic_sigma_range,
+            elastic_magnitude_range=elastic_magnitude_range,
+            resolution_zoom_prob=resolution_zoom_prob,
+            resolution_zoom_range=resolution_zoom_range,
         )
 
     @property
@@ -89,6 +103,7 @@ class MICRONSDataModule(CircuitDataModule):
         from neurons.datasets.lazy import LazyVolDataset
 
         num_samples = self.num_samples or 16000
+        read_size = self._effective_read_size()
 
         if stage == "fit" or stage is None:
             train_vols = self.train_volumes or []
@@ -96,9 +111,10 @@ class MICRONSDataModule(CircuitDataModule):
                 self.train_dataset = LazyVolDataset(
                     root_dir=self.data_root,
                     volumes=train_vols,
-                    patch_size=self.patch_size,
+                    patch_size=read_size,
                     transform=self.get_train_transforms(),
                     num_samples=num_samples,
+                    min_foreground=self.min_foreground,
                 )
             val_vols = self.val_volumes or train_vols
             if val_vols:
@@ -108,6 +124,7 @@ class MICRONSDataModule(CircuitDataModule):
                     patch_size=self.patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
+                    min_foreground=self.min_foreground,
                 )
 
         if stage == "test" or stage is None:
@@ -119,6 +136,7 @@ class MICRONSDataModule(CircuitDataModule):
                     patch_size=self.patch_size,
                     transform=self.get_val_transforms(),
                     num_samples=num_samples,
+                    min_foreground=self.min_foreground,
                 )
 
         logger.info("MICRONSDataModule: using LazyVolDataset (~0 MB base RAM per rank)")

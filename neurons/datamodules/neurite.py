@@ -1,33 +1,33 @@
 """
-MitoEM2 DataModule for PyTorch Lightning.
+Neurite DataModule for PyTorch Lightning.
 
 Uses :class:`LazyVolDataset` for 3D patch mode and the legacy
-:class:`MitoEM2Dataset` for 2D slice mode.
+:class:`NeuriteDataset` for 2D slice mode.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 from neurons.datamodules.base import CircuitDataModule
-from neurons.datasets.mitoem2 import MitoEM2Dataset
+from neurons.datasets import NeuriteDataset
 
 logger = logging.getLogger(__name__)
 
 
-class MitoEM2DataModule(CircuitDataModule):
+class NeuriteDataModule(CircuitDataModule):
     """
-    PyTorch Lightning DataModule for MitoEM2 dataset.
+    PyTorch Lightning DataModule for Neurite dataset.
 
     In 3D patch mode (``slice_mode=False`` with ``patch_size``), uses
     :class:`LazyVolDataset` for on-demand disk reads.
 
     Args:
-        train_volumes: e.g. ``[{"subdataset": "Dataset001_ME2-Beta"}]``
-        test_volumes: e.g. ``[{"subdataset": "Dataset001_ME2-Beta", "img_dir": "imagesTs"}]``
+        train_volumes: e.g. ``[{"vol": "train_volume", "seg": "train_seg"}]``
+        test_volumes: e.g. ``[{"vol": "test_volume", "seg": "test_seg"}]``
         slice_mode: Return 2D slices if True (default: True).
     """
 
-    dataset_class = MitoEM2Dataset
+    dataset_class = NeuriteDataset
 
     def __init__(
         self,
@@ -36,9 +36,9 @@ class MitoEM2DataModule(CircuitDataModule):
         num_workers: int = 4,
         cache_rate: float = 0.5,
         pin_memory: bool = True,
-        image_size: Optional[Tuple[int, ...]] = None,
-        patch_size: Optional[Union[Tuple[int, ...], List[int]]] = None,
+        image_size: Optional[tuple] = None,
         slice_mode: bool = True,
+        patch_size: Optional[Tuple[int, int, int]] = None,
         num_samples: Optional[int] = None,
         train_volumes: Optional[List[Dict[str, str]]] = None,
         val_volumes: Optional[List[Dict[str, str]]] = None,
@@ -56,6 +56,7 @@ class MitoEM2DataModule(CircuitDataModule):
     ) -> None:
         self.slice_mode = slice_mode
         self.num_samples = num_samples
+        self.save_hyperparameters()
         super().__init__(
             data_root=data_root,
             batch_size=batch_size,
@@ -84,7 +85,10 @@ class MitoEM2DataModule(CircuitDataModule):
         return not self.slice_mode and self.patch_size is not None
 
     def _get_dataset_kwargs(self) -> dict:
-        kwargs: dict = {"slice_mode": self.slice_mode}
+        kwargs: dict = {
+            "slice_mode": self.slice_mode,
+            "patch_size": self.patch_size,
+        }
         if self.num_samples is not None:
             kwargs["num_samples"] = self.num_samples
         return kwargs
@@ -135,4 +139,4 @@ class MitoEM2DataModule(CircuitDataModule):
                     min_foreground=self.min_foreground,
                 )
 
-        logger.info("MitoEM2DataModule: using LazyVolDataset (~0 MB base RAM per rank)")
+        logger.info("NeuriteDataModule: using LazyVolDataset (~0 MB base RAM per rank)")

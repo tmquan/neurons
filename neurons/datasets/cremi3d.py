@@ -163,7 +163,7 @@ class CREMI3DDataset(CircuitDataset):
         try:
             import h5py
 
-            with h5py.File(h5_path, "r") as f:
+            with h5py.File(h5_path, "r", locking=False) as f:
                 if "volumes/raw" in f:
                     image = f["volumes/raw"][:]
                 elif "raw" in f:
@@ -210,7 +210,7 @@ class CREMI3DDataset(CircuitDataset):
         import h5py
 
         def load_h5(path: Path) -> Optional[np.ndarray]:
-            with h5py.File(path, "r") as f:
+            with h5py.File(path, "r", locking=False) as f:
                 def find_dataset(group: Any) -> Optional[np.ndarray]:
                     for key in group.keys():
                         if isinstance(group[key], h5py.Dataset):

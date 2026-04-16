@@ -10,6 +10,7 @@ from neurons.datamodules.snemi3d import SNEMI3DDataModule
 from neurons.datamodules.cremi3d import CREMI3DDataModule
 from neurons.datamodules.microns import MICRONSDataModule
 from neurons.datamodules.mitoem2 import MitoEM2DataModule
+from neurons.datamodules.neurite import NeuriteDataModule
 from neurons.datamodules.combine import (
     CombineDataModule,
     UNION_LABEL_MAP,
@@ -23,6 +24,7 @@ __all__ = [
     "CREMI3DDataModule",
     "MICRONSDataModule",
     "MitoEM2DataModule",
+    "NeuriteDataModule",
     "CombineDataModule",
     "UNION_LABEL_MAP",
     "UNION_LABEL_NAMES",

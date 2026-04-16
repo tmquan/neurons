@@ -1,0 +1,62 @@
+# Combined SNEMI3D + Neurite11 + MICrONS Configuration
+# Inherits everything from snemi3d.yaml, adds MICrONS volumes.
+#
+# Native resolutions (all share 5:1 Z:XY anisotropy):
+#   SNEMI3D / Neurite11: 30×6×6 nm    MICrONS: 40×8×8 nm
+#
+# Resolution zoom harmonises all to 30–40 nm Z, 6–8 nm XY.
+#
+# Volumes (download_snemi3d.py --source all, download_microns.py --split):
+#   train: AC4 + Neurite11 + MICrONS train01–04
+#   val:   SNEMI3D AC4_thin + MICrONS test01
+#   test:  SNEMI3D AC4_thin + MICrONS test01
+#
+# Usage:
+#   python scripts/train.py --config-name combine
+
+defaults:
+  - snemi3d
+
+experiment_name: combine
+project_name: neurons-combined
+
+data:
+  train_volumes:
+    - vol: neurite11_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurite11_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+
+    # --- MICrONS (40×8×8 nm, 4096×4096×800 crops) ---
+    - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
+      seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
+      seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
+      seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
+      seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+      root: data/MICRONS
+
+  val_volumes:
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+
+    - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+      seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+      root: data/MICRONS
+
+  test_volumes:
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+
+    - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+      seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+      root: data/MICRONS

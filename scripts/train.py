@@ -64,6 +64,7 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     from neurons.datamodules import (
         CREMI3DDataModule,
         CombineDataModule,
+        NeuriteDataModule,
         MICRONSDataModule,
         MitoEM2DataModule,
         SNEMI3DDataModule,
@@ -98,6 +99,17 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         "test_volumes": test_volumes,
         "find_boundaries": float(data_cfg.get("find_boundaries", 0.0)),
         "pixel_size": pixel_size,
+        "min_foreground": float(data_cfg.get("min_foreground", 0.0)),
+        "compute_geometry": float(cfg.get("loss", {}).get("weight_geometry", 0.0)) > 0,
+        "elastic_prob": float(data_cfg.get("elastic_prob", 0.0)),
+        "elastic_sigma_range": tuple(data_cfg.get("elastic_sigma_range", [35, 50])),
+        "elastic_magnitude_range": tuple(data_cfg.get("elastic_magnitude_range", [10, 40])),
+        "resolution_zoom_prob": float(data_cfg.get("resolution_zoom_prob", 0.0)),
+        "resolution_zoom_range": (
+            tuple(tuple(r) for r in data_cfg.get("resolution_zoom_range"))
+            if data_cfg.get("resolution_zoom_range") is not None
+            else None
+        ),
     }
 
     image_size = data_cfg.get("image_size")
@@ -126,6 +138,15 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     elif dataset_type == "microns":
         patch_size = data_cfg.get("patch_size")
         return MICRONSDataModule(
+            slice_mode=data_cfg.get("slice_mode", True),
+            num_samples=data_cfg.get("num_samples"),
+            patch_size=tuple(patch_size) if patch_size else None,
+            **common_args,
+        )
+
+    elif dataset_type == "neurite":
+        patch_size = data_cfg.get("patch_size")
+        return NeuriteDataModule(
             slice_mode=data_cfg.get("slice_mode", True),
             num_samples=data_cfg.get("num_samples"),
             patch_size=tuple(patch_size) if patch_size else None,
@@ -432,8 +453,7 @@ def main(cfg: DictConfig) -> None:
     use_compile = cfg.get("training", {}).get("compile", False)
     if strategy_name == "ddp":
         strategy = DDPStrategy(
-            find_unused_parameters=False,
-            static_graph=True,
+            find_unused_parameters=True,
             gradient_as_bucket_view=not use_compile,
         )
     elif strategy_name == "fsdp":

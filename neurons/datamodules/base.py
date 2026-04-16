@@ -12,6 +12,7 @@ from monai.transforms import (
     Compose,
     EnsureChannelFirstd,
     EnsureTyped,
+    Rand3DElasticd,
     RandAdjustContrastd,
     RandFlipd,
     RandGaussianNoised,
@@ -24,7 +25,7 @@ from monai.transforms import (
 from neurons.datasets.base import CircuitDataset
 from neurons.transforms import (
     FindBoundariesd, Labeld, Directiond, Covarianced,
-    RandSpatialCropForegroundd,
+    RandSpatialCropForegroundd, RandResolutionZoomd,
 )
 
 
@@ -40,9 +41,15 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
 
     Pipeline order (train)::
 
-        EnsureChannelFirst → [Pad + Crop + instance_transforms]
-        → spatial augmentations → geometry_transforms
-        → semantic_transforms → intensity augmentations → EnsureType
+        EnsureChannelFirst → [FindBoundaries]
+        → [Pad + Crop(safe_size)] → [ResolutionZoom] → [CenterCrop(patch_size)]
+        → spatial augmentations (flip/rot90/elastic)
+        → instance_transforms (CC-relabel) → intensity augmentations
+        → geometry_transforms → EnsureType
+
+    When resolution zoom can downsample (zoom < 1), an enlarged *safe*
+    crop is taken first so the zoom's center-crop/pad never introduces
+    zero-padded edges into the final patch.
 
     Args:
         data_root: Path to the data directory.
@@ -77,6 +84,11 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         find_boundaries: float = 0.0,
         min_foreground: float = 0.0,
         pixel_size: Optional[Tuple[float, ...]] = None,
+        elastic_prob: float = 0.0,
+        elastic_sigma_range: Tuple[float, float] = (35.0, 50.0),
+        elastic_magnitude_range: Tuple[float, float] = (10.0, 40.0),
+        resolution_zoom_prob: float = 0.0,
+        resolution_zoom_range: Optional[Tuple[Tuple[float, float], ...]] = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -96,6 +108,15 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
         self.find_boundaries = float(find_boundaries)
         self.min_foreground = float(min_foreground)
         self.pixel_size = tuple(pixel_size) if pixel_size is not None else None
+        self.elastic_prob = float(elastic_prob)
+        self.elastic_sigma_range = tuple(elastic_sigma_range)
+        self.elastic_magnitude_range = tuple(elastic_magnitude_range)
+        self.resolution_zoom_prob = float(resolution_zoom_prob)
+        self.resolution_zoom_range = (
+            tuple(tuple(r) for r in resolution_zoom_range)
+            if resolution_zoom_range is not None
+            else None
+        )
 
         self.train_dataset: Optional[CircuitDataset] = None
         self.val_dataset: Optional[CircuitDataset] = None
@@ -121,19 +142,104 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
     # Label-target transform hooks  (override to customise)
     # ------------------------------------------------------------------
 
+    def _effective_read_size(self) -> Optional[tuple]:
+        """Patch size that LazyVolDataset should read from disk.
+
+        Returns ``_safe_patch_size()`` when extra margin is needed for
+        zoom-out, otherwise ``self.patch_size``.  Callers that create
+        ``LazyVolDataset`` should use this so the volume data entering
+        the transform pipeline is large enough for the safe-crop /
+        zoom / center-crop sequence to produce a zero-padding-free
+        output.
+        """
+        return self._safe_patch_size() or self.patch_size
+
+    def _safe_patch_size(self) -> Optional[tuple]:
+        """Enlarged crop size that stays fully valid after worst-case zoom.
+
+        When the resolution zoom can downsample (zoom < 1), the zoomed
+        volume is smaller and ``_zoom_volume`` zero-pads the borders.
+        By cropping to a larger *safe* size first, applying the zoom,
+        then center-cropping to the final ``patch_size``, the output
+        contains only valid data.
+
+        Returns ``None`` when no extra margin is needed (zoom >= 1 for
+        every axis, or zoom is disabled).
+        """
+        if (
+            self.patch_size is None
+            or self.resolution_zoom_prob <= 0
+            or self.pixel_size is None
+            or self._get_spatial_dims() != 3
+        ):
+            return None
+
+        import math
+        from neurons.transforms.resolution_zoom import DEFAULT_TARGET_RANGE
+
+        target_range = self.resolution_zoom_range or DEFAULT_TARGET_RANGE
+
+        safe = []
+        needs_margin = False
+        for d in range(len(self.patch_size)):
+            min_zoom = self.pixel_size[d] / target_range[d][1]
+            if min_zoom < 1.0:
+                safe.append(math.ceil(self.patch_size[d] / min_zoom))
+                needs_margin = True
+            else:
+                safe.append(self.patch_size[d])
+
+        return tuple(safe) if needs_margin else None
+
+    def _resolution_zoom_transforms(self, spatial_dims: int) -> list:
+        """Random resolution zoom (rescale to simulate different voxel size).
+
+        Inserted between the safe crop and the final center crop so that
+        only valid (non-padded) voxels reach the model.
+        """
+        if (
+            spatial_dims != 3
+            or self.resolution_zoom_prob <= 0
+            or self.pixel_size is None
+        ):
+            return []
+        target_range = self.resolution_zoom_range
+        kwargs: dict = {
+            "keys": ["image", "label"],
+            "native_resolution": self.pixel_size,
+            "prob": self.resolution_zoom_prob,
+        }
+        if target_range is not None:
+            kwargs["target_range"] = target_range
+        return [RandResolutionZoomd(**kwargs)]
+
     def _original_transforms(self, spatial_dims: int) -> list:
         """Spatial augmentations applied to both image and label.
 
-        Flips and rotations.  Override to customise augmentation strategy.
+        Flips, 90-degree rotations, and (3-D only) elastic deformation.
+        Elastic uses a high sigma for a sparse, smooth displacement field.
+        Override to customise augmentation strategy.
         """
         io_keys = ["image", "label"]
         rot_axes = (0, 1) if spatial_dims == 2 else (1, 2)
-        return [
+        xforms: list = [
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=0),
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=1),
             RandFlipd(keys=io_keys, prob=0.5, spatial_axis=2 if spatial_dims == 3 else 1),
             RandRotate90d(keys=io_keys, prob=0.5, spatial_axes=rot_axes),
         ]
+        if spatial_dims == 3 and self.elastic_prob > 0:
+            xforms.append(
+                Rand3DElasticd(
+                    keys=io_keys,
+                    sigma_range=self.elastic_sigma_range,
+                    magnitude_range=self.elastic_magnitude_range,
+                    prob=self.elastic_prob,
+                    mode=("bilinear", "nearest"),
+                    padding_mode="reflection",
+                ),
+            )
+        return xforms
 
     def _semantic_transforms(self, spatial_dims: int) -> list:
         """Image intensity augmentations and semantic-level label transforms.
@@ -195,7 +301,31 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
                 ),
             )
 
-        if self.patch_size is not None:
+        safe_size = self._safe_patch_size()
+
+        if safe_size is not None:
+            # Crop to a larger safe patch, zoom, then center-crop to final
+            # size so that downsampled patches contain no zero-padded edges.
+            transforms.append(SpatialPadd(keys=io_keys, spatial_size=safe_size))
+            if self.min_foreground > 0:
+                transforms.append(
+                    RandSpatialCropForegroundd(
+                        keys=io_keys,
+                        spatial_size=safe_size,
+                        label_key="label",
+                        min_foreground=self.min_foreground,
+                    )
+                )
+            else:
+                transforms.append(
+                    RandSpatialCropd(keys=io_keys, roi_size=safe_size, random_size=False),
+                )
+            transforms.extend(self._resolution_zoom_transforms(sd))
+            transforms.append(
+                CenterSpatialCropd(keys=io_keys, roi_size=self.patch_size),
+            )
+
+        elif self.patch_size is not None:
             transforms.append(SpatialPadd(keys=io_keys, spatial_size=self.patch_size))
             if self.min_foreground > 0:
                 transforms.append(
@@ -210,6 +340,8 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
                 transforms.append(
                     RandSpatialCropd(keys=io_keys, roi_size=self.patch_size, random_size=False),
                 )
+            transforms.extend(self._resolution_zoom_transforms(sd))
+
         elif self.image_size is not None:
             transforms.append(
                 Resized(keys=io_keys, spatial_size=self.image_size, mode=["bilinear", "nearest"]),
@@ -217,8 +349,8 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
 
         transforms.extend([
             *self._original_transforms(sd),
-            *self._semantic_transforms(sd),
             *self._instance_transforms(sd),
+            *self._semantic_transforms(sd),
             *self._geometry_transforms(sd),
             EnsureTyped(keys=self._output_keys()),
         ])

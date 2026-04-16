@@ -440,9 +440,11 @@ class _DecoderAdapter3D(nn.Module):
         temporal_compression: int,
         dropout: float = 0.0,
         freeze_vae_decoder: bool = False,
+        disabled_heads: Optional[frozenset] = None,
     ) -> None:
         super().__init__()
         self._has_pretrained = vae_decoder is not None
+        self._disabled_heads: frozenset = disabled_heads or frozenset()
 
         if vae_decoder is not None:
             self.to_latent = _PointwiseLinear(feature_size, latent_channels)
@@ -476,6 +478,11 @@ class _DecoderAdapter3D(nn.Module):
             nn.ReLU(inplace=True), nn.Dropout3d(dropout),
             _CONV(64, geom_channels, 1),
         )
+
+        for name in self._disabled_heads:
+            head = getattr(self, f"head_{name}", None)
+            if head is not None:
+                head.requires_grad_(False)
 
     def _replace_conv_out(self) -> int:
         for attr in ("conv_out", "output_conv", "proj_out", "final_conv"):
@@ -535,11 +542,14 @@ class _DecoderAdapter3D(nn.Module):
             decoded = F.interpolate(
                 decoded, size=target_size, mode="trilinear", align_corners=False,
             )
-        return {
-            "semantic": self.head_semantic(decoded),
-            "instance": self.head_instance(decoded),
-            "geometry": self.head_geometry(decoded),
-        }
+        out: Dict[str, torch.Tensor] = {}
+        if "semantic" not in self._disabled_heads:
+            out["semantic"] = self.head_semantic(decoded)
+        if "instance" not in self._disabled_heads:
+            out["instance"] = self.head_instance(decoded)
+        if "geometry" not in self._disabled_heads:
+            out["geometry"] = self.head_geometry(decoded)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +612,7 @@ class CosmosTransfer3DWrapper(nn.Module):
         cache_dir: Optional[str] = None,
         hf_token: Optional[str] = None,
         dropout: float = 0.0,
+        disabled_heads: Optional[frozenset] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -665,6 +676,7 @@ class CosmosTransfer3DWrapper(nn.Module):
         if self._backend in ("diffusers", "cosmos_transfer2"):
             self._register_persistent_hooks()
 
+        self._disabled_heads: frozenset = disabled_heads or frozenset()
         self.decoder_adapter = _DecoderAdapter3D(
             vae_decoder=self.vae_decoder,
             latent_channels=self.cfg.latent_channels,
@@ -676,11 +688,13 @@ class CosmosTransfer3DWrapper(nn.Module):
             temporal_compression=self.cfg.temporal_compression,
             dropout=dropout,
             freeze_vae_decoder=freeze_vae_decoder,
+            disabled_heads=self._disabled_heads,
         )
-        self.decoder_adapter.to_latent.float()
-        self.decoder_adapter.head_semantic.float()
-        self.decoder_adapter.head_instance.float()
-        self.decoder_adapter.head_geometry.float()
+        if self.decoder_adapter.to_latent is not None:
+            self.decoder_adapter.to_latent.float()
+        for head_name in ("semantic", "instance", "geometry"):
+            if head_name not in self._disabled_heads:
+                getattr(self.decoder_adapter, f"head_{head_name}").float()
 
         self.point_encoder = PointPromptEncoder(
             num_classes=num_classes,
@@ -1210,12 +1224,32 @@ class CosmosTransfer3DWrapper(nn.Module):
         features = features.to(dtype=original_dtype)
 
         if point_prompts is not None:
+            feat_shape = features.shape[2:]
+            input_shape = (D_in, H_in, W_in)
+            scale = torch.tensor(
+                [fs / max(ins, 1) for fs, ins in zip(feat_shape, input_shape)],
+                device=features.device, dtype=torch.float,
+            )
+            clamp_hi = torch.tensor(
+                [fs - 1 for fs in feat_shape],
+                device=features.device, dtype=torch.long,
+            )
+
+            def _rescale(pts_list):
+                out = []
+                for pts in pts_list:
+                    if pts.numel() == 0:
+                        out.append(pts)
+                    else:
+                        out.append((pts.float() * scale).long().clamp(max=clamp_hi))
+                return out
+
             features = features + self.point_encoder(
-                pos_points=point_prompts["pos_points"],
-                neg_points=point_prompts["neg_points"],
+                pos_points=_rescale(point_prompts["pos_points"]),
+                neg_points=_rescale(point_prompts["neg_points"]),
                 target_semantic_ids=point_prompts["target_semantic_ids"],
                 target_instance_ids=point_prompts["target_instance_ids"],
-                spatial_shape=features.shape[2:],
+                spatial_shape=feat_shape,
             )
 
         out = self.decoder_adapter(features, target_size=(D_in, H_in, W_in))

@@ -12,7 +12,7 @@ A modular, extensible PyTorch Lightning-based infrastructure for connectomics re
 
 ## Features
 
-- **Multi-Dataset Support** — SNEMI3D, CREMI3D, MICRONS, MitoEM2, and combined multi-dataset training with unified label space
+- **Multi-Dataset Support** — SNEMI3D, CREMI3D, MICrONS, MitoEM2, Neurite, and combined multi-dataset training with unified label space
 - **Vista Architecture** — Vista3D and Vista2D with semantic + instance dual heads
 - **Cosmos Foundation Models** — CosmosPredict3D and CosmosTransfer3D (DiT + VAE from NVIDIA)
 - **Model Zoo** — Vista3D backbone via MONAI (SegResNet fallback)
@@ -98,17 +98,17 @@ jupyter notebook notebooks/01_explore_snemi3d.ipynb
 ### 2. Train a segmentation model
 
 ```bash
-# Vista3D on SNEMI3D (lightweight, from scratch)
+# CosmosTransfer3D on SNEMI3D
 python scripts/train.py --config-name snemi3d
 
-# CosmosTransfer3D on combined SNEMI3D + MICRONS (recommended for large-scale)
-python scripts/train.py --config-name snemi3d_microns
+# CosmosTransfer3D on combined SNEMI3D + Neurite11 + MICrONS
+python scripts/train.py --config-name combine
 ```
 
 ### 3. Override parameters via CLI
 
 ```bash
-python scripts/train.py --config-name snemi3d_microns \
+python scripts/train.py --config-name combine \
     data.batch_size=8 \
     training.max_epochs=200 \
     optimizer.lr=5e-4
@@ -117,8 +117,7 @@ python scripts/train.py --config-name snemi3d_microns \
 ### 4. Train with combined datasets
 
 ```bash
-python scripts/train.py --config-name snemi3d_microns   # SNEMI3D + MICRONS
-python scripts/train.py --config-name combine           # Multi-dataset Vista3D
+python scripts/train.py --config-name combine   # SNEMI3D + Neurite11 + MICrONS
 ```
 
 ### 5. Resume from a previous checkpoint
@@ -126,14 +125,14 @@ python scripts/train.py --config-name combine           # Multi-dataset Vista3D
 **Full resume** (same config — restores optimizer, LR schedule, epoch, step):
 
 ```bash
-python scripts/train.py --config-name snemi3d_microns \
+python scripts/train.py --config-name snemi3d \
     training.resume_from_checkpoint=outputs/checkpoints/last.ckpt
 ```
 
 **Warm-start** (weights only — use when changing freeze/LR/architecture):
 
 ```bash
-python scripts/train.py --config-name snemi3d_microns \
+python scripts/train.py --config-name snemi3d \
     +ckpt_path=outputs/checkpoints/last.ckpt
 ```
 
@@ -148,23 +147,23 @@ python scripts/train.py training.fast_dev_run=true
 ### 7. Visualize volumes
 
 ```bash
-# SNEMI3D (AC4 training volume, resolution 6x6x30 nm)
+# SNEMI3D (AC4 training volume, resolution 6×6×30 nm)
 python -m neurons.visualizer \
-    --raw data/snemi3d/AC4_inputs.h5 \
-    --seg data/snemi3d/AC4_labels.h5 \
+    --raw data/SNEMI3D/AC4_inputs.h5 \
+    --seg data/SNEMI3D/AC4_labels.h5 \
     --spacing 30,6,6
 
-# CREMI3D (sample A)
+# CREMI3D (sample A, resolution 4×4×40 nm)
 python -m neurons.visualizer \
-    --raw data/cremi3d/sample_A.h5:volumes/raw \
-    --seg data/cremi3d/sample_A.h5:volumes/labels/neuron_ids \
+    --raw data/CREMI3D/sample_A.h5:volumes/raw \
+    --seg data/CREMI3D/sample_A.h5:volumes/labels/neuron_ids \
     --spacing 40,4,4
 
-# MICrONS
+# MICrONS (resolution 8×8×40 nm)
 python -m neurons.visualizer \
-    --raw data/microns/volume.h5 \
-    --seg data/microns/segmentation.h5 \
-    --spacing 40,4,4
+    --raw data/MICRONS/volume.h5 \
+    --seg data/MICRONS/segmentation.h5 \
+    --spacing 40,8,8
 ```
 
 Opens a web viewer at `http://localhost:8899` with 4-panel layout (axial, coronal, sagittal, 3D Gaussian splats). Add `--no-browser` to skip auto-opening.
@@ -172,7 +171,7 @@ Opens a web viewer at `http://localhost:8899` with 4-panel layout (axial, corona
 ### 8. Profile training
 
 ```bash
-python scripts/train.py --config-name profiler
+python scripts/train.py --config-name snemi3d training.profiler=simple
 ```
 
 ## Configuration
@@ -183,13 +182,10 @@ All behavior is driven by YAML configs in `configs/`. See [doc/CONFIG_REFERENCE.
 |--------|-------------|
 | `default.yaml` | Base configuration with all defaults |
 | `snemi2d.yaml` | SNEMI3D 2D slice segmentation (Vista2D) |
-| `snemi3d.yaml` | SNEMI3D 3D volumetric segmentation (Vista3D) |
+| `snemi3d.yaml` | SNEMI3D 3D volumetric segmentation (CosmosTransfer3D) |
 | `cremi3d.yaml` | CREMI3D multi-class segmentation |
-| `microns.yaml` | MICRONS large-scale connectomics |
-| `combine.yaml` | Multi-dataset Vista3D training |
-| `snemi3d_microns.yaml` | CosmosTransfer3D on combined SNEMI3D + MICRONS (recommended) |
-| `foundation.yaml` | Foundation model (all datasets) |
-| `profiler.yaml` | Profiling configuration |
+| `microns.yaml` | MICrONS large-scale connectomics |
+| `combine.yaml` | Combined SNEMI3D + Neurite11 + MICrONS training |
 
 ## Training
 

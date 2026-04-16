@@ -12,7 +12,7 @@ log_dir: logs
 
 # Data configuration
 data:
-  dataset: snemi3d  # Options: snemi3d, cremi3d, microns, combine
+  dataset: snemi3d  # Options: snemi3d, cremi3d, microns, mitoem2, neurite, combine
   data_root: data
   batch_size: 4
   num_workers: 16
@@ -22,6 +22,11 @@ data:
   slice_mode: true
   num_samples: null
   find_boundaries: 0.0
+  elastic_prob: 0.0            # probability of 3-D elastic deformation (0 = off)
+  elastic_sigma_range: [35, 50]       # Gaussian smoothing σ — high = sparse, smooth warp
+  elastic_magnitude_range: [10, 40]   # displacement magnitude range (kept low for gentle warps)
+  resolution_zoom_prob: 0.0   # probability of random resolution zoom (0 = off)
+  resolution_zoom_range: null # per-axis [[z_min,z_max],[y_min,y_max],[x_min,x_max]] in nm; null = [30,40],[6,8],[6,8]
   # Keep false on multi-GPU jobs if host RAM is tight (each rank × num_workers processes).
   persistent_workers: true
   train_volumes: null  # List of {vol, seg} dicts; null = dataset defaults
@@ -77,10 +82,6 @@ loss:
 training:
   training_modes:
     - automatic
-    - proofread
-  num_pos_points: 5
-  num_neg_points: 5
-  point_sample_mode: "instance"  # Options: class, instance
   max_epochs: 100
   accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: auto

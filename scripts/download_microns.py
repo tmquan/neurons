@@ -35,33 +35,27 @@ Crop size estimates (mip0, uint8 EM + uint64 seg, uncompressed):
   2048³ =   8 GB EM +  64 GB seg  =   72 GB total
   4096³ =  64 GB EM + 512 GB seg  =  576 GB total
 
-Pre-defined splits (12 total: 10 train + 2 test, all 1024x1024x2048):
-  Arranged in 5-col x 2-row XY grid (train) + 2 gap positions (test).
-  Z varies across crops for cortical-layer diversity (Z=16500..24500).
-  All disjoint, >=26K margin from seg X/Y edges, >=1300 from Z edges.
+Pre-defined splits (5 total: 4 train + 1 test, all 4096x4096x800):
+  Large disjoint regions at different XY positions and cortical depths.
 
-  train01: ( 53000,  67000, 16500)    train06: ( 53000, 122000, 21000)
-  train02: ( 87000,  67000, 17000)    train07: ( 87000, 122000, 21500)
-  train03: (122000,  67000, 18000)    train08: (122000, 122000, 22500)
-  train04: (156000,  67000, 19000)    train09: (156000, 122000, 23500)
-  train05: (190000, 122000, 24500)
-  test01:  ( 70000,  95000, 20000)    test02:  (139000,  95000, 21000)
+  train01: ( 50000,  60000, 16000)   4096x4096x800  -- left, mid-Y
+  train02: (110000,  60000, 18000)   4096x4096x800  -- right, mid-Y
+  train03: ( 80000,  70000, 16500)   4096x4096x800  -- center, mid-Y
+  train04: (140000,  80000, 17500)   4096x4096x800  -- far right, upper-Y
+  test01:  ( 70000,  90000, 17000)   4096x4096x800  -- center-left, upper-Y
 
 File naming encodes coordinates:
-  minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_volume.h5
-  minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_v1300_segmentation.h5
+  minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume.h5
+  minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation.h5
 
 Uses cloud-volume to fetch from AWS / Google Cloud public buckets.
 
 Usage:
-    # Default: EM + seg v1300, 128^3 crop
-    python scripts/download_microns.py
+    # Download all 5 pre-defined 4096x4096x800 splits (4 train + 1 test)
+    python scripts/download_microns.py --split
 
     # Custom size and version
-    python scripts/download_microns.py --size 1024 1024 2048 --seg-version 1300
-
-    # Download all 11 pre-defined splits (9 train + 2 test)
-    python scripts/download_microns.py --split
+    python scripts/download_microns.py --size 4096 4096 800 --seg-version 1300
 
     # All four segmentation versions
     python scripts/download_microns.py --seg-version all
@@ -104,22 +98,17 @@ SEG_VERSIONS: Dict[int, str] = {
 DEFAULT_SEG_VERSION = 1300
 
 # Pre-defined splits in disjoint regions of the minnie65 volume.
-# Coordinates are (X, Y, Z) in mip0 voxels.  All 1024 x 1024 x 2048.
+# Coordinates are (X, Y, Z) in mip0 voxels.  All 4096 x 4096 x 800.
 #
-# 9 train crops + 2 test crops, all 1024x1024x2048, disjoint.
-# Z varies across crops for cortical-layer diversity (16500..24500).
+# 4 train + 1 test, all 4096x4096x800, disjoint.
+# All within the dense-tissue region (Y ≈ 50k–95k, X ≈ 40k–150k).
+_SZ = (4096, 4096, 800)
 SPLITS: Dict[str, Dict[str, Tuple[int, int, int]]] = {
-    "train01": {"start": (53000, 67000, 16500), "size": (1024, 1024, 2048)},
-    "train02": {"start": (87000, 67000, 17000), "size": (1024, 1024, 2048)},
-    "train03": {"start": (122000, 67000, 18000), "size": (1024, 1024, 2048)},
-    "train04": {"start": (156000, 67000, 19000), "size": (1024, 1024, 2048)},
-    "train05": {"start": (190000, 122000, 24500), "size": (1024, 1024, 2048)},
-    "train06": {"start": (53000, 122000, 21000), "size": (1024, 1024, 2048)},
-    "train07": {"start": (87000, 122000, 21500), "size": (1024, 1024, 2048)},
-    "train08": {"start": (122000, 122000, 22500), "size": (1024, 1024, 2048)},
-    "train09": {"start": (156000, 122000, 23500), "size": (1024, 1024, 2048)},
-    "test01": {"start": (70000, 95000, 20000), "size": (1024, 1024, 2048)},
-    "test02": {"start": (139000, 95000, 21000), "size": (1024, 1024, 2048)},
+    "train01": {"start": (50000,  60000, 16000), "size": _SZ},
+    "train02": {"start": (110000, 60000, 18000), "size": _SZ},
+    "train03": {"start": (80000,  70000, 16500), "size": _SZ},
+    "train04": {"start": (140000, 80000, 17500), "size": _SZ},
+    "test01":  {"start": (70000,  90000, 17000), "size": _SZ},
 }
 
 TRAIN_SPLITS = [k for k in SPLITS if k.startswith("train")]
@@ -180,15 +169,15 @@ def make_name(
     """Build coordinate-based file name.
 
     Examples:
-        make_name("volume", 0, (1024,1024,2048), (53000, 67000, 16500))
-        -> "minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_volume.h5"
+        make_name("volume", 0, (4096,4096,800), (50000, 60000, 16000))
+        -> "minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume.h5"
 
-        make_name("segmentation", 0, (1024,1024,2048), (53000, 67000, 16500), seg_version=1300)
-        -> "minnie65_mip0_1024x1024x2048_x53000_y67000_z16500_v1300_segmentation.h5"
+        make_name("segmentation", 0, (4096,4096,800), (50000, 60000, 16000), seg_version=1300)
+        -> "minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation.h5"
     """
     x, y, z = start
     sx, sy, sz = crop_size
-    size_tag = str(sx) if sx == sy == sz else f"{sx}x{sy}x{sz}"
+    size_tag = f"{sx}x{sy}x{sz}"
     base = f"minnie65_mip{mip}_{size_tag}_x{x}_y{y}_z{z}"
     if seg_version:
         base = f"{base}_v{seg_version}"
@@ -207,8 +196,8 @@ def main() -> None:
         help="Output directory (default: data/MICRONS)",
     )
     parser.add_argument(
-        "--size", type=int, nargs=3, default=[128, 128, 128],
-        help="Crop size in X Y Z (default: 128 128 128)",
+        "--size", type=int, nargs=3, default=[4096, 4096, 800],
+        help="Crop size in X Y Z (default: 4096 4096 800)",
     )
     parser.add_argument(
         "--start", type=int, nargs=3, default=[140000, 100000, 20000],
@@ -229,8 +218,8 @@ def main() -> None:
     parser.add_argument(
         "--split", action="store_true",
         help=(
-            "Download all 11 pre-defined splits (9 train + 2 test) from "
-            "disjoint 1024x1024x2048 regions. Ignores --size and --start when set."
+            "Download all 5 pre-defined 4096x4096x800 splits (4 train + 1 test) from "
+            "disjoint regions. Ignores --size and --start when set."
         ),
     )
     args = parser.parse_args()

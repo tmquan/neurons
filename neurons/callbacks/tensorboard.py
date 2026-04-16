@@ -1,11 +1,9 @@
 """
 TensorBoard image logger callback.
 
-Logs visual grids at the end of each training epoch for both automatic
-and proofread modes:
+Logs visual grids at the end of each training epoch for automatic mode:
   raw image, instance label, semantic prediction,
-  instance embedding (PCA-projected), geometry channels (dir / cov / raw),
-  and point prompt overlay (proofread only).
+  instance embedding (PCA-projected), geometry channels (dir / cov / raw).
 
 Works for both 2-D slices and 3-D volumes (takes a central slice).
 """
@@ -437,68 +435,74 @@ def _log_predictions(
     Returns:
         [n, 3, H, W] grayscale image repeated to RGB (for prompt overlay).
     """
-    sem = _to_2d(preds["semantic"][:n])
-    if active_classes is not None and active_classes < sem.shape[1]:
-        sem = sem[:, :active_classes]
-    inst = _to_2d(preds["instance"][:n])
-    geom = _to_2d(preds["geometry"][:n])
-
     S = spatial_dims
     ch_dir = S
     ch_cov = S * S
 
     img_gray = _normalise(images).expand(-1, 3, -1, -1).contiguous()
     lbl_rgb = _label_to_rgb(labels.long())
-    if sem.shape[1] == 1:
-        sem_fg = sem[:, :1].sigmoid()
-        sem_ids = (sem_fg[:, 0] > 0.5).long()
-    else:
-        sem_ids = sem.argmax(dim=1)
-        sem_fg = sem[:, :2].softmax(dim=1)[:, 1:]
-    sem_gray = repeat(sem_fg, "b 1 h w -> b 3 h w")
-    inst_rgb = _pca_project(inst, n_components=3)
-
-    fg_mask_pred = (sem_ids > 0).long()
-
-    g_dir_rgb = _render_dir_quiver(
-        geom[:, :ch_dir], img_gray, fg_mask_pred, S, dir_target=dir_target,
-    )
-
-    cov_val = geom[:, ch_dir:ch_dir + ch_cov]                     # [n, S*S, H, W]
-    cov_mat = rearrange(cov_val, "b (s1 s2) h w -> b h w s1 s2", s1=S, s2=S)
-    g_cov_rgb = _render_cov_glyphs(cov_mat, img_gray, fg_mask_pred, S)
-
-    g_raw = geom[:, ch_dir + ch_cov:]
-    g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
 
     tb.add_images(f"{tag}/image", img_gray, global_step=epoch)
     tb.add_images(f"{tag}/label", lbl_rgb, global_step=epoch)
-    tb.add_images(f"{tag}/semantic", sem_gray, global_step=epoch)
-    tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
 
-    if clusterer is not None:
-        fg_mask_pred = sem_ids > 0
-        if inst.dim() == 5:
-            fg_mask_full = rearrange(
-                _to_2d(rearrange(fg_mask_pred, "b ... -> b 1 ...")),
-                "b 1 ... -> b ...",
-            )
+    sem_fg = None
+    if "semantic" in preds:
+        sem = _to_2d(preds["semantic"][:n])
+        if active_classes is not None and active_classes < sem.shape[1]:
+            sem = sem[:, :active_classes]
+        if sem.shape[1] == 1:
+            sem_fg = sem[:, :1].sigmoid()
+            sem_ids = (sem_fg[:, 0] > 0.5).long()
         else:
-            fg_mask_full = fg_mask_pred
-        fg_input = (rearrange(fg_mask_full, "b ... -> b 1 ...")
-                    if fg_mask_full.dim() == 3 else fg_mask_full)
-        ins_pred, _, _ = clusterer(inst, fg_input)
-        if ins_pred.dim() > 3:
-            ins_pred = rearrange(
-                _to_2d(rearrange(ins_pred, "b ... -> b 1 ...")),
-                "b 1 ... -> b ...",
-            )
-        ins_rgb = _label_to_rgb(ins_pred.long()) * sem_fg
-        tb.add_images(f"{tag}/instance_pred", ins_rgb, global_step=epoch)
+            sem_ids = sem.argmax(dim=1)
+            sem_fg = sem[:, :2].softmax(dim=1)[:, 1:]
+        sem_gray = repeat(sem_fg, "b 1 h w -> b 3 h w")
+        tb.add_images(f"{tag}/semantic", sem_gray, global_step=epoch)
 
-    tb.add_images(f"{tag}/geometry_dir_{dir_target}", g_dir_rgb, global_step=epoch)
-    tb.add_images(f"{tag}/geometry_cov", g_cov_rgb, global_step=epoch)
-    tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
+    if "instance" in preds:
+        inst = _to_2d(preds["instance"][:n])
+        inst_rgb = _pca_project(inst, n_components=3)
+        tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
+
+        if clusterer is not None:
+            if sem_fg is not None:
+                fg_mask_pred = sem_ids > 0
+                fg_alpha = sem_fg
+            else:
+                fg_mask_pred = labels > 0
+                fg_alpha = fg_mask_pred.unsqueeze(1).float()
+            if inst.dim() == 5:
+                fg_mask_full = rearrange(
+                    _to_2d(rearrange(fg_mask_pred, "b ... -> b 1 ...")),
+                    "b 1 ... -> b ...",
+                )
+            else:
+                fg_mask_full = fg_mask_pred
+            fg_input = (rearrange(fg_mask_full, "b ... -> b 1 ...")
+                        if fg_mask_full.dim() == 3 else fg_mask_full)
+            ins_pred, _, _ = clusterer(inst, fg_input)
+            if ins_pred.dim() > 3:
+                ins_pred = rearrange(
+                    _to_2d(rearrange(ins_pred, "b ... -> b 1 ...")),
+                    "b 1 ... -> b ...",
+                )
+            ins_rgb = _label_to_rgb(ins_pred.long()) * fg_alpha
+            tb.add_images(f"{tag}/instance_pred", ins_rgb, global_step=epoch)
+
+    if "geometry" in preds:
+        geom = _to_2d(preds["geometry"][:n])
+        fg_mask_pred = (sem_ids > 0).long() if "semantic" in preds else (labels > 0).long()
+        g_dir_rgb = _render_dir_quiver(
+            geom[:, :ch_dir], img_gray, fg_mask_pred, S, dir_target=dir_target,
+        )
+        cov_val = geom[:, ch_dir:ch_dir + ch_cov]
+        cov_mat = rearrange(cov_val, "b (s1 s2) h w -> b h w s1 s2", s1=S, s2=S)
+        g_cov_rgb = _render_cov_glyphs(cov_mat, img_gray, fg_mask_pred, S)
+        g_raw = geom[:, ch_dir + ch_cov:]
+        g_raw_rgb = g_raw[:, :3].clamp(0.0, 1.0)
+        tb.add_images(f"{tag}/geometry_dir_{dir_target}", g_dir_rgb, global_step=epoch)
+        tb.add_images(f"{tag}/geometry_cov", g_cov_rgb, global_step=epoch)
+        tb.add_images(f"{tag}/geometry_raw", g_raw_rgb, global_step=epoch)
 
     return img_gray
 
@@ -511,13 +515,10 @@ class ImageLogger(pl.Callback):
     """Log sample images to TensorBoard at the end of every *n*-th epoch.
 
     Logs visualisations for both **training** and **validation** batches
-    using **automatic** mode (image-only forward).  When the module has
-    ``"proofread"`` in its ``training_modes``, training visualisations
-    also include proofread mode with sampled point prompts.
+    using **automatic** mode (image-only forward).
 
     Tag prefixes:
       - ``train_vis_automatic/``   — training batch, automatic mode
-      - ``train_vis_proofread/``   — training batch, proofread mode
       - ``val_vis_automatic/``     — validation batch, automatic mode
 
     Args:
@@ -630,7 +631,6 @@ class ImageLogger(pl.Callback):
         try:
             self._run_visualization(
                 tb, pl_module, self._val_batch, prefix="val_vis",
-                include_proofread=False,
             )
         finally:
             self._val_batch = None
@@ -639,7 +639,6 @@ class ImageLogger(pl.Callback):
 
     def _run_visualization(
         self, tb, pl_module, batch, *, prefix: str = "train_vis",
-        include_proofread: bool = True,
     ):
         epoch = pl_module.current_epoch
         device_type = str(pl_module.device).split(":")[0]
@@ -678,42 +677,4 @@ class ImageLogger(pl.Callback):
         )
         del preds_auto
 
-        # --- Proofread mode (only for training, when enabled) ---
-        if not include_proofread:
-            return
-
-        training_modes = getattr(pl_module, "training_modes", [])
-        if "proofread" not in training_modes:
-            return
-
-        from neurons.utils.point_sampling import sample_point_prompts
-
-        with torch.no_grad(), torch.amp.autocast(device_type=device_type, enabled=torch.cuda.is_available()):
-            sem_labels = (labels[:n] > 0).long()
-            point_prompts = sample_point_prompts(
-                sem_labels, labels[:n],
-                num_pos=getattr(pl_module, "_num_pos_points", 5),
-                num_neg=getattr(pl_module, "_num_neg_points", 5),
-                sample_mode=getattr(pl_module, "_point_sample_mode", "class"),
-            )
-            preds_proof = pl_module.model(images[:n], point_prompts=point_prompts)
-
-        preds_proof = {k: v.float() if isinstance(v, torch.Tensor) and v.is_floating_point() else v for k, v in preds_proof.items()}
-
-        img_gray = _log_predictions(
-            tb, f"{prefix}_proofread", images_2d, labels_2d,
-            preds_proof, self.spatial_dims, n, epoch,
-            clusterer=clusterer, dir_target=dir_target,
-            active_classes=active_classes,
-        )
-        del preds_proof
-
-        center_d = images.shape[2] // 2 if self.spatial_dims == 3 else None
-        overlay = _draw_points_on_image(
-            img_gray,
-            point_prompts["pos_points"],
-            point_prompts["neg_points"],
-            spatial_dims=self.spatial_dims,
-            center_depth=center_d,
-        )
-        tb.add_images(f"{prefix}_proofread/prompt_overlay", overlay, global_step=epoch)
+        # --- Proofread mode visualization (not yet implemented) ---
