@@ -19,14 +19,14 @@ output_dir: outputs
 data:
   dataset: snemi3d
   data_root: data/SNEMI3D
-  batch_size: 8
+  batch_size: 4
   num_workers: 16
   persistent_workers: true
   cache_rate: 0.0
   pin_memory: true
   slice_mode: false
   num_samples: 16000
-  patch_size: [80, 400, 400]
+  patch_size: [100, 512, 512]
   find_boundaries: 1.0
   pixel_size: [30, 6, 6]   # z, y, x in nm — SNEMI3D resolution
   min_foreground: 0.80
@@ -89,7 +89,7 @@ training:
   precision: bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  limit_val_batches: 50
+  limit_val_batches: 100
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   benchmark: true
@@ -100,7 +100,7 @@ training:
 optimizer:
   type: adamw
   lr: 2e-4
-  dit_backbone_lr: 1e-5
+  dit_backbone_lr: 2e-5
   weight_decay: 1.0e-4
   scheduler:
     type: cosine_warmup
