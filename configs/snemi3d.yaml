@@ -19,22 +19,22 @@ output_dir: outputs
 data:
   dataset: snemi3d
   data_root: data/SNEMI3D
-  batch_size: 4
-  num_workers: 16
+  batch_size: 8
+  num_workers: 12
   persistent_workers: true
   cache_rate: 0.0
   pin_memory: true
   slice_mode: false
   num_samples: 16000
-  patch_size: [100, 512, 512]
+  patch_size: [64, 256, 256]
   find_boundaries: 1.0
   pixel_size: [30, 6, 6]   # z, y, x in nm — SNEMI3D resolution
   min_foreground: 0.80
   resolution_zoom_prob: 0.00
   resolution_zoom_range: [[30, 30], [6, 6], [6, 6]]
-  elastic_prob: 1.00
-  elastic_sigma_range: [5, 8]
-  elastic_magnitude_range: [50, 150]
+  # elastic_prob: 0.00
+  # elastic_sigma_range: [5, 8]
+  # elastic_magnitude_range: [50, 150]
 
   train_volumes:
     # AC4 (SNEMI3D train, 1024×1024×100, 401 instance IDs)
@@ -89,7 +89,7 @@ training:
   precision: bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  limit_val_batches: 100
+  limit_val_batches: 50
   num_sanity_val_steps: 2
   log_every_n_steps: 50
   benchmark: true
@@ -114,26 +114,26 @@ loss:
   class_weights: [0.2]
   label_smoothing: 0.0
   weight_semantic: 1.0
-  weight_ce: 3.0
+  weight_ce: 1.0
   weight_iou: 0.0
-  weight_dice: 3.0
+  weight_dice: 1.0
   weight_instance: 1.0
-  weight_pull: 3.0
-  weight_push: 3.0
-  weight_norm: 0.01
+  weight_pull: 1.0
+  weight_push: 1.0
+  weight_norm: 0.001
   delta_v: 0.5
   delta_d: 1.5
   normalize_embeddings: false
   anchor_to_centroid: false
   learned_task_weights: false
   max_hard_pairs: 0
-  weight_edge: 10.0
-  weight_bone: 10.0
+  weight_edge: 1.0
+  weight_bone: 1.0
   weight_geometry: 0.0
   dir_target: centroid
-  weight_dir: 2.0
-  weight_cov: 2.0
-  weight_raw: 2.0
+  weight_dir: 1.0
+  weight_cov: 1.0
+  weight_raw: 1.0
   loss_dir: smooth_l1
   loss_cov: smooth_l1
   loss_raw: smooth_l1
