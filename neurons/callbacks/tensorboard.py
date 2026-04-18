@@ -499,6 +499,11 @@ def _log_predictions(
             else:
                 fg_mask_pred = labels > 0
                 fg_alpha = rearrange(fg_mask_pred.float(), "b ... -> b 1 ...")
+            # `inst` has been sliced to 2-D by `_to_2d` above; the fg
+            # mask must carry the same spatial rank, i.e. [B, H, W].
+            # (Historically an extra channel dim was added here which
+            # the flattening clusterers tolerated but `spatial_cc`
+            # does not — keep shapes honest.)
             if inst.dim() == 5:
                 fg_mask_full = rearrange(
                     _to_2d(rearrange(fg_mask_pred, "b ... -> b 1 ...")),
@@ -506,9 +511,7 @@ def _log_predictions(
                 )
             else:
                 fg_mask_full = fg_mask_pred
-            fg_input = (rearrange(fg_mask_full, "b ... -> b 1 ...")
-                        if fg_mask_full.dim() == 3 else fg_mask_full)
-            ins_pred, _, _ = clusterer(inst, fg_input)
+            ins_pred, _, _ = clusterer(inst, fg_mask_full)
             if ins_pred.dim() > 3:
                 ins_pred = rearrange(
                     _to_2d(rearrange(ins_pred, "b ... -> b 1 ...")),

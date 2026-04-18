@@ -603,6 +603,12 @@ def cluster_spatial_cc(
         fg = torch.ones(spatial_shape, dtype=torch.bool, device=device)
     else:
         fg = foreground_mask > 0
+        # Strip leading singleton dims: callers (notably the TB image
+        # logger) sometimes pass `[1, *spatial]` after reshuffling a
+        # batched mask; the other clusterers tolerate this implicitly
+        # because they flatten the mask, but this one is rank-sensitive.
+        while fg.dim() > len(spatial_shape) and fg.shape[0] == 1:
+            fg = fg.squeeze(0)
         if tuple(fg.shape) != spatial_shape:
             raise ValueError(
                 f"foreground_mask shape {tuple(fg.shape)} does not match "
