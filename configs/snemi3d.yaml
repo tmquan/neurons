@@ -96,21 +96,35 @@ training:
   compile: false
   training_modes:
     - automatic
-  # Validation-time clusterer: HDBSCAN (auto-K, ~4× faster than
-  # SoftMeanShift on 80×256×256 patches).  `backend: auto` prefers
-  # `cuml.cluster.HDBSCAN` on CUDA when RAPIDS is importable, and
-  # falls back to `sklearn.cluster.HDBSCAN` otherwise — this matters
-  # in DDP where occasional worker ranks fail to initialise cuML and
-  # would otherwise crash the whole job.  Set `backend: cuml` only
-  # when you want a hard failure if the GPU path is unavailable.
-  # `bandwidth` and `normalize_embeddings` default to loss.delta_v /
-  # loss.normalize_embeddings.
+  # Validation-time clusterer.  `bandwidth` and `normalize_embeddings`
+  # default to loss.delta_v / loss.normalize_embeddings.
+  #
+  # Options (fastest & most neuron-appropriate last):
+  #   - soft_meanshift : differentiable, mode-based; over-segments
+  #                      random embeddings early in training → pretty
+  #                      but misleading panels before ~2 k steps.
+  #   - hdbscan        : density-based, auto-K; honest but silent until
+  #                      the embedding separates.  Ignores spatial
+  #                      connectivity so two disconnected cells with
+  #                      similar mean embedding can merge.
+  #   - spatial_cc     : connected components on the per-voxel
+  #                      embedding-affinity graph (6-connectivity).
+  #                      Respects spatial connectivity, runs at full
+  #                      resolution, one threshold (= delta_v), GPU via
+  #                      cupyx.scipy.sparse.csgraph.  Recommended for
+  #                      SNEMI3D-style dense EM — it cannot merge cells
+  #                      that do not touch, which is the dominant
+  #                      failure mode of HDBSCAN on this data.
+  #
+  # `backend: auto` picks the best available (cupy GPU → scipy CPU for
+  # spatial_cc; cuML GPU → CPU for hdbscan).  Use `backend: <name>` to
+  # force a specific path (useful for DDP reproducibility).
   clusterer:
-    name: hdbscan
+    name: spatial_cc
     backend: auto
-    min_cluster_size: 15
-    max_points: 150000
-    # cluster_selection_epsilon: null   # null → bandwidth (= delta_v)
+    min_cluster_size: 50
+    connectivity: 1            # 1 → 6-neighbour; else → 26-neighbour
+    # bandwidth: 0.5            # null → inherits loss.delta_v
 
 optimizer:
   type: adamw

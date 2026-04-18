@@ -83,15 +83,31 @@ loss:
 training:
   training_modes:
     - automatic
-  # Validation-time clusterer. Switch to hdbscan for faster, auto-K
-  # instance metrics on GPU (requires cuml-cu1X + cupy).
+  # Validation-time clusterer.  `bandwidth` defaults to loss.delta_v,
+  # `normalize_embeddings` defaults to loss.normalize_embeddings.
+  # Names: soft_meanshift | hdbscan | meanshift | spatial_cc
+  #
+  #   - soft_meanshift : differentiable mean-shift (historical default).
+  #                      Over-segments on random / untrained embeddings.
+  #   - hdbscan        : density-based, auto-K.  Subsamples to
+  #                      max_points.  GPU via cuML.  Ignores spatial
+  #                      connectivity.
+  #   - meanshift      : classical MeanShift.  GPU only if cuML < 23.x.
+  #   - spatial_cc     : connected components on the per-voxel
+  #                      embedding-affinity graph (see clusterer.py).
+  #                      Respects spatial connectivity, linear time,
+  #                      one threshold.  GPU via cupyx.scipy.sparse.
+  #                      Recommended for dense-EM neurons.
   clusterer:
-    name: soft_meanshift   # soft_meanshift | hdbscan | meanshift
-    # Optional overrides (bandwidth defaults to loss.delta_v, etc.):
+    name: soft_meanshift
+    # Common:
     # min_cluster_size: 50
-    # max_points: 50000          # hdbscan / meanshift only
-    # backend: auto              # auto | cuml | hdbscan | sklearn | torch
-    # cluster_selection_epsilon: null   # hdbscan only; null = bandwidth
+    # backend: auto
+    # hdbscan / meanshift:
+    # max_points: 50000
+    # cluster_selection_epsilon: null   # null → bandwidth
+    # spatial_cc:
+    # connectivity: 1                   # 1 → 6-nbr; else → 26-nbr
   max_epochs: 100
   accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: auto

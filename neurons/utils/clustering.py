@@ -5,14 +5,17 @@ Public API
 ----------
 - ``cluster_embeddings``      -- unified entry point; switch algorithm via
                                  ``algorithm={"meanshift", "hdbscan",
-                                 "soft_meanshift"}``.  Picks the fastest
-                                 available backend (cuML GPU → CPU fallback).
+                                 "soft_meanshift", "spatial_cc"}``.  Picks
+                                 the fastest available backend (GPU → CPU).
+- ``cluster_spatial_cc``      -- connected components on the spatial-neighbour
+                                 embedding-affinity graph.  GPU via cupyx.
 - ``cluster_offsets_hough``   -- Hough voting on predicted spatial offsets.
 
 Back-compatible thin wrappers (kept so existing call sites keep working):
-- ``cluster_embeddings_meanshift`` -> ``cluster_embeddings(algorithm="meanshift")``
-- ``cluster_embeddings_soft``      -> ``cluster_embeddings(algorithm="soft_meanshift")``
-- ``cluster_embeddings_hdbscan``   -> ``cluster_embeddings(algorithm="hdbscan")``
+- ``cluster_embeddings_meanshift``  -> ``cluster_embeddings(algorithm="meanshift")``
+- ``cluster_embeddings_soft``       -> ``cluster_embeddings(algorithm="soft_meanshift")``
+- ``cluster_embeddings_hdbscan``    -> ``cluster_embeddings(algorithm="hdbscan")``
+- ``cluster_embeddings_spatial_cc`` -> ``cluster_embeddings(algorithm="spatial_cc")``
 
 Backend selection (per algorithm, in preference order):
 
@@ -22,6 +25,9 @@ Backend selection (per algorithm, in preference order):
 - ``soft_meanshift``  : differentiable torch implementation
                          (:class:`neurons.inference.clusterer.SoftMeanShift`);
                          runs on whatever device the input tensor lives on.
+- ``spatial_cc``      : ``cupyx.scipy.sparse.csgraph.connected_components``
+                         (GPU, zero-copy via DLPack) → ``scipy.sparse.csgraph``
+                         (CPU).  Neither cuml nor cucim provides sparse CC.
 
 All algorithms return an integer label tensor with the same spatial shape as
 the input, where ``0`` is background / noise and foreground instances are
@@ -35,7 +41,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
-from einops import rearrange
+from einops import rearrange, reduce
 
 
 # ---------------------------------------------------------------------------
@@ -137,12 +143,69 @@ def _probe_sklearn_meanshift() -> Optional[Any]:
     return _SKMeanShift
 
 
+@lru_cache(maxsize=1)
+def _probe_scipy_csgraph() -> Optional[Any]:
+    """Return :mod:`scipy.sparse.csgraph` if importable, else None.
+
+    Required for the ``spatial_cc`` clusterer (CPU path).
+    """
+    try:
+        from scipy.sparse import csgraph
+    except Exception:
+        return None
+    return csgraph
+
+
+@lru_cache(maxsize=1)
+def _probe_scipy_sparse() -> Optional[Any]:
+    try:
+        from scipy import sparse
+    except Exception:
+        return None
+    return sparse
+
+
+@lru_cache(maxsize=1)
+def _probe_cupy_csgraph() -> Optional[Tuple[Any, Any]]:
+    """Return ``(cupyx.scipy.sparse, cupyx.scipy.sparse.csgraph)`` on GPU.
+
+    Preferred fast path for ``spatial_cc``: ``connected_components`` runs
+    fully on the device with no host round-trip.  Returns ``None`` if
+    cupy is missing, the csgraph submodule is absent (cupy < 9), or the
+    underlying ``pylibcugraph`` dependency is not installed (cupyx
+    imports the submodule lazily but the CC call raises
+    ``RuntimeError: pylibcugraph is not available`` without it — hence
+    the probe executes a trivial 2-node call rather than trusting the
+    import alone).
+    """
+    cp = _probe_cupy()
+    if cp is None:
+        return None
+    try:
+        from cupyx.scipy import sparse as cp_sparse
+        from cupyx.scipy.sparse import csgraph as cp_csgraph
+    except Exception:
+        return None
+    if not hasattr(cp_csgraph, "connected_components"):
+        return None
+    try:
+        probe = cp_sparse.coo_matrix(
+            (cp.ones(1, dtype=cp.float32),
+             (cp.zeros(1, dtype=cp.int32), cp.ones(1, dtype=cp.int32))),
+            shape=(2, 2),
+        )
+        cp_csgraph.connected_components(probe, directed=False)
+    except Exception:
+        return None
+    return cp_sparse, cp_csgraph
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_VALID_ALGOS = ("meanshift", "hdbscan", "soft_meanshift")
-_VALID_BACKENDS = ("auto", "cuml", "hdbscan", "sklearn", "torch")
+_VALID_ALGOS = ("meanshift", "hdbscan", "soft_meanshift", "spatial_cc")
+_VALID_BACKENDS = ("auto", "cuml", "cupy", "hdbscan", "sklearn", "torch", "scipy")
 
 
 def _as_fg_np(
@@ -360,6 +423,295 @@ def _run_hdbscan(
 
 
 # ---------------------------------------------------------------------------
+# Spatial connected-components on embedding-neighbour affinities
+# ---------------------------------------------------------------------------
+
+def _spatial_cc_edges(
+    embedding: torch.Tensor,
+    fg: torch.Tensor,
+    delta_v: float,
+    connectivity: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Build a sparse affinity edge list between spatial neighbours.
+
+    Two foreground voxels ``i`` and ``j`` are linked iff they are spatial
+    neighbours under the requested connectivity and their embedding
+    distance is strictly less than ``delta_v``.
+
+    Args:
+        embedding: ``[E, *spatial]`` tensor (already L2-normalised if
+            requested by the caller).
+        fg: ``[*spatial]`` boolean foreground mask.
+        delta_v: Euclidean threshold on per-edge embedding distance.
+        connectivity: ``1`` for face-connectivity (6 in 3D, 4 in 2D);
+            any other value enables full connectivity (26 in 3D, 8 in
+            2D).  Matches scipy's ``connectivity`` convention.
+
+    Returns:
+        ``(src_flat, dst_flat)`` long tensors on the input's device,
+        each of shape ``[M]``.  Indices are into the row-major flattened
+        spatial grid (same convention as ``torch.Tensor.flatten()``).
+    """
+    spatial_shape = tuple(embedding.shape[1:])
+    n_dims = len(spatial_shape)
+    device = embedding.device
+
+    # Row-major strides so (i_0, ..., i_{n-1}) -> sum_d i_d * stride_d
+    strides = [1] * n_dims
+    for i in range(n_dims - 2, -1, -1):
+        strides[i] = strides[i + 1] * spatial_shape[i + 1]
+
+    thr_sq = float(delta_v) ** 2
+
+    # Enumerate unit offsets; for face connectivity keep only +ê_d, for
+    # full connectivity keep every non-zero offset with first-non-zero
+    # component positive (canonical half-space, avoids double counting).
+    offsets: list[Tuple[int, ...]] = []
+    if connectivity == 1:
+        for d in range(n_dims):
+            off = [0] * n_dims
+            off[d] = 1
+            offsets.append(tuple(off))
+    else:
+        import itertools
+        for off in itertools.product((-1, 0, 1), repeat=n_dims):
+            if all(o == 0 for o in off):
+                continue
+            first_nonzero = next(o for o in off if o != 0)
+            if first_nonzero < 0:
+                continue
+            offsets.append(off)
+
+    src_chunks: list[torch.Tensor] = []
+    dst_chunks: list[torch.Tensor] = []
+
+    for off in offsets:
+        lo_slicer = [slice(None)] * n_dims
+        hi_slicer = [slice(None)] * n_dims
+        for d, o in enumerate(off):
+            if o > 0:
+                lo_slicer[d] = slice(0, spatial_shape[d] - o)
+                hi_slicer[d] = slice(o, spatial_shape[d])
+            elif o < 0:
+                lo_slicer[d] = slice(-o, spatial_shape[d])
+                hi_slicer[d] = slice(0, spatial_shape[d] + o)
+        emb_lo = embedding[(slice(None), *lo_slicer)]
+        emb_hi = embedding[(slice(None), *hi_slicer)]
+        dist_sq = reduce((emb_hi - emb_lo) ** 2, "e ... -> ...", "sum")
+
+        fg_lo = fg[tuple(lo_slicer)]
+        fg_hi = fg[tuple(hi_slicer)]
+
+        link = fg_lo & fg_hi & (dist_sq < thr_sq)
+        if not bool(link.any()):
+            continue
+
+        pos = torch.nonzero(link, as_tuple=False)  # [M, n_dims] lo-positions
+        src = torch.zeros(pos.shape[0], dtype=torch.long, device=device)
+        dst = torch.zeros_like(src)
+        for d in range(n_dims):
+            pos_d = pos[:, d]
+            src = src + pos_d * strides[d]
+            dst = dst + (pos_d + off[d]) * strides[d]
+        src_chunks.append(src)
+        dst_chunks.append(dst)
+
+    if not src_chunks:
+        return (
+            torch.empty(0, dtype=torch.long, device=device),
+            torch.empty(0, dtype=torch.long, device=device),
+        )
+    return torch.cat(src_chunks), torch.cat(dst_chunks)
+
+
+def cluster_spatial_cc(
+    embedding: torch.Tensor,
+    foreground_mask: Optional[torch.Tensor] = None,
+    *,
+    delta_v: float = 0.5,
+    min_cluster_size: int = 50,
+    connectivity: int = 1,
+    normalize_embeddings: bool = False,
+    backend: str = "auto",
+) -> torch.Tensor:
+    """Cluster by connected components of the spatial-neighbour affinity graph.
+
+    Two foreground voxels are linked iff they are spatial neighbours
+    (face-connectivity by default) and their embedding vectors are
+    within ``delta_v`` in Euclidean distance.  Connected components of
+    the resulting sparse graph define instance labels.
+
+    Compared to HDBSCAN / MeanShift / SoftMeanShift this variant:
+
+    - **Respects spatial connectivity** — two unrelated cells with
+      similar mean embeddings cannot merge because there is no chain
+      of spatial neighbours between them.
+    - **Scales linearly** in foreground voxels (``O(N · n_dims)``
+      edges, ``O(N α(N))`` union-find).  No subsampling, no ``K``
+      selection.
+    - **Uses one threshold** — ``delta_v`` (= training's pull margin).
+    - **Known failure mode**: a single mis-predicted embedding voxel
+      at a cell-cell boundary can leak two cells into one component.
+      Mitigate by tightening ``delta_v`` below the training margin,
+      or by stacking a Mutex-Watershed post-process (not yet wired).
+
+    Args:
+        embedding: ``[E, *spatial]`` embedding tensor (unbatched).
+        foreground_mask: Optional ``[*spatial]`` bool mask.  Background
+            voxels always receive label 0.
+        delta_v: Edge threshold.  Same semantics as the discriminative
+            loss's pull margin; using the trained value is the right
+            default.
+        min_cluster_size: Clusters with fewer than this many voxels
+            are dropped (mapped to label 0).  Applied at full resolution
+            — no subsample bias.
+        connectivity: ``1`` for face-connectivity (6 in 3D, 4 in 2D);
+            any other value uses full connectivity (26 / 8).
+        normalize_embeddings: L2-normalise before computing distances.
+            Must match the flag used at training time.
+        backend: ``"auto"`` (cupyx.scipy.sparse.csgraph on CUDA, else
+            scipy) / ``"cupy"`` (force GPU) / ``"scipy"`` (force CPU).
+            There is no ``cuml`` or ``cugraph`` path because neither
+            library ships a sparse ``connected_components``; ``cupyx``
+            covers this as of cupy >= 9.
+
+    Returns:
+        ``[*spatial]`` ``torch.long`` label tensor (0 = background,
+        1..K = instances) on the same device as ``embedding``.
+    """
+    if backend not in ("auto", "cupy", "scipy"):
+        raise ValueError(
+            f"spatial_cc: unsupported backend {backend!r}; "
+            f"choose 'auto', 'cupy', or 'scipy'."
+        )
+
+    device = embedding.device
+    if embedding.dim() < 2:
+        raise ValueError(
+            f"cluster_spatial_cc expects an [E, *spatial] embedding; "
+            f"got shape {tuple(embedding.shape)}."
+        )
+
+    if normalize_embeddings:
+        import torch.nn.functional as F_
+        embedding = F_.normalize(embedding, dim=0, eps=1e-6)
+
+    spatial_shape = tuple(embedding.shape[1:])
+    n_total = int(np.prod(spatial_shape)) if spatial_shape else 0
+
+    if foreground_mask is None:
+        fg = torch.ones(spatial_shape, dtype=torch.bool, device=device)
+    else:
+        fg = foreground_mask > 0
+        if tuple(fg.shape) != spatial_shape:
+            raise ValueError(
+                f"foreground_mask shape {tuple(fg.shape)} does not match "
+                f"embedding spatial shape {spatial_shape}."
+            )
+
+    labels_full = torch.zeros(n_total, device=device, dtype=torch.long)
+    if n_total == 0 or not bool(fg.any()):
+        return _reshape_to_spatial(labels_full, spatial_shape)
+
+    # Build edges on the input's device (fast tensor ops in torch).
+    src, dst = _spatial_cc_edges(embedding, fg, delta_v, connectivity)
+
+    use_gpu = False
+    gpu_mods = None
+    if backend in ("auto", "cupy") and embedding.is_cuda:
+        gpu_mods = _probe_cupy_csgraph()
+        use_gpu = gpu_mods is not None
+    if backend == "cupy" and not use_gpu:
+        raise RuntimeError(
+            "spatial_cc: backend='cupy' requires a CUDA embedding and "
+            "cupyx.scipy.sparse.csgraph.connected_components (cupy >= 9)."
+        )
+
+    if use_gpu:
+        labels_flat = _spatial_cc_run_gpu(
+            src, dst, fg, n_total, gpu_mods, device,
+        )
+    else:
+        csgraph = _probe_scipy_csgraph()
+        sparse = _probe_scipy_sparse()
+        if csgraph is None or sparse is None:
+            raise ImportError(
+                "spatial_cc CPU path requires scipy.sparse.csgraph."
+            )
+        labels_flat = _spatial_cc_run_cpu(
+            src, dst, fg, n_total, sparse, csgraph, device,
+        )
+
+    # Filter small clusters and renumber to 1..K'.  Done on CPU because
+    # `_remap_consecutive` is numpy-based; the tensor is already flat.
+    raw = labels_flat.detach().cpu().numpy().astype(np.int64, copy=False)
+    remapped = _remap_consecutive(raw, min_cluster_size)
+    labels_full = torch.from_numpy(remapped).to(device=device, dtype=torch.long)
+    return _reshape_to_spatial(labels_full, spatial_shape)
+
+
+def _spatial_cc_run_cpu(
+    src: torch.Tensor,
+    dst: torch.Tensor,
+    fg: torch.Tensor,
+    n_total: int,
+    sparse_mod: Any,
+    csgraph_mod: Any,
+    device: torch.device,
+) -> torch.Tensor:
+    """Run connected_components on CPU via scipy.sparse.csgraph."""
+    src_np = src.detach().cpu().numpy().astype(np.int64, copy=False)
+    dst_np = dst.detach().cpu().numpy().astype(np.int64, copy=False)
+    data = np.ones(len(src_np), dtype=np.int8)
+    graph = sparse_mod.coo_matrix(
+        (data, (src_np, dst_np)), shape=(n_total, n_total),
+    )
+    _, comp = csgraph_mod.connected_components(graph, directed=False)
+    comp_t = torch.from_numpy(comp.astype(np.int64, copy=False)).to(device)
+    fg_flat = rearrange(fg, "... -> (...)")
+    return (comp_t + 1) * fg_flat.to(comp_t.dtype)
+
+
+def _spatial_cc_run_gpu(
+    src: torch.Tensor,
+    dst: torch.Tensor,
+    fg: torch.Tensor,
+    n_total: int,
+    gpu_mods: Tuple[Any, Any],
+    device: torch.device,
+) -> torch.Tensor:
+    """Run connected_components on GPU via cupyx.scipy.sparse.csgraph.
+
+    Zero-copy handoff torch -> cupy via DLPack so the COO build and the
+    CC pass both stay on the device.  Falls through to the scipy path
+    via ImportError / RuntimeError at the call site on failure.
+    """
+    cp = _probe_cupy()
+    assert cp is not None, "cupy must be available on the GPU path"
+    cp_sparse, cp_csgraph = gpu_mods
+
+    # torch -> cupy (zero-copy).  Data must be float32: cupyx's
+    # `coo_matrix` constructor accepts {bool, float32, float64,
+    # complex64, complex128} but the CC path internally invokes
+    # cusparse's csc2csr which rejects bool / int; float32 is the
+    # cheapest supported type.  Indices are int32 for the same reason
+    # (cusparse requires 32-bit indices on current RAPIDS builds).
+    src_cp = cp.from_dlpack(src.contiguous()).astype(cp.int32)
+    dst_cp = cp.from_dlpack(dst.contiguous()).astype(cp.int32)
+    data_cp = cp.ones(src_cp.size, dtype=cp.float32)
+
+    graph = cp_sparse.coo_matrix(
+        (data_cp, (src_cp, dst_cp)), shape=(n_total, n_total),
+    )
+    _, comp_cp = cp_csgraph.connected_components(graph, directed=False)
+
+    # cupy -> torch (zero-copy) and combine with foreground mask.
+    comp_t = torch.from_dlpack(comp_cp.astype(cp.int64)).to(device)
+    fg_flat = rearrange(fg, "... -> (...)")
+    return (comp_t + 1) * fg_flat.to(comp_t.dtype)
+
+
+# ---------------------------------------------------------------------------
 # Unified entry point
 # ---------------------------------------------------------------------------
 
@@ -394,10 +746,15 @@ def cluster_embeddings(
         embedding: ``[E, *spatial]`` embedding tensor (unbatched).
         foreground_mask: Optional ``[*spatial]`` bool mask; background
             voxels always receive label 0.
-        algorithm: One of ``{"meanshift", "hdbscan", "soft_meanshift"}``.
-        bandwidth: Euclidean bandwidth for MeanShift / SoftMeanShift.
-            For discriminative-loss embeddings this should match
-            ``delta_v`` (= 0.5 in the original paper).
+        algorithm: One of ``{"meanshift", "hdbscan", "soft_meanshift",
+            "spatial_cc"}``.  ``"spatial_cc"`` ignores ``max_points``,
+            ``min_samples``, ``cluster_selection_epsilon`` and all
+            SoftMeanShift knobs; it uses only ``bandwidth`` (= the
+            embedding-distance threshold) and ``min_cluster_size``.
+        bandwidth: Euclidean bandwidth for MeanShift / SoftMeanShift
+            (also the edge threshold for ``spatial_cc``).  For
+            discriminative-loss embeddings this should match ``delta_v``
+            (= 0.5 in the original paper).
         min_cluster_size: Clusters with fewer than this many voxels are
             discarded (mapped to background).
         normalize_embeddings: L2-normalise embeddings before clustering.
@@ -441,6 +798,20 @@ def cluster_embeddings(
             min_cluster_size=min_cluster_size,
             normalize_embeddings=normalize_embeddings,
             max_seeds=max_seeds,
+        )
+
+    if algorithm == "spatial_cc":
+        # Spatial-affinity CC uses bandwidth as the embedding-distance
+        # threshold (semantically identical to delta_v).  max_points,
+        # min_samples, cluster_selection_epsilon are all irrelevant here.
+        cc_backend = backend if backend in ("auto", "cupy", "scipy") else "auto"
+        return cluster_spatial_cc(
+            embedding,
+            foreground_mask=foreground_mask,
+            delta_v=bandwidth,
+            min_cluster_size=min_cluster_size,
+            normalize_embeddings=normalize_embeddings,
+            backend=cc_backend,
         )
 
     device = embedding.device
@@ -609,6 +980,27 @@ def cluster_embeddings_soft(
     )
 
 
+def cluster_embeddings_spatial_cc(
+    embedding: torch.Tensor,
+    foreground_mask: Optional[torch.Tensor] = None,
+    delta_v: float = 0.5,
+    min_cluster_size: int = 50,
+    connectivity: int = 1,
+    normalize_embeddings: bool = False,
+    backend: str = "auto",
+) -> torch.Tensor:
+    """Connected components on the spatial-neighbour embedding-affinity graph."""
+    return cluster_spatial_cc(
+        embedding,
+        foreground_mask=foreground_mask,
+        delta_v=delta_v,
+        min_cluster_size=min_cluster_size,
+        connectivity=connectivity,
+        normalize_embeddings=normalize_embeddings,
+        backend=backend,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Offset-based (Hough voting) -- unchanged
 # ---------------------------------------------------------------------------
@@ -660,4 +1052,8 @@ def available_backends() -> Dict[str, Dict[str, bool]]:
             "sklearn": _probe_sklearn_hdbscan() is not None,
         },
         "soft_meanshift": {"torch": True},
+        "spatial_cc": {
+            "cupy": _probe_cupy_csgraph() is not None,
+            "scipy": _probe_scipy_csgraph() is not None,
+        },
     }

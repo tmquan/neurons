@@ -472,31 +472,50 @@ fork).
 ### Validation clusterer selection
 
 `training.clusterer.name` picks the algorithm used to turn instance
-embeddings into labels for ARI / AMI / VOI / TED.  Three options:
+embeddings into labels for ARI / AMI / VOI / TED.  Four options:
 
-| name              | differentiable | backend (auto order)                  | typical per-patch time |
-|-------------------|----------------|---------------------------------------|------------------------|
-| `soft_meanshift`  | yes            | torch                                  | ~4 s                   |
-| `hdbscan`         | no             | cuML (GPU) → `hdbscan` pkg → sklearn   | ~1 s (cuML, max_points=50k) |
-| `meanshift`       | no             | sklearn (cuML dropped MS in 23.x)      | ~10–60 s (CPU)         |
+| name              | differentiable | backend (auto order)                         | typical per-patch time      | spatial-aware |
+|-------------------|----------------|---------------------------------------------|-----------------------------|---------------|
+| `soft_meanshift`  | yes            | torch                                        | ~4 s                        | no            |
+| `hdbscan`         | no             | cuML → `hdbscan` pkg → sklearn               | ~1 s (cuML, max_points=50k) | no            |
+| `meanshift`       | no             | sklearn (cuML dropped MS in 23.x)            | ~10–60 s (CPU)              | no            |
+| `spatial_cc`      | no             | `cupyx.scipy.sparse.csgraph` → scipy         | ~0.2 s (GPU, 80×256×256)    | **yes**       |
 
 Only `soft_meanshift` is used during the actual training forward pass;
-this knob only affects the validation / inference metric path.  Example
-override:
+this knob only affects the validation / inference metric path.
+
+**Which to pick.**  For dense-EM neurons (SNEMI3D, CREMI) prefer
+`spatial_cc`: it connects two foreground voxels only if they are spatial
+neighbours and their embeddings are within `delta_v`, so unrelated cells
+with similar mean embeddings cannot merge.  HDBSCAN and MeanShift
+operate on the flattened point cloud and routinely merge such cases.
+Use `hdbscan` when the embedding is known to separate instances
+globally (e.g. cell-type classification over a small volume where
+spatial disconnection is not an issue).  Keep `soft_meanshift` only when
+you need a differentiable clusterer or want the mode-seeking
+over-segmentation bias to produce "pretty" TB panels before the
+embedding has converged.
+
+Example override:
 
 ```yaml
 training:
   clusterer:
-    name: hdbscan
-    backend: cuml             # cuml | hdbscan | sklearn | auto
+    name: spatial_cc
+    backend: auto             # cupy (GPU) → scipy (CPU)
     min_cluster_size: 50
-    max_points: 50000         # HDBSCAN subsample cap (scales ~O(N²))
-    # cluster_selection_epsilon: 0.5   # null -> inherits loss.delta_v
+    connectivity: 1           # 1 → 6-nbr; anything else → 26-nbr
+    # bandwidth: 0.5          # defaults to loss.delta_v
 ```
 
 `bandwidth` and `normalize_embeddings` default to `loss.delta_v` and
 `loss.normalize_embeddings` respectively, so they don't usually need to
 be set here.
+
+**Neither cuml nor cucim ships a sparse `connected_components`.**
+`spatial_cc` uses `cupyx.scipy.sparse.csgraph` (shipped with
+`cupy-cuda13x` already in `requirements.txt`).  torch ↔ cupy handoff is
+zero-copy via DLPack, so the whole pass stays on the device.
 
 ### Data pipeline tuning
 
@@ -513,8 +532,8 @@ be set here.
 
 `limit_val_batches` controls how many validation batches run per epoch.
 Each val batch computes the full loss (including geometry targets) plus
-embedding clustering (SoftMeanShift by default, or cuML HDBSCAN / MeanShift
-via ``training_config.clusterer.name``) and four sklearn metrics.  For faster iteration,
+embedding clustering (SoftMeanShift by default, or cuML HDBSCAN / MeanShift /
+spatial_cc via ``training_config.clusterer.name``) and four sklearn metrics.  For faster iteration,
 reduce to 10--20:
 
 ```yaml

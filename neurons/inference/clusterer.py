@@ -31,6 +31,15 @@ Implementations
     validation patches), else the ``hdbscan`` package, else
     ``sklearn.cluster.HDBSCAN``.  Auto-determines ``K``.
 
+``SpatialCCClusterer``
+    Non-differentiable connected-components clusterer over the
+    spatial-neighbour embedding-affinity graph (two neighbouring
+    voxels are linked iff their embedding distance is below
+    ``delta_v``).  Respects spatial connectivity — unrelated cells
+    with similar mean embeddings cannot merge.  Uses
+    ``cupyx.scipy.sparse.csgraph.connected_components`` on CUDA
+    (zero-copy via DLPack), else :mod:`scipy.sparse.csgraph`.
+
 ``HoughVoting``
     Offset-based instance segmentation (not embedding based).  Kept here
     because it shares the "turn dense predictions into instance labels"
@@ -405,6 +414,84 @@ class HDBSCANClusterer(_BaseUnsupervisedClusterer):
         )
 
 
+class SpatialCCClusterer(_BaseUnsupervisedClusterer):
+    """Connected components on spatial-neighbour embedding affinities.
+
+    Two foreground voxels are linked iff they are spatial neighbours
+    (face-connectivity by default) and their embeddings are within
+    ``delta_v`` in Euclidean distance.  Instance labels are the
+    connected components of the resulting sparse graph.
+
+    Strengths vs HDBSCAN / MeanShift:
+
+    - **Spatial-connectivity aware.**  Two unrelated cells with
+      similar mean embeddings cannot merge — there is no chain of
+      spatial neighbours between them.
+    - **Linear time.**  No subsampling, no ``K`` selection, one
+      threshold (= training's ``delta_v``).  Runs on the native
+      volume at full resolution.
+    - **GPU.**  Uses ``cupyx.scipy.sparse.csgraph.connected_components``
+      with zero-copy torch ↔ cupy DLPack handoff on CUDA; falls back
+      to :mod:`scipy.sparse.csgraph` on CPU.
+
+    Known failure mode: a single mis-predicted embedding voxel at a
+    cell-cell boundary can leak two instances into one.  Mitigate by
+    tightening ``delta_v`` below the trained margin.
+
+    Args:
+        bandwidth: Embedding-distance threshold for linking spatial
+            neighbours.  Semantically equal to the training pull
+            margin (``delta_v``); named ``bandwidth`` to match the
+            other clusterers' common kwarg so the module-layer
+            config wiring (``clusterer.bandwidth``) is identical.
+        min_cluster_size: Clusters smaller than this are dropped
+            (mapped to background).  Applied at full resolution.
+        connectivity: ``1`` for face-connectivity (6 in 3D, 4 in 2D);
+            any other value enables full connectivity (26 / 8).
+        normalize_embeddings: L2-normalise embeddings before computing
+            distances.  Must match the flag used at training time.
+        backend: ``"auto"`` (cupy on CUDA → scipy on CPU),
+            ``"cupy"`` (force GPU), or ``"scipy"`` (force CPU).
+    """
+
+    algorithm = "spatial_cc"
+
+    def __init__(
+        self,
+        bandwidth: float = 0.5,
+        min_cluster_size: int = 50,
+        connectivity: int = 1,
+        normalize_embeddings: bool = False,
+        backend: str = "auto",
+    ) -> None:
+        super().__init__()
+        self.bandwidth = bandwidth
+        self.min_cluster_size = min_cluster_size
+        self.connectivity = connectivity
+        self.normalize_embeddings = normalize_embeddings
+        self.backend = backend
+
+    @property
+    def delta_v(self) -> float:
+        """Alias: the affinity threshold _is_ the trained pull margin."""
+        return self.bandwidth
+
+    def _cluster_single(
+        self, embedding: torch.Tensor, foreground_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        from neurons.utils.clustering import cluster_spatial_cc
+
+        return cluster_spatial_cc(
+            embedding,
+            foreground_mask=foreground_mask,
+            delta_v=self.bandwidth,
+            min_cluster_size=self.min_cluster_size,
+            connectivity=self.connectivity,
+            normalize_embeddings=self.normalize_embeddings,
+            backend=self.backend,
+        )
+
+
 class MeanShiftClusterer(_BaseUnsupervisedClusterer):
     """Non-differentiable MeanShift clusterer (cuML → sklearn).
 
@@ -599,6 +686,9 @@ _CLUSTERER_REGISTRY: Dict[str, type] = {
     "softmeanshift": SoftMeanShift,   # convenience alias
     "meanshift": MeanShiftClusterer,
     "hdbscan": HDBSCANClusterer,
+    "spatial_cc": SpatialCCClusterer,
+    "spatialcc": SpatialCCClusterer,   # convenience alias
+    "cc": SpatialCCClusterer,           # convenience alias
 }
 
 
@@ -607,7 +697,7 @@ def build_clusterer(name: str, **kwargs: Any) -> nn.Module:
 
     Args:
         name: One of ``"soft_meanshift"`` (default, differentiable),
-            ``"meanshift"``, or ``"hdbscan"``.
+            ``"meanshift"``, ``"hdbscan"``, or ``"spatial_cc"``.
         **kwargs: Forwarded to the selected class's constructor.
 
     Returns:
@@ -631,6 +721,7 @@ __all__ = [
     "SoftMeanShift",
     "MeanShiftClusterer",
     "HDBSCANClusterer",
+    "SpatialCCClusterer",
     "HoughVoting",
     "build_clusterer",
 ]

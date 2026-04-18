@@ -16,6 +16,10 @@ einops==0.8.2
 #   - cuML HDBSCAN / MeanShift in neurons.inference.clusterer  (val + inference)
 #   - cuML PCA / TruncatedSVD / UMAP in neurons.utils.manifold  (TB viz)
 #   - cupy-backed EDT / Gaussian / connected components in neurons.transforms
+#   - pylibcugraph-backed sparse connected_components used by the
+#     spatial_cc clusterer via cupyx.scipy.sparse.csgraph (neither
+#     cuml nor cucim ships a sparse CC; pylibcugraph is the backend
+#     cupyx dispatches to).
 #   - DLPack zero-copy torch <-> cupy <-> cuml interop
 # For CUDA 12 builds replace cu13 -> cu12 and cuda13x -> cuda12x.
 #
@@ -26,6 +30,7 @@ einops==0.8.2
 --extra-index-url https://pypi.nvidia.com
 cupy-cuda13x==14.0.1
 cuml-cu13==26.4.0
+pylibcugraph-cu13==26.4.0
 
 # Configuration
 hydra-core==1.3.2
