@@ -58,7 +58,8 @@ Trainer.fit(module, datamodule)
 | `losses/geometry.py`                 | GeometryLoss: direction / covariance / raw reconstruction          |
 | `metrics/semantic.py`                | Dice, IoU for semantic evaluation                                  |
 | `metrics/instance.py`                | ARI, AMI, AXI, VOI, TED for instance evaluation                    |
-| `inference/soft_clustering.py`       | SoftMeanShift for instance clustering at eval                      |
+| `inference/clusterer.py`             | SoftMeanShift / HDBSCAN / MeanShift / HoughVoting `nn.Module`s     |
+| `utils/clustering.py`                | Functional `cluster_embeddings` dispatcher (cuML GPU → CPU)        |
 | `utils/point_sampling.py`            | `sample_point_prompts` for interactive/proofread training          |
 | `models/point_prompt_encoder.py`     | Sparse point prompts → dense feature residual                      |
 

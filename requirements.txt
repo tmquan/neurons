@@ -6,11 +6,20 @@
 --extra-index-url https://download.pytorch.org/whl/cu130
 # torch==2.10.0+cu130
 # torchvision==0.25.0+cu130
-# cupy-cuda13x==14.0.1
 pytorch-lightning==2.6.1
 torchmetrics==1.0.3
 monai==1.5.2
 einops==0.8.2
+
+# GPU acceleration (RAPIDS / CUDA 13 wheels on NVIDIA's index).
+# Enables:
+#   - cuML HDBSCAN / MeanShift in neurons.inference.clusterer  (val + inference)
+#   - cupy-backed EDT / Gaussian / connected components in neurons.transforms
+#   - DLPack zero-copy torch <-> cupy <-> cuml interop
+# For CUDA 12 builds replace cu13 -> cu12 and cuda13x -> cuda12x.
+--extra-index-url https://pypi.nvidia.com
+cupy-cuda13x==14.0.1
+cuml-cu13==26.4.0
 
 # Configuration
 hydra-core==1.3.2

@@ -361,13 +361,47 @@ The `ImageLogger` callback logs visual grids at the end of each epoch:
 | `image` | EM input (grayscale) |
 | `label` | Ground truth instance labels (random color per ID) |
 | `semantic` | Predicted semantic class (argmax) |
-| `instance_pca` | Instance embedding (PCA → RGB) |
+| `instance_<algo>` | Instance embedding projected to RGB (`algo` ∈ {`pca`, `svd`, `umap`}) |
 | `instance_pred` | Clustered instances (mean-shift on **predicted** fg mask) |
 | `geometry_dir_{centroid\|skeleton}` | Direction vectors as quiver arrows (orange) |
 | `geometry_cov` | Structure tensor as ellipse glyphs (cyan) |
 | `geometry_raw` | RGBA reconstruction (sigmoid output) |
 
 For 3D volumes, the central Z-slice is displayed.
+
+### Embedding projection (instance panel)
+
+The high-dimensional instance embedding is reduced to 3 channels before
+display.  Configure via `callbacks.image_logger` in YAML:
+
+```yaml
+callbacks:
+  image_logger:
+    projection_algorithm: pca   # pca | svd | umap
+    projection_backend: auto    # auto | cuml | torch | umap-learn
+```
+
+| Algorithm | Nature | Typical cost¹ | When to use |
+|---|---|---|---|
+| `pca`   | Linear, centered SVD     | ~5 ms  | Default — fast, deterministic, preserves global variance |
+| `svd`   | Linear, uncentered       | ~5 ms  | Cheaper than PCA; mean absorbed into component 1 |
+| `umap`  | Non-linear manifold      | ~200 ms– seconds | Highlights **local** cluster structure; useful for diagnosing whether embeddings separate instances |
+
+¹ On a CUDA A100 with cuML backend, for a single `[E=32, N=256²]` patch.
+
+Backends are picked with `projection_backend`:
+
+- `auto`  — cuML GPU (`cuml.decomposition.PCA` / `TruncatedSVD` /
+  `cuml.manifold.UMAP`) when the input lives on CUDA and RAPIDS is
+  installed; otherwise torch SVD (pca / svd) or `umap-learn` (umap).
+- `cuml`  — force GPU (requires `cupy`+`cuml`, and a CUDA input tensor).
+- `torch` — batched `torch.linalg.svd`, CPU or CUDA (pca / svd only).
+- `umap-learn` — force the CPU `umap-learn` reference implementation
+  (umap only).
+
+If the chosen backend is unavailable, training falls back gracefully
+rather than failing (e.g. UMAP with no cuML and no `umap-learn`
+installed degrades to PCA).
 
 ### Quick test command
 
@@ -415,15 +449,54 @@ loss:
 L_dir and L_raw remain active and provide useful auxiliary gradients at
 negligible cost.
 
-### GPU acceleration with cupy
+### GPU acceleration with cupy + cuML
 
-Install [cupy](https://cupy.dev/) to accelerate EDT, gaussian_filter,
-and connected-component labelling on GPU.  Data transfers between PyTorch
-and cupy use DLPack zero-copy (no host round-trips).
+Install [cupy](https://cupy.dev/) and [cuML](https://docs.rapids.ai/api/cuml/)
+via the `gpu-cu13` / `gpu-cu12` extras to accelerate:
 
-The codebase automatically falls back to scipy when cupy is unavailable,
-and to sequential scipy inside DataLoader workers (where CUDA contexts
-are invalid after fork).
+- EDT, `gaussian_filter`, connected-component labelling (cupy).
+- Validation-time instance clustering — `HDBSCANClusterer` dispatches to
+  `cuml.cluster.HDBSCAN` (≈4× faster than SoftMeanShift on an
+  `[16, 80, 256, 256]` embedding, auto-determines K).
+
+```bash
+pip install -e ".[gpu-cu13]" --extra-index-url https://pypi.nvidia.com
+```
+
+Data transfers between PyTorch and cupy / cuML use DLPack zero-copy
+(no host round-trips).  The codebase automatically falls back to scipy
+/ scikit-learn when cupy or cuML is unavailable, and to sequential
+scipy inside DataLoader workers (where CUDA contexts are invalid after
+fork).
+
+### Validation clusterer selection
+
+`training.clusterer.name` picks the algorithm used to turn instance
+embeddings into labels for ARI / AMI / VOI / TED.  Three options:
+
+| name              | differentiable | backend (auto order)                  | typical per-patch time |
+|-------------------|----------------|---------------------------------------|------------------------|
+| `soft_meanshift`  | yes            | torch                                  | ~4 s                   |
+| `hdbscan`         | no             | cuML (GPU) → `hdbscan` pkg → sklearn   | ~1 s (cuML, max_points=50k) |
+| `meanshift`       | no             | sklearn (cuML dropped MS in 23.x)      | ~10–60 s (CPU)         |
+
+Only `soft_meanshift` is used during the actual training forward pass;
+this knob only affects the validation / inference metric path.  Example
+override:
+
+```yaml
+training:
+  clusterer:
+    name: hdbscan
+    backend: cuml             # cuml | hdbscan | sklearn | auto
+    min_cluster_size: 50
+    max_points: 50000         # HDBSCAN subsample cap (scales ~O(N²))
+    # cluster_selection_epsilon: 0.5   # null -> inherits loss.delta_v
+```
+
+`bandwidth` and `normalize_embeddings` default to `loss.delta_v` and
+`loss.normalize_embeddings` respectively, so they don't usually need to
+be set here.
 
 ### Data pipeline tuning
 
@@ -440,7 +513,8 @@ are invalid after fork).
 
 `limit_val_batches` controls how many validation batches run per epoch.
 Each val batch computes the full loss (including geometry targets) plus
-SoftMeanShift clustering and four sklearn metrics.  For faster iteration,
+embedding clustering (SoftMeanShift by default, or cuML HDBSCAN / MeanShift
+via ``training_config.clusterer.name``) and four sklearn metrics.  For faster iteration,
 reduce to 10--20:
 
 ```yaml

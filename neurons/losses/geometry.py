@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange, reduce, repeat
 
 
 _LOSS_FN_REGISTRY = {
@@ -176,7 +176,7 @@ class GeometryLoss(nn.Module):
         dir_flat = rearrange(direction, "b c ... -> b c (...)")
         cov_flat = rearrange(covariance, "b c ... -> b c (...)")
 
-        has_fg = dir_flat.abs().sum(dim=(1, 2)) > 0
+        has_fg = reduce(dir_flat.abs(), "b c n -> b", "sum") > 0
 
         dir_targets: List[Optional[torch.Tensor]] = []
         cov_targets: List[Optional[torch.Tensor]] = []
@@ -278,8 +278,11 @@ class GeometryLoss(nn.Module):
             elif c_in >= 3:
                 rgb = img_flat[:, :3]
             else:
-                rgb = img_flat.expand(-1, 3, -1)[:, :3]
-            rgba_tgt = torch.cat([rgb, fg.unsqueeze(1).float()], dim=1)
+                pad = repeat(img_flat[:, :1], "b 1 n -> b c n", c=3 - c_in)
+                rgb = torch.cat([img_flat, pad], dim=1)
+            rgba_tgt = torch.cat(
+                [rgb, rearrange(fg.float(), "b ... -> b 1 ...")], dim=1,
+            )
             for b in range(B):
                 if cached_targets["dir_targets"][b] is None and cached_targets["cov_targets"][b] is None:
                     continue

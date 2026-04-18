@@ -14,7 +14,7 @@ from typing import Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, reduce
 
 
 def create_gaussian_weight(
@@ -186,9 +186,16 @@ def sliding_window_inference(
 
                 if is_dual and ins_emb is not None:
                     if aggregation == "max":
-                        mask = sem_probs[idx].max(dim=0).values > sem_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw].max(dim=0).values
+                        patch_max = reduce(sem_probs[idx], "c ... -> ...", "max")
+                        out_max = reduce(
+                            sem_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw],
+                            "c ... -> ...", "max",
+                        )
+                        mask = patch_max > out_max
                         emb_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw] = torch.where(
-                            mask.unsqueeze(0), ins_emb[idx], emb_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw],
+                            rearrange(mask, "... -> 1 ..."),
+                            ins_emb[idx],
+                            emb_output[:, ds:ds + pd, hs:hs + ph, ws:ws + pw],
                         )
                     else:
                         emb_output[sl] += ins_emb[idx] * patch_w

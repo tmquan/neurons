@@ -333,6 +333,8 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
                 every_n_epochs=img_cfg.get("every_n_epochs", 1),
                 max_images=img_cfg.get("max_images", 4),
                 spatial_dims=3 if "3d" in spatial else 2,
+                projection_algorithm=img_cfg.get("projection_algorithm", "pca"),
+                projection_backend=img_cfg.get("projection_backend", "auto"),
             )
         )
 

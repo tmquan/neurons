@@ -26,7 +26,7 @@ Einops is used consistently in:
 
 - **`losses/skeletonize.py`**: kernel tensors `view(1, 1, 3, 3, 3)` → `rearrange(..., "d h w -> 1 1 d h w")`
 - **`losses/instance.py`**, **`losses/geometry.py`**: `.view(spatial_shape)` → einops with explicit spatial dims
-- **`inference/soft_clustering.py`**: `.view(B, *spatial_shape)` → `rearrange(..., "b (d h w) -> b d h w", ...)`
+- **`inference/clusterer.py`**: `.view(B, *spatial_shape)` → `rearrange(..., "b (d h w) -> b d h w", ...)`
 
 ---
 

@@ -40,14 +40,14 @@ def _to_onehot_pair(
     t[~valid] = 0
 
     p_oh = rearrange(
-        F.one_hot(p, num_classes).float(), "... c -> c ...",
-    ).unsqueeze(0)
+        F.one_hot(p, num_classes).float(), "... c -> 1 c ...",
+    )
     t_oh = rearrange(
-        F.one_hot(t, num_classes).float(), "... c -> c ...",
-    ).unsqueeze(0)
+        F.one_hot(t, num_classes).float(), "... c -> 1 c ...",
+    )
 
     if not valid.all():
-        mask = valid.float().unsqueeze(0).unsqueeze(0)
+        mask = rearrange(valid.float(), "... -> 1 1 ...")
         p_oh = p_oh * mask
         t_oh = t_oh * mask
 

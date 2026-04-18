@@ -35,13 +35,14 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Dict
 
 import numpy as np
 import torch
 from einops import rearrange
 
 from neurons.inference.sliding_window import sliding_window_inference
-from neurons.inference.soft_clustering import SoftMeanShift
+from neurons.inference.clusterer import build_clusterer
 from neurons.inference.stitcher import EmbeddingStitcher
 from neurons.utils.io import load_volume, save_volume
 
@@ -73,8 +74,18 @@ def main():
 
     parser.add_argument("--class-id", type=int, default=None,
                         help="Restrict instance segmentation to this semantic class")
+    parser.add_argument("--clusterer", type=str, default="soft_meanshift",
+                        choices=["soft_meanshift", "meanshift", "hdbscan"],
+                        help="Clustering algorithm for instance segmentation. "
+                             "'hdbscan' uses cuML GPU HDBSCAN when available "
+                             "(auto-K, typically faster than soft_meanshift).")
     parser.add_argument("--bandwidth", type=float, default=0.5,
-                        help="Mean-shift bandwidth for instance clustering")
+                        help="Clustering bandwidth (MeanShift) / "
+                             "cluster_selection_epsilon (HDBSCAN). "
+                             "Should match training-time delta_v.")
+    parser.add_argument("--max-points", type=int, default=50_000,
+                        help="Foreground subsample cap for HDBSCAN / MeanShift "
+                             "(ignored by soft_meanshift).")
     parser.add_argument("--merge-threshold", type=float, default=0.5,
                         help="Embedding distance threshold for cross-patch merging")
     parser.add_argument("--min-instance-size", type=int, default=50,
@@ -150,10 +161,14 @@ def main():
             all_classes = torch.unique(semantic_ids).tolist()
             classes_to_process = [c for c in all_classes if c > 0]
 
-        clusterer = SoftMeanShift(
+        clusterer_kwargs: Dict[str, Any] = dict(
             bandwidth=args.bandwidth,
             min_cluster_size=args.min_instance_size,
         )
+        if args.clusterer in ("meanshift", "hdbscan"):
+            clusterer_kwargs["max_points"] = args.max_points
+        clusterer = build_clusterer(args.clusterer, **clusterer_kwargs).to(device)
+        print(f"  Clusterer: {args.clusterer}")
 
         vol_shape = semantic_ids.shape
         final_labels = torch.zeros(vol_shape, device=device, dtype=torch.long)

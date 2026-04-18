@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 from monai.losses import DiceLoss
 
 
@@ -122,7 +122,7 @@ class SemanticLoss(nn.Module):
         valid_mask = rearrange(valid.float(), "b ... -> b 1 ...")
 
         if C == 1:
-            target = (class_labels > 0).float().unsqueeze(1)
+            target = rearrange((class_labels > 0).float(), "b ... -> b 1 ...")
             return target * valid_mask, valid_mask
 
         safe = class_labels.clone().long()
@@ -132,8 +132,8 @@ class SemanticLoss(nn.Module):
         target = rearrange(
             F.one_hot(safe, C).float(), "b ... c -> b c ...",
         )
-        neg_mask = rearrange(neg, "b ... -> b 1 ...")
-        target[neg_mask.expand_as(target)] = 0.0
+        neg_mask = repeat(neg, "b ... -> b c ...", c=target.shape[1])
+        target[neg_mask] = 0.0
 
         return target * valid_mask, valid_mask
 

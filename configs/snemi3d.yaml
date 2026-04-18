@@ -96,11 +96,21 @@ training:
   compile: false
   training_modes:
     - automatic
+  # Validation-time clusterer: cuML GPU HDBSCAN (auto-K, ~4× faster
+  # than SoftMeanShift on 80×256×256 patches; requires cuml-cu13).
+  # `bandwidth` and `normalize_embeddings` default to loss.delta_v /
+  # loss.normalize_embeddings, so we only need to pick the backend.
+  clusterer:
+    name: hdbscan
+    backend: cuml
+    min_cluster_size: 50
+    max_points: 50000
+    # cluster_selection_epsilon: null   # null → bandwidth (= delta_v)
 
 optimizer:
   type: adamw
   lr: 2e-4
-  dit_backbone_lr: 2e-5
+  dit_backbone_lr: 1e-5
   weight_decay: 1.0e-4
   scheduler:
     type: cosine_warmup

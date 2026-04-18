@@ -32,9 +32,30 @@ cd neurons
 pip install -e ".[dev]"
 ```
 
+### Optional GPU acceleration (recommended)
+
+The clustering (cuML HDBSCAN) and transform (cupy EDT, Gaussian,
+connected components) paths run ~4–8× faster with RAPIDS installed.
+Use the extras that match your CUDA toolkit, pointed at NVIDIA's
+wheel index:
+
+```bash
+# CUDA 13 stack (torch 2.10+/cu130, B100/B200/B300, H200, etc.)
+pip install -e ".[gpu-cu13]" --extra-index-url https://pypi.nvidia.com
+
+# CUDA 12 stack (torch 2.1-2.9, A100, H100, L40, RTX 40xx, etc.)
+pip install -e ".[gpu-cu12]" --extra-index-url https://pypi.nvidia.com
+```
+
+If RAPIDS is not installed, everything still works — the clusterer
+transparently falls back to scikit-learn (HDBSCAN / MeanShift) and
+transforms fall back to scipy/skimage.
+
 ### Dependencies
 
 Core: PyTorch, PyTorch Lightning, MONAI, einops, Hydra, h5py, tifffile, pynrrd, scipy
+
+Optional GPU: cupy, cuml (see `[gpu-cu13]` / `[gpu-cu12]` extras)
 
 ## Directory Structure
 
@@ -210,19 +231,27 @@ loss:
 
 ## GPU Acceleration
 
-When [cucim](https://github.com/rapidsai/cucim) is installed, several
-expensive operations are automatically accelerated on GPU:
+Install the `gpu-cu13` (or `gpu-cu12`) extras to pull
+[cupy](https://cupy.dev/), [cuML](https://docs.rapids.ai/api/cuml/),
+and — via `cucim` if also installed — GPU kernels for several expensive
+operations.  The codebase probes each dependency at runtime and falls
+back cleanly when missing.
 
-| Operation | CPU fallback | GPU (cucim) |
+| Operation | CPU fallback | GPU |
 |-----------|-------------|-------------|
+| Instance clustering (val + inference) | `sklearn.cluster.HDBSCAN` / `hdbscan` package | `cuml.cluster.HDBSCAN` |
 | Distance transform (EDT) | `scipy.ndimage.distance_transform_edt` | `cucim.core.operations.morphology.distance_transform_edt` |
 | Gaussian filter | `scipy.ndimage.gaussian_filter` | `cupyx.scipy.ndimage.gaussian_filter` |
 | Connected components | `scipy.ndimage.label` | `cupyx.scipy.ndimage.label` |
 | Boundary detection | `skimage.segmentation.find_boundaries` | `cucim.skimage.segmentation.find_boundaries` |
 
-All GPU-accelerated functions live in `neurons/transforms/edt.py` and
-`neurons/transforms/find_boundaries.py` with automatic scipy/skimage
-CPU fallback.
+All GPU-accelerated functions live in
+`neurons/transforms/edt.py`, `neurons/transforms/find_boundaries.py`,
+and `neurons/inference/clusterer.py` with automatic CPU fallback.
+
+Note: RAPIDS dropped `cuml.cluster.MeanShift` in cuML 23.x, so the
+`MeanShiftClusterer` always runs on scikit-learn (CPU).  Use
+`HDBSCANClusterer` for a GPU-accelerated alternative.
 
 DataLoader workers (forked processes) automatically fall back to the CPU
 path since CUDA contexts do not survive `fork()`.

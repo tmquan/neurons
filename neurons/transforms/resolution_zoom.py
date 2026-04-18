@@ -33,6 +33,7 @@ from typing import Dict, Optional, Sequence, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
@@ -80,10 +81,10 @@ def _zoom_volume(
                     work[vol == uid] = i
 
     # Interpolate
-    vol_5d = work.unsqueeze(0).float()  # (1, C, D, H, W)
+    vol_5d = rearrange(work.float(), "c d h w -> 1 c d h w")
     zoomed = F.interpolate(vol_5d, size=new_shape, mode=mode,
                            align_corners=False if mode != "nearest" else None)
-    zoomed = zoomed.squeeze(0)  # (C, D', H', W')
+    zoomed = rearrange(zoomed, "1 c d h w -> c d h w")
 
     # Center-crop / zero-pad back to orig_shape
     out = torch.zeros_like(vol)

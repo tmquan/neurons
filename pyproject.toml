@@ -36,6 +36,18 @@ cosmos = [
     "safetensors>=0.7.0",
     "accelerate>=1.13.0",
 ]
+# NVIDIA RAPIDS wheels for GPU clustering (cuML HDBSCAN) and GPU
+# transforms (cupy-backed EDT / gaussian / connected components).
+# Must be installed via NVIDIA's index, e.g.:
+#   pip install -e ".[gpu-cu13]" --extra-index-url https://pypi.nvidia.com
+gpu-cu13 = [
+    "cupy-cuda13x>=14.0",
+    "cuml-cu13>=25.10",
+]
+gpu-cu12 = [
+    "cupy-cuda12x>=13.0",
+    "cuml-cu12>=25.10",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",

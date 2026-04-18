@@ -21,7 +21,7 @@ import torch.distributed as dist
 import pytorch_lightning as pl
 from einops import rearrange, reduce
 
-from neurons.inference.soft_clustering import SoftMeanShift
+from neurons.inference.clusterer import build_clusterer
 from neurons.metrics import (
     compute_per_batch_ari,
     compute_per_batch_ami,
@@ -106,10 +106,13 @@ class BaseVistaModule(pl.LightningModule):
 
         self.criterion = self._loss_cls(**loss_config)
 
-        self.clusterer = SoftMeanShift(
-            bandwidth=loss_config.get("delta_v", 0.5),
-            normalize_embeddings=loss_config.get("normalize_embeddings", False),
+        clusterer_config = dict(training_config.get("clusterer", {}) or {})
+        clusterer_name = clusterer_config.pop("name", "soft_meanshift")
+        clusterer_config.setdefault("bandwidth", loss_config.get("delta_v", 0.5))
+        clusterer_config.setdefault(
+            "normalize_embeddings", loss_config.get("normalize_embeddings", False),
         )
+        self.clusterer = build_clusterer(clusterer_name, **clusterer_config)
         self._ignore_index = loss_config.get("ignore_index", -100)
 
         self.training_modes: List[str] = list(

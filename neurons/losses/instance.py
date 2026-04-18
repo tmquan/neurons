@@ -20,7 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, reduce
+from einops import rearrange, reduce, repeat
 
 from neurons.utils.parallel import pmap
 
@@ -177,6 +177,7 @@ class InstanceLoss(nn.Module):
         spatial_tail = label.shape[-self.spatial_dims:]
         max_iter = min(spatial_tail) // 2 + 1
         ones_pattern = " ".join(["1"] * self.spatial_dims)
+        broadcast_ids_pattern = f"k -> k {ones_pattern}"
         reshape_pattern = f"k c -> k c {ones_pattern}"
 
         for b in range(B):
@@ -188,9 +189,12 @@ class InstanceLoss(nn.Module):
             K = len(fg_ids)
             for start in range(0, K, _CHUNK):
                 chunk_ids = fg_ids[start:start + _CHUNK]
-                label_expanded = label[b].unsqueeze(0)
-                ids_shape = [len(chunk_ids)] + [1] * self.spatial_dims
-                masks = (label_expanded == chunk_ids.view(ids_shape)).float().unsqueeze(1)
+                label_expanded = rearrange(label[b], "... -> 1 ...")
+                chunk_ids_br = rearrange(chunk_ids, broadcast_ids_pattern)
+                masks = rearrange(
+                    (label_expanded == chunk_ids_br).float(),
+                    "k ... -> k 1 ...",
+                )
 
                 remaining = masks.clone()
                 dt = torch.zeros_like(masks)
@@ -272,12 +276,12 @@ class InstanceLoss(nn.Module):
             coords[:, d] = (remainder % spatial_shape[d]).float()
             remainder = remainder // spatial_shape[d]
 
-        inv_expand = inverse.unsqueeze(1).expand(-1, S)
+        inv_expand = repeat(inverse, "m -> m s", s=S)
         centroid_sum = torch.zeros(K, S, device=device, dtype=torch.float32)
         centroid_sum.scatter_add_(0, inv_expand, coords)
         counts = torch.bincount(inverse, minlength=K).float().clamp(min=1)
 
-        return centroid_sum / counts.unsqueeze(1)
+        return centroid_sum / rearrange(counts, "k -> k 1")
 
     @staticmethod
     @torch.no_grad()
@@ -306,7 +310,7 @@ class InstanceLoss(nn.Module):
         device = centroids.device
 
         shape_t = torch.tensor(spatial_shape, device=device, dtype=torch.float32)
-        c_norm = centroids / shape_t.unsqueeze(0).clamp(min=1)
+        c_norm = centroids / rearrange(shape_t, "s -> 1 s").clamp(min=1)
 
         total_pairs = emb_dim // 2
         log_res = [math.log2(max(s, 2)) for s in spatial_shape]
@@ -357,7 +361,7 @@ class InstanceLoss(nn.Module):
         lbl_fg = lbl[fg]                               # [M]
         if wgt is not None:
             wgt_fg = wgt[fg].float()                   # [M] always float32
-            weighted_emb = emb_fg * wgt_fg.unsqueeze(0)
+            weighted_emb = emb_fg * rearrange(wgt_fg, "m -> 1 m")
             w_sum = torch.zeros(K, device=emb.device, dtype=torch.float32)
             w_sum.scatter_add_(0, lbl_fg, wgt_fg)
         else:
@@ -365,11 +369,11 @@ class InstanceLoss(nn.Module):
             w_sum = torch.bincount(lbl_fg, minlength=K).float().clamp(min=1)
 
         c_sum = torch.zeros(E, K, device=emb.device, dtype=torch.float32)
-        lbl_expand = lbl_fg.unsqueeze(0).expand(E, -1)
+        lbl_expand = repeat(lbl_fg, "m -> e m", e=E)
         c_sum.scatter_add_(1, lbl_expand, weighted_emb)
 
-        centers = c_sum / (w_sum.unsqueeze(0) + 1e-8)  # [E, K]
-        return centers.T                                # [K, E]
+        centers = c_sum / (rearrange(w_sum, "k -> 1 k") + 1e-8)  # [E, K]
+        return rearrange(centers, "e k -> k e")
 
     def _loss_single(self, embed, label, w_edge, w_bone) -> Dict[str, torch.Tensor]:
         """Pull/push/norm over all instances in the batch.
@@ -443,7 +447,9 @@ class InstanceLoss(nn.Module):
             center_per_pixel = pull_centers[inverse]   # [M, E]
             emb_fg = emb_b[:, fg].T                    # [M, E]
 
-            dist = ((emb_fg - center_per_pixel) ** 2).sum(dim=1).clamp(min=1e-12).sqrt()  # [M]
+            dist = reduce(
+                (emb_fg - center_per_pixel) ** 2, "m e -> m", "sum",
+            ).clamp(min=1e-12).sqrt()  # [M]
             pull_per_pixel = (dist - self.delta_v).clamp(min=0).pow(2)
             if wgt_b is not None:
                 pull_per_pixel = pull_per_pixel * wgt_b[fg]
@@ -458,7 +464,7 @@ class InstanceLoss(nn.Module):
             if K > 1:
                 pw_diff = (rearrange(mean_centers, "i e -> i 1 e") -
                            rearrange(mean_centers, "j e -> 1 j e"))
-                pw = (pw_diff ** 2).sum(dim=2).clamp(min=1e-12).sqrt()
+                pw = reduce(pw_diff ** 2, "i j e -> i j", "sum").clamp(min=1e-12).sqrt()
                 triu = torch.triu_indices(K, K, offset=1, device=device)
                 hinge = (2 * self.delta_d - pw[triu[0], triu[1]]).clamp(min=0).pow(2)
                 if self.max_hard_pairs > 0 and hinge.numel() > self.max_hard_pairs:
@@ -467,7 +473,9 @@ class InstanceLoss(nn.Module):
 
             # --- Norm: on empirical mean_centers ---
             if not self.normalize_embeddings:
-                loss_norm = loss_norm + (mean_centers ** 2).sum(dim=1).clamp(min=1e-12).sqrt().mean()
+                loss_norm = loss_norm + reduce(
+                    mean_centers ** 2, "k e -> k", "sum",
+                ).clamp(min=1e-12).sqrt().mean()
 
         n = max(n_valid, 1)
         pull = loss_pull / n

@@ -16,6 +16,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from einops import rearrange, reduce, repeat
 
+from neurons.utils.manifold import project_batch
+
 
 # ======================================================================
 # Visualisation helpers
@@ -38,8 +40,8 @@ def _normalise(t: torch.Tensor) -> torch.Tensor:
     its minimum becomes 0 and its maximum becomes 1.
     """
     flat = rearrange(t, "b ... -> b (...)")                        # [B, N]
-    lo = flat.min(dim=1, keepdim=True).values
-    hi = flat.max(dim=1, keepdim=True).values
+    lo = reduce(flat, "b n -> b 1", "min")
+    hi = reduce(flat, "b n -> b 1", "max")
     denom = (hi - lo).clamp(min=1e-5)
     normed = (flat - lo) / denom                                   # [B, N]
     return rearrange(normed, "b (c h w) -> b c h w",
@@ -99,29 +101,44 @@ def _label_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     return rearrange(rgb, "(b h w) c -> b c h w", b=B, h=H, w=W)
 
 
-def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
-    """Project [B, E, H, W] embeddings → [B, 3, H, W] via per-image PCA.
+def _project_embedding(
+    emb: torch.Tensor,
+    n_components: int = 3,
+    algorithm: str = "pca",
+    backend: str = "auto",
+) -> torch.Tensor:
+    """Project ``[B, E, H, W]`` embeddings → ``[B, 3, H, W]`` via per-image
+    manifold reduction.
 
-    The top-3 principal components are used as RGB channels.  Each image
-    in the batch is projected independently so colours are locally
-    meaningful (nearby pixels with similar embeddings get similar colours).
+    The top ``n_components`` axes are used as RGB channels.  Each image in
+    the batch is reduced independently so colours are locally meaningful
+    (nearby pixels with similar embeddings receive similar colours).
 
-    Falls back to the first 3 channels when SVD fails to converge
-    (ill-conditioned matrices are common in early training).
+    Args:
+        emb: 4-D tensor of embeddings (after central-slice extraction for
+            volumetric models).
+        n_components: Number of output channels (typically 3 for RGB).
+        algorithm: ``"pca"`` | ``"svd"`` | ``"umap"``.
+        backend:   ``"auto"`` | ``"cuml"`` | ``"torch"`` | ``"umap-learn"``.
+
+    Uses cuML GPU estimators when the input lives on CUDA and RAPIDS is
+    installed; otherwise falls back to ``torch.linalg.svd`` (pca / svd)
+    or ``umap-learn`` (umap).  Ill-conditioned cases degrade to the
+    leading feature channels rather than crashing training.
     """
-    B, E, H, W = emb.shape
+    _, _, H, W = emb.shape
     flat = rearrange(emb, "b e h w -> b e (h w)").float()         # [B, E, N]
-    mean = flat.mean(dim=2, keepdim=True)
-    centered = flat - mean
-
-    try:
-        U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
-        proj = Vh[:, :n_components]                                # [B, 3, N]
-    except (torch._C._LinAlgError, RuntimeError):
-        proj = centered[:, :n_components]                          # [B, 3, N]
-
+    proj = project_batch(
+        flat, n_components=n_components, algorithm=algorithm, backend=backend,
+    )
     proj = rearrange(proj, "b c (h w) -> b c h w", h=H, w=W)
     return _normalise(proj)
+
+
+# Legacy alias -- keep existing call sites working.
+def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
+    """Back-compat shim for :func:`_project_embedding` with PCA + auto backend."""
+    return _project_embedding(emb, n_components=n_components, algorithm="pca", backend="auto")
 
 
 # ======================================================================
@@ -413,6 +430,8 @@ def _log_predictions(
     clusterer: Any = None,
     dir_target: str = "centroid",
     active_classes: Optional[int] = None,
+    projection_algorithm: str = "pca",
+    projection_backend: str = "auto",
 ) -> torch.Tensor:
     """Log a standard set of prediction visualisations to TensorBoard.
 
@@ -428,9 +447,14 @@ def _log_predictions(
         spatial_dims: 2 or 3 (controls geometry channel layout).
         n: number of images.
         epoch: global step for TensorBoard.
-        clusterer: optional SoftMeanShift for producing instance_pred.
+        clusterer: optional clusterer (SoftMeanShift / HDBSCAN / MeanShift)
+            for producing instance_pred.
         dir_target: ``"centroid"`` or ``"skeleton"``.
         active_classes: number of active semantic channels (from config).
+        projection_algorithm: Manifold algorithm for the ``instance_pca``
+            panel.  One of ``"pca"`` (default), ``"svd"``, ``"umap"``.
+        projection_backend: Backend for the projection.  ``"auto"`` picks
+            cuML on CUDA, else a CPU fallback.  ``"cuml"`` forces GPU.
 
     Returns:
         [n, 3, H, W] grayscale image repeated to RGB (for prompt overlay).
@@ -439,7 +463,7 @@ def _log_predictions(
     ch_dir = S
     ch_cov = S * S
 
-    img_gray = _normalise(images).expand(-1, 3, -1, -1).contiguous()
+    img_gray = repeat(_normalise(images), "b 1 h w -> b 3 h w").contiguous()
     lbl_rgb = _label_to_rgb(labels.long())
 
     tb.add_images(f"{tag}/image", img_gray, global_step=epoch)
@@ -461,8 +485,12 @@ def _log_predictions(
 
     if "instance" in preds:
         inst = _to_2d(preds["instance"][:n])
-        inst_rgb = _pca_project(inst, n_components=3)
-        tb.add_images(f"{tag}/instance_pca", inst_rgb, global_step=epoch)
+        inst_rgb = _project_embedding(
+            inst, n_components=3,
+            algorithm=projection_algorithm, backend=projection_backend,
+        )
+        panel_name = f"instance_{projection_algorithm}"
+        tb.add_images(f"{tag}/{panel_name}", inst_rgb, global_step=epoch)
 
         if clusterer is not None:
             if sem_fg is not None:
@@ -470,7 +498,7 @@ def _log_predictions(
                 fg_alpha = sem_fg
             else:
                 fg_mask_pred = labels > 0
-                fg_alpha = fg_mask_pred.unsqueeze(1).float()
+                fg_alpha = rearrange(fg_mask_pred.float(), "b ... -> b 1 ...")
             if inst.dim() == 5:
                 fg_mask_full = rearrange(
                     _to_2d(rearrange(fg_mask_pred, "b ... -> b 1 ...")),
@@ -525,6 +553,15 @@ class ImageLogger(pl.Callback):
         every_n_epochs: log every *n* epochs (default 1).
         max_images: maximum batch elements to log (default 4).
         spatial_dims: 2 or 3 — controls central-slice extraction for 3-D.
+        projection_algorithm: Manifold reducer for instance embeddings.
+            One of ``"pca"`` (default, linear), ``"svd"`` (linear, no
+            centering), or ``"umap"`` (non-linear, highlights local
+            cluster structure but ~10-100× slower).
+        projection_backend: Backend for the projection.  ``"auto"`` picks
+            cuML on CUDA inputs when RAPIDS is available, else torch /
+            umap-learn.  Explicit choices: ``"cuml"`` (forces GPU),
+            ``"torch"`` (pca/svd CPU or CUDA SVD), ``"umap-learn"``
+            (forces CPU UMAP).
     """
 
     def __init__(
@@ -532,11 +569,15 @@ class ImageLogger(pl.Callback):
         every_n_epochs: int = 1,
         max_images: int = 4,
         spatial_dims: int = 2,
+        projection_algorithm: str = "pca",
+        projection_backend: str = "auto",
     ) -> None:
         super().__init__()
         self.every_n_epochs = max(every_n_epochs, 1)
         self.max_images = max_images
         self.spatial_dims = spatial_dims
+        self.projection_algorithm = projection_algorithm
+        self.projection_backend = projection_backend
         self._train_batch: Optional[Dict[str, torch.Tensor]] = None
         self._val_batch: Optional[Dict[str, torch.Tensor]] = None
 
@@ -674,6 +715,8 @@ class ImageLogger(pl.Callback):
             preds_auto, self.spatial_dims, n, epoch,
             clusterer=clusterer, dir_target=dir_target,
             active_classes=active_classes,
+            projection_algorithm=self.projection_algorithm,
+            projection_backend=self.projection_backend,
         )
         del preds_auto
 

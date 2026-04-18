@@ -83,6 +83,15 @@ loss:
 training:
   training_modes:
     - automatic
+  # Validation-time clusterer. Switch to hdbscan for faster, auto-K
+  # instance metrics on GPU (requires cuml-cu1X + cupy).
+  clusterer:
+    name: soft_meanshift   # soft_meanshift | hdbscan | meanshift
+    # Optional overrides (bandwidth defaults to loss.delta_v, etc.):
+    # min_cluster_size: 50
+    # max_points: 50000          # hdbscan / meanshift only
+    # backend: auto              # auto | cuml | hdbscan | sklearn | torch
+    # cluster_selection_epsilon: null   # hdbscan only; null = bandwidth
   max_epochs: 100
   accelerator: auto  # Options: cpu, gpu, tpu, auto
   devices: auto
@@ -131,6 +140,15 @@ callbacks:
     enabled: true
     every_n_epochs: 1
     max_images: 4
+    # Manifold projection used for the `instance_<algo>` TB panel.
+    # algorithm: pca | svd | umap
+    #   - pca  (default): linear, centered SVD; fast & deterministic
+    #   - svd            : linear, uncentered; slightly cheaper than pca
+    #   - umap           : non-linear, highlights local clusters (~10-100× slower)
+    # backend:   auto | cuml | torch | umap-learn
+    #   - auto (default): cuML on CUDA when available, else torch / umap-learn
+    projection_algorithm: pca
+    projection_backend: auto
 
   # Clear GPU cache before validation (helps large 3D models at train/val boundary).
   cuda_empty_cache_before_val: false

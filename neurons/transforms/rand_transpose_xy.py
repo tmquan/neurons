@@ -9,6 +9,7 @@ from typing import Dict
 
 import numpy as np
 import torch
+from einops import rearrange
 from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
@@ -39,7 +40,7 @@ class RandTransposeXYd(MapTransform, Randomizable):
         for key in self.key_iterator(d):
             val = d[key]
             if isinstance(val, torch.Tensor):
-                d[key] = val.transpose(-2, -1).contiguous()
+                d[key] = rearrange(val, "... h w -> ... w h").contiguous()
             elif isinstance(val, np.ndarray):
                 d[key] = np.ascontiguousarray(np.swapaxes(val, -2, -1))
         return d
