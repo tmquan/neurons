@@ -108,7 +108,7 @@ training:
   clusterer:
     name: hdbscan
     backend: auto
-    min_cluster_size: 50
+    min_cluster_size: 15
     max_points: 50000
     # cluster_selection_epsilon: null   # null → bandwidth (= delta_v)
 
