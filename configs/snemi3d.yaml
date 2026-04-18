@@ -96,13 +96,18 @@ training:
   compile: false
   training_modes:
     - automatic
-  # Validation-time clusterer: cuML GPU HDBSCAN (auto-K, ~4× faster
-  # than SoftMeanShift on 80×256×256 patches; requires cuml-cu13).
+  # Validation-time clusterer: HDBSCAN (auto-K, ~4× faster than
+  # SoftMeanShift on 80×256×256 patches).  `backend: auto` prefers
+  # `cuml.cluster.HDBSCAN` on CUDA when RAPIDS is importable, and
+  # falls back to `sklearn.cluster.HDBSCAN` otherwise — this matters
+  # in DDP where occasional worker ranks fail to initialise cuML and
+  # would otherwise crash the whole job.  Set `backend: cuml` only
+  # when you want a hard failure if the GPU path is unavailable.
   # `bandwidth` and `normalize_embeddings` default to loss.delta_v /
-  # loss.normalize_embeddings, so we only need to pick the backend.
+  # loss.normalize_embeddings.
   clusterer:
     name: hdbscan
-    backend: cuml
+    backend: auto
     min_cluster_size: 50
     max_points: 50000
     # cluster_selection_epsilon: null   # null → bandwidth (= delta_v)
