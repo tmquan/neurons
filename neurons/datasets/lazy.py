@@ -243,25 +243,85 @@ class LazyVolDataset(Dataset):
         if self.normalize and self._handles:
             self._compute_norm_params()
 
-    def _compute_norm_params(self) -> None:
-        """Compute per-volume min/max by sampling a few slices — not full load."""
-        for h in self._handles:
-            spatial = self._spatial_shape(h)
-            z_dim = spatial[0]
-            sample_indices = [0, z_dim // 4, z_dim // 2, 3 * z_dim // 4, z_dim - 1]
-            sample_indices = sorted(set(max(0, min(i, z_dim - 1)) for i in sample_indices))
+    # ------------------------------------------------------------------
+    # Per-volume normalisation parameters
+    # ------------------------------------------------------------------
+    # Reads a handful of *small* centred patches (not full slices) to
+    # estimate min/max, then caches the result to a ``<file>.norm.json``
+    # sidecar so subsequent ranks / runs load instantly.  Full-slice
+    # sampling on chunked gzip HDF5 can take 10+ s per volume, which
+    # multiplied across ranks (setup runs per-rank) easily turns into a
+    # multi-minute hang before Lightning's sanity-check banner prints.
+    _NORM_PROBE_SIZE = 512      # ≤ a few MB per probe; trivial to decode
+    _NORM_PROBE_COUNT = 5       # how many probes to average min/max over
 
+    def _norm_cache_path(self, handle: _VolumeHandle) -> Path:
+        return handle.image_path.with_suffix(handle.image_path.suffix + ".norm.json")
+
+    def _read_norm_cache(self, handle: _VolumeHandle) -> Optional[Tuple[float, float]]:
+        import json
+        p = self._norm_cache_path(handle)
+        if not p.exists():
+            return None
+        try:
+            with open(p, "r") as f:
+                data = json.load(f)
+            return float(data["min"]), float(data["max"])
+        except Exception:
+            return None
+
+    def _write_norm_cache(self, handle: _VolumeHandle, vmin: float, vmax: float) -> None:
+        import json, os
+        p = self._norm_cache_path(handle)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        try:
+            with open(tmp, "w") as f:
+                json.dump({"min": vmin, "max": vmax}, f)
+            os.replace(tmp, p)
+        except OSError:
+            pass   # non-fatal: read-only filesystem, concurrent rank, etc.
+
+    def _compute_norm_params(self) -> None:
+        """Per-volume min/max from small centred probes with sidecar caching."""
+        probe = self._NORM_PROBE_SIZE
+        n_probes = self._NORM_PROBE_COUNT
+
+        for h in self._handles:
+            cached = self._read_norm_cache(h)
+            if cached is not None:
+                self._norm_params[h.name] = cached
+                logger.debug("Norm params cache hit for %s: %s", h.name, cached)
+                continue
+
+            spatial = self._spatial_shape(h)
             has_channel = len(h.shape) > len(spatial)
+            z_dim = spatial[0]
+
+            z_indices = sorted(
+                set(
+                    max(0, min(i, z_dim - 1))
+                    for i in (0, z_dim // 4, z_dim // 2, 3 * z_dim // 4, z_dim - 1)
+                )
+            )[:n_probes]
+
             vmin, vmax = float("inf"), float("-inf")
-            for zi in sample_indices:
-                sl = (slice(zi, zi + 1),) + tuple(slice(None) for _ in spatial[1:])
+            for zi in z_indices:
+                # Centred (probe × probe) crop at z=zi; orders of
+                # magnitude fewer chunks than a full-slice read.
+                sl = [slice(zi, zi + 1)]
+                for axis_len in spatial[1:]:
+                    half = min(probe, axis_len) // 2
+                    centre = axis_len // 2
+                    sl.append(slice(max(0, centre - half), min(axis_len, centre + half)))
+                sl_tuple = tuple(sl)
                 if has_channel:
-                    sl = (slice(None),) + sl
-                patch = _read_patch(h.image_path, sl, h.image_key, dtype=np.float32)
+                    sl_tuple = (slice(None),) + sl_tuple
+                patch = _read_patch(h.image_path, sl_tuple, h.image_key, dtype=np.float32)
                 vmin = min(vmin, float(patch.min()))
                 vmax = max(vmax, float(patch.max()))
 
             self._norm_params[h.name] = (vmin, vmax)
+            self._write_norm_cache(h, vmin, vmax)
             logger.debug("Norm params for %s: min=%.4f, max=%.4f", h.name, vmin, vmax)
 
     def __len__(self) -> int:
