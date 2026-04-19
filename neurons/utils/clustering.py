@@ -233,10 +233,19 @@ def _normalize_delta_v(delta_v: DeltaV, n_dims: int) -> List[float]:
     ):
         return [float(delta_v)] * n_dims
     vals = [float(x) for x in delta_v]
-    if len(vals) != n_dims:
+    # Callers sometimes hand us a full-rank anisotropy vector (e.g.
+    # ``[Z, Y, X] = [0.1, 0.5, 0.5]``) but the runtime spatial rank is
+    # lower — this happens when the TB viz callback projects a 3-D
+    # prediction to a 2-D mid-slice and reuses the 3-D clusterer.  The
+    # [Z, Y, X] convention means the innermost ``n_dims`` entries are
+    # the ones that apply, so take the trailing slice rather than
+    # failing hard.
+    if len(vals) > n_dims:
+        vals = vals[-n_dims:]
+    elif len(vals) < n_dims:
         raise ValueError(
-            f"delta_v must be a scalar or length-{n_dims} sequence "
-            f"(one threshold per spatial axis); got {delta_v!r}."
+            f"delta_v must be a scalar or length-{n_dims} (or longer) "
+            f"sequence (one threshold per spatial axis); got {delta_v!r}."
         )
     if any(v <= 0 for v in vals):
         raise ValueError(f"delta_v entries must be positive; got {vals}.")

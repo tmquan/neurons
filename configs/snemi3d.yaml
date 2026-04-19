@@ -96,8 +96,8 @@ training:
   # torch.compile on DiT backbone. false/null disables; true uses
   # "reduce-overhead" (~1 min compile, good runtime); "max-autotune"
   # gives best runtime but 5-15 min first-run compile.
-  compile: "max-autotune"
-  compile_fullgraph: true
+  compile: false
+  compile_fullgraph: false
   training_modes:
     - automatic
   # Validation-time clusterer.  `bandwidth` and `normalize_embeddings`
