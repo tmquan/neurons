@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from neurons.models.base import BaseModel
-from neurons.models.segresnet import SegResNetWrapper
 from neurons.models.vista2d_model import Vista2DWrapper
 from neurons.models.vista3d_model import Vista3DWrapper
 
@@ -82,102 +81,6 @@ class TestBaseModel:
         r = repr(TinyModel())
         assert "TinyModel" in r
         assert "in_channels=1" in r
-
-
-# ---------------------------------------------------------------------------
-# SegResNetWrapper
-# ---------------------------------------------------------------------------
-
-class TestSegResNetWrapper:
-    """Tests for SegResNetWrapper."""
-
-    def test_2d_forward_shape(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=2, spatial_dims=2,
-            init_filters=8, feature_dim=16, blocks_down=(1, 1), blocks_up=(1,),
-        )
-        x = torch.randn(2, 1, 32, 32)
-        out = model(x)
-        assert "logits" in out
-        assert "features" in out
-        assert out["logits"].shape == (2, 2, 32, 32)
-
-    def test_3d_forward_shape(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=3, spatial_dims=3,
-            init_filters=8, feature_dim=16, blocks_down=(1, 1), blocks_up=(1,),
-        )
-        x = torch.randn(1, 1, 8, 16, 16)
-        out = model(x)
-        assert out["logits"].shape == (1, 3, 8, 16, 16)
-
-    def test_instance_head(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=2, spatial_dims=2,
-            init_filters=8, feature_dim=16, emb_dim=8,
-            blocks_down=(1, 1), blocks_up=(1,),
-            use_ins_head=True,
-        )
-        x = torch.randn(2, 1, 32, 32)
-        out = model(x)
-        assert "embedding" in out
-        assert out["embedding"].shape == (2, 8, 32, 32)
-
-    def test_boundary_head(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=2, spatial_dims=2,
-            init_filters=8, feature_dim=16,
-            blocks_down=(1, 1), blocks_up=(1,),
-            use_boundary_head=True,
-        )
-        x = torch.randn(1, 1, 32, 32)
-        out = model(x)
-        assert "boundary" in out
-        assert out["boundary"].shape[1] == 1
-
-    def test_no_optional_heads_by_default(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=2, spatial_dims=2,
-            init_filters=8, feature_dim=16,
-            blocks_down=(1, 1), blocks_up=(1,),
-        )
-        x = torch.randn(1, 1, 32, 32)
-        out = model(x)
-        assert "embedding" not in out
-        assert "boundary" not in out
-
-    def test_get_output_channels(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=5, spatial_dims=2,
-            init_filters=8, feature_dim=16,
-            blocks_down=(1, 1), blocks_up=(1,),
-        )
-        assert model.get_output_channels() == 5
-
-    def test_freeze_unfreeze_dit_backbone(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=2, spatial_dims=2,
-            init_filters=8, feature_dim=16,
-            blocks_down=(1, 1), blocks_up=(1,),
-        )
-        model.freeze_dit_backbone()
-        frozen = sum(1 for p in model.backbone.parameters() if not p.requires_grad)
-        assert frozen > 0
-
-        model.unfreeze_dit_backbone()
-        unfrozen = sum(1 for p in model.backbone.parameters() if not p.requires_grad)
-        assert unfrozen == 0
-
-    def test_backward_pass(self) -> None:
-        model = SegResNetWrapper(
-            in_channels=1, out_channels=2, spatial_dims=2,
-            init_filters=8, feature_dim=16,
-            blocks_down=(1, 1), blocks_up=(1,),
-        )
-        x = torch.randn(1, 1, 32, 32, requires_grad=True)
-        out = model(x)
-        out["logits"].sum().backward()
-        assert x.grad is not None
 
 
 # ---------------------------------------------------------------------------

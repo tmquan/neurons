@@ -138,45 +138,5 @@ class TestPointPromptEncoder:
         assert out.shape == (2, 16, 8, 8)
 
 
-# ---------------------------------------------------------------------------
-# Module-level helpers (import the 3D module for testing)
-# ---------------------------------------------------------------------------
-
-class TestModuleHelpers:
-    """Test _get_proofread_sub_mode and _resolve_fractionary_labels."""
-
-    @pytest.fixture()
-    def module(self):
-        from neurons.modules.vista3d_module import Vista3DModule
-        return Vista3DModule(
-            loss_config={"ignore_index": -100},
-            training_config={"training_modes": ["automatic"]},
-        )
-
-    def test_sub_mode_interactive_for_full_annotation(self, module) -> None:
-        targets = {
-            "labels": torch.tensor([[[1, 2], [3, 0]]]),
-            "semantic_labels": torch.tensor([[[1, 1], [1, 0]]]),
-        }
-        assert module._get_proofread_sub_mode(targets) == "interactive"
-
-    def test_sub_mode_fractionary_for_partial_annotation(self, module) -> None:
-        labels = torch.tensor([[[1, -100], [2, 0]]])
-        targets = {
-            "labels": labels,
-            "semantic_labels": torch.tensor([[[1, -100], [1, 0]]]),
-        }
-        assert module._get_proofread_sub_mode(targets) == "fractionary"
-
-    def test_resolve_fractionary_labels(self, module) -> None:
-        labels = torch.tensor([[[1, -100], [5, 0]]])
-        sem = torch.tensor([[[1, -100], [1, 0]]])
-        targets = {"labels": labels, "semantic_labels": sem}
-        resolved = module._resolve_fractionary_labels(targets)
-        assert (resolved["semantic_labels"][0, 0, 1] == -100)
-        assert resolved["labels"][0, 0, 1] == 0
-        assert resolved["semantic_ids"] is not None
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -1,8 +1,8 @@
 """
 PyTorch Lightning DataModules for connectomics datasets.
 
-DataModules handle train/val/test splitting, data loading configuration,
-and transform pipelines.
+Each datamodule wires up its dataset's train / val / test splits,
+augmentation pipeline and DataLoader configuration.
 """
 
 from neurons.datamodules.base import CircuitDataModule
@@ -11,12 +11,6 @@ from neurons.datamodules.cremi3d import CREMI3DDataModule
 from neurons.datamodules.microns import MICRONSDataModule
 from neurons.datamodules.mitoem2 import MitoEM2DataModule
 from neurons.datamodules.neurite import NeuriteDataModule
-from neurons.datamodules.combine import (
-    CombineDataModule,
-    UNION_LABEL_MAP,
-    UNION_LABEL_NAMES,
-    NUM_UNION_CLASSES,
-)
 
 __all__ = [
     "CircuitDataModule",
@@ -25,8 +19,4 @@ __all__ = [
     "MICRONSDataModule",
     "MitoEM2DataModule",
     "NeuriteDataModule",
-    "CombineDataModule",
-    "UNION_LABEL_MAP",
-    "UNION_LABEL_NAMES",
-    "NUM_UNION_CLASSES",
 ]

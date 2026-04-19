@@ -8,7 +8,7 @@ Logs visual grids at the end of each training epoch for automatic mode:
 Works for both 2-D slices and 3-D volumes (takes a central slice).
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
@@ -133,12 +133,6 @@ def _project_embedding(
     )
     proj = rearrange(proj, "b c (h w) -> b c h w", h=H, w=W)
     return _normalise(proj)
-
-
-# Legacy alias -- keep existing call sites working.
-def _pca_project(emb: torch.Tensor, n_components: int = 3) -> torch.Tensor:
-    """Back-compat shim for :func:`_project_embedding` with PCA + auto backend."""
-    return _project_embedding(emb, n_components=n_components, algorithm="pca", backend="auto")
 
 
 # ======================================================================
@@ -355,66 +349,6 @@ def _render_dir_quiver(
 
 
 # ======================================================================
-# Point prompt overlay
-# ======================================================================
-
-def _draw_points_on_image(
-    img_rgb: torch.Tensor,
-    pos_points: List[torch.Tensor],
-    neg_points: List[torch.Tensor],
-    spatial_dims: int,
-    center_depth: Optional[int] = None,
-    radius: int = 2,
-) -> torch.Tensor:
-    """Overlay sampled prompt points on an RGB image.
-
-    Positive points are drawn in green, negative in red.  For 3-D data
-    only points within ``radius`` slices of ``center_depth`` are shown.
-
-    Args:
-        img_rgb: [B, 3, H, W] image to draw on (will be cloned).
-        pos_points: list of [N_pos, spatial_dims] coordinate tensors.
-        neg_points: list of [N_neg, spatial_dims] coordinate tensors.
-        spatial_dims: 2 or 3.
-        center_depth: depth index of the displayed slice (3-D only).
-        radius: marker radius in pixels.
-
-    Returns:
-        [B, 3, H, W] image with green (pos) and red (neg) markers.
-    """
-    out = img_rgb.clone()
-    B, _, H, W = out.shape
-
-    for b in range(min(B, len(pos_points))):
-        for pts, color in [(pos_points[b], (0.0, 1.0, 0.0)),
-                           (neg_points[b], (1.0, 0.0, 0.0))]:
-            if pts.numel() == 0:
-                continue
-            coords = pts.long()
-            if spatial_dims == 3:
-                if center_depth is None:
-                    continue
-                near = (coords[:, 0] - center_depth).abs() <= radius
-                coords = coords[near]
-                if coords.shape[0] == 0:
-                    continue
-                ys, xs = coords[:, 1], coords[:, 2]
-            else:
-                ys, xs = coords[:, 0], coords[:, 1]
-
-            for dy in range(-radius, radius + 1):
-                for dx in range(-radius, radius + 1):
-                    if dy * dy + dx * dx > radius * radius:
-                        continue
-                    cy = (ys + dy).clamp(0, H - 1)
-                    cx = (xs + dx).clamp(0, W - 1)
-                    out[b, 0, cy, cx] = color[0]
-                    out[b, 1, cy, cx] = color[1]
-                    out[b, 2, cy, cx] = color[2]
-    return out
-
-
-# ======================================================================
 # Prediction logger (assembles all panels for one mode)
 # ======================================================================
 
@@ -497,7 +431,13 @@ def _log_predictions(
                 fg_mask_pred = sem_ids > 0
                 fg_alpha = sem_fg
             else:
-                fg_mask_pred = labels > 0
+                # Semantic head disabled (e.g. ``weight_semantic=0``):
+                # there is no predicted foreground at inference time.
+                # Use an all-ones mask so the panel honestly reflects
+                # what will happen when the model is deployed — every
+                # voxel is clustered — instead of silently pulling
+                # information from GT labels and flattering the viz.
+                fg_mask_pred = torch.ones_like(labels, dtype=torch.bool)
                 fg_alpha = rearrange(fg_mask_pred.float(), "b ... -> b 1 ...")
             # `inst` has been sliced to 2-D by `_to_2d` above; the fg
             # mask must carry the same spatial rank, i.e. [B, H, W].
@@ -522,7 +462,14 @@ def _log_predictions(
 
     if "geometry" in preds:
         geom = _to_2d(preds["geometry"][:n])
-        fg_mask_pred = (sem_ids > 0).long() if "semantic" in preds else (labels > 0).long()
+        # Same policy as the instance panel: when the semantic head is
+        # not predicted, visualise geometry over every voxel rather
+        # than secretly cheating with GT labels.  This is what the
+        # deployed model would actually have available at inference.
+        if "semantic" in preds:
+            fg_mask_pred = (sem_ids > 0).long()
+        else:
+            fg_mask_pred = torch.ones_like(labels, dtype=torch.long)
         g_dir_rgb = _render_dir_quiver(
             geom[:, :ch_dir], img_gray, fg_mask_pred, S, dir_target=dir_target,
         )
@@ -722,5 +669,3 @@ class ImageLogger(pl.Callback):
             projection_backend=self.projection_backend,
         )
         del preds_auto
-
-        # --- Proofread mode visualization (not yet implemented) ---

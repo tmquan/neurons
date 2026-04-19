@@ -55,8 +55,8 @@ class TestVista2DModule:
             "image": torch.randn(1, 1, 32, 32),
             "label": torch.randint(0, 5, (1, 32, 32)),
         }
-        loss = module.validation_step(batch, batch_idx=0)
-        assert loss.isfinite()
+        module.validation_step(batch, batch_idx=0)
+        assert module._eval_accum["val/loss"][1] > 0
 
     def test_prepare_targets_defaults(self) -> None:
         module = self._make_module()
@@ -135,8 +135,8 @@ class TestVista3DModule:
             "image": torch.randn(1, 1, 32, 32, 32),
             "label": torch.randint(0, 5, (1, 32, 32, 32)),
         }
-        loss = module.validation_step(batch, batch_idx=0)
-        assert loss.isfinite()
+        module.validation_step(batch, batch_idx=0)
+        assert module._eval_accum["val/loss"][1] > 0
 
     def test_prepare_targets_squeezes_5d(self) -> None:
         module = self._make_module()

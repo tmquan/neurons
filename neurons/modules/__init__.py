@@ -1,13 +1,9 @@
 """
-PyTorch Lightning modules for connectomics training tasks.
+PyTorch Lightning modules for connectomics segmentation training.
 
-Includes:
-- Vista3DModule: 3D Vista with semantic + instance + geometry heads
-- Vista2DModule: 2D Vista with semantic + instance + geometry heads
-- CosmosPredict3DModule: 3D Cosmos-Predict2.5 DiT volumetric segmentation module
-- CosmosTransfer3DModule: 3D Cosmos-Transfer2.5 DiT volumetric segmentation module
-- BaseVistaModule: Shared base for Vista 2D / 3D modules
-- BaseCosmosModule: Shared base for Cosmos Predict / Transfer 3D modules
+All modules share a common automatic-mode forward + loss + metric loop
+defined in :class:`BaseVistaModule` (Vista2D / Vista3D) and
+:class:`BaseCosmosModule` (Cosmos-Predict / Cosmos-Transfer 3D).
 """
 
 from neurons.modules.vista import BaseVistaModule

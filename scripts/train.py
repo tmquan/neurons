@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 """
-Neurons Training Script
+Neurons training entry point.
 
-Main entry point for training connectomics segmentation models.
-Uses Hydra for configuration management.
+Loads a Hydra config, builds the datamodule + Lightning module + trainer,
+then calls ``trainer.fit(...)``.
 
-Usage:
-    # Train with default config
+Examples
+--------
+    # Train with the default config
     python scripts/train.py
 
-    # Train with specific dataset config
+    # Train with a specific config
     python scripts/train.py --config-name snemi3d
 
     # Override parameters via CLI
-    python scripts/train.py --config-name snemi3d \\
-        data.batch_size=8 training.max_epochs=200
+    python scripts/train.py --config-name snemi3d data.batch_size=8 training.max_epochs=200
 
     # Fast development run
     python scripts/train.py training.fast_dev_run=true
@@ -40,12 +40,14 @@ import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from omegaconf.base import ContainerMetadata
 from omegaconf.nodes import ValueNode, AnyNode
+
 torch.serialization.add_safe_globals([
     Any,
     dict,
     collections.defaultdict,
     DictConfig, ListConfig, ContainerMetadata, ValueNode, AnyNode,
 ])
+
 from pytorch_lightning.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -55,50 +57,52 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 
-# Enable Tensor Core optimization
 torch.set_float32_matmul_precision("high")
 
 
-def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
-    """Create appropriate datamodule based on config."""
-    from neurons.datamodules import (
-        CREMI3DDataModule,
-        CombineDataModule,
-        NeuriteDataModule,
-        MICRONSDataModule,
-        MitoEM2DataModule,
-        SNEMI3DDataModule,
-    )
+# ----------------------------------------------------------------------
+# Factories
+# ----------------------------------------------------------------------
 
+_DATAMODULE_KWARGS = (
+    "data_root", "batch_size", "num_workers", "cache_rate", "pin_memory",
+    "persistent_workers", "train_volumes", "val_volumes", "test_volumes",
+    "find_boundaries", "pixel_size", "min_foreground", "compute_geometry",
+    "elastic_prob", "elastic_sigma_range", "elastic_magnitude_range",
+    "resolution_zoom_prob", "resolution_zoom_range", "resolution_map",
+    "image_size", "slice_mode", "num_samples", "patch_size",
+    "include_clefts", "include_mito",
+)
+
+
+def _to_vol_list(val):
+    """Convert an OmegaConf volume list to a list of plain dicts."""
+    if val is None:
+        return None
+    return [dict(v) if hasattr(v, "keys") else v for v in val]
+
+
+def _build_datamodule_kwargs(cfg: DictConfig) -> Dict[str, Any]:
+    """Collect the shared kwargs every DataModule understands."""
     data_cfg = cfg.data
-    dataset_type = data_cfg.get("dataset", "snemi3d").lower()
-
-    def _to_vol_list(val):
-        """Convert config value to list of dicts or None."""
-        if val is None:
-            return None
-        return [dict(v) if hasattr(v, "keys") else v for v in val]
-
-    train_volumes = _to_vol_list(data_cfg.get("train_volumes"))
-    val_volumes = _to_vol_list(data_cfg.get("val_volumes"))
-    test_volumes = _to_vol_list(data_cfg.get("test_volumes"))
-
     pixel_size = data_cfg.get("pixel_size")
-    if pixel_size is not None:
-        pixel_size = tuple(pixel_size)
+    resolution_zoom_range = data_cfg.get("resolution_zoom_range")
+    resolution_map = data_cfg.get("resolution_map")
+    image_size = data_cfg.get("image_size")
+    patch_size = data_cfg.get("patch_size")
 
-    common_args: Dict[str, Any] = {
+    return {
         "data_root": data_cfg.get("data_root", "data"),
         "batch_size": data_cfg.get("batch_size", 4),
         "num_workers": data_cfg.get("num_workers", 4),
         "cache_rate": data_cfg.get("cache_rate", 0.5),
         "pin_memory": data_cfg.get("pin_memory", True),
         "persistent_workers": bool(data_cfg.get("persistent_workers", True)),
-        "train_volumes": train_volumes,
-        "val_volumes": val_volumes,
-        "test_volumes": test_volumes,
+        "train_volumes": _to_vol_list(data_cfg.get("train_volumes")),
+        "val_volumes": _to_vol_list(data_cfg.get("val_volumes")),
+        "test_volumes": _to_vol_list(data_cfg.get("test_volumes")),
         "find_boundaries": float(data_cfg.get("find_boundaries", 0.0)),
-        "pixel_size": pixel_size,
+        "pixel_size": tuple(pixel_size) if pixel_size is not None else None,
         "min_foreground": float(data_cfg.get("min_foreground", 0.0)),
         "compute_geometry": float(cfg.get("loss", {}).get("weight_geometry", 0.0)) > 0,
         "elastic_prob": float(data_cfg.get("elastic_prob", 0.0)),
@@ -106,143 +110,59 @@ def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         "elastic_magnitude_range": tuple(data_cfg.get("elastic_magnitude_range", [10, 40])),
         "resolution_zoom_prob": float(data_cfg.get("resolution_zoom_prob", 0.0)),
         "resolution_zoom_range": (
-            tuple(tuple(r) for r in data_cfg.get("resolution_zoom_range"))
-            if data_cfg.get("resolution_zoom_range") is not None
-            else None
+            tuple(tuple(r) for r in resolution_zoom_range)
+            if resolution_zoom_range is not None else None
         ),
         "resolution_map": (
-            {str(k): tuple(v) for k, v in data_cfg.get("resolution_map").items()}
-            if data_cfg.get("resolution_map") is not None
-            else None
+            {str(k): tuple(v) for k, v in resolution_map.items()}
+            if resolution_map is not None else None
         ),
+        "image_size": tuple(image_size) if isinstance(image_size, list) else image_size,
+        "patch_size": tuple(patch_size) if patch_size else None,
+        "num_samples": data_cfg.get("num_samples"),
+        "slice_mode": data_cfg.get("slice_mode", True),
+        "include_clefts": data_cfg.get("include_clefts", True),
+        "include_mito": data_cfg.get("include_mito", False),
     }
 
-    image_size = data_cfg.get("image_size")
-    if image_size is not None:
-        common_args["image_size"] = tuple(image_size) if isinstance(image_size, list) else image_size
 
-    if dataset_type == "snemi3d":
-        patch_size = data_cfg.get("patch_size")
-        return SNEMI3DDataModule(
-            slice_mode=data_cfg.get("slice_mode", True),
-            num_samples=data_cfg.get("num_samples"),
-            patch_size=tuple(patch_size) if patch_size else None,
-            **common_args,
+def get_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
+    """Instantiate the datamodule selected by ``cfg.data.dataset``."""
+    from neurons.datamodules import (
+        CREMI3DDataModule,
+        NeuriteDataModule,
+        MICRONSDataModule,
+        MitoEM2DataModule,
+        SNEMI3DDataModule,
+    )
+
+    datamodule_classes = {
+        "snemi3d": SNEMI3DDataModule,
+        "cremi3d": CREMI3DDataModule,
+        "microns": MICRONSDataModule,
+        "neurite": NeuriteDataModule,
+        "mitoem2": MitoEM2DataModule,
+    }
+
+    dataset_type = cfg.data.get("dataset", "snemi3d").lower()
+    cls = datamodule_classes.get(dataset_type)
+    if cls is None:
+        raise ValueError(
+            f"Unknown dataset type: '{dataset_type}'. "
+            f"Choose from: {sorted(datamodule_classes)}"
         )
 
-    elif dataset_type == "cremi3d":
-        patch_size = data_cfg.get("patch_size")
-        return CREMI3DDataModule(
-            include_clefts=data_cfg.get("include_clefts", True),
-            include_mito=data_cfg.get("include_mito", False),
-            num_samples=data_cfg.get("num_samples"),
-            patch_size=tuple(patch_size) if patch_size else None,
-            **common_args,
-        )
-
-    elif dataset_type == "microns":
-        patch_size = data_cfg.get("patch_size")
-        return MICRONSDataModule(
-            slice_mode=data_cfg.get("slice_mode", True),
-            num_samples=data_cfg.get("num_samples"),
-            patch_size=tuple(patch_size) if patch_size else None,
-            **common_args,
-        )
-
-    elif dataset_type == "neurite":
-        patch_size = data_cfg.get("patch_size")
-        return NeuriteDataModule(
-            slice_mode=data_cfg.get("slice_mode", True),
-            num_samples=data_cfg.get("num_samples"),
-            patch_size=tuple(patch_size) if patch_size else None,
-            **common_args,
-        )
-
-    elif dataset_type == "mitoem2":
-        patch_size = data_cfg.get("patch_size")
-        return MitoEM2DataModule(
-            slice_mode=data_cfg.get("slice_mode", True),
-            num_samples=data_cfg.get("num_samples"),
-            patch_size=tuple(patch_size) if patch_size else None,
-            **common_args,
-        )
-
-    elif dataset_type == "combine":
-        datasets_cfg = data_cfg.get("datasets", {})
-        snemi3d_cfg = datasets_cfg.get("snemi3d", {})
-        cremi3d_cfg = datasets_cfg.get("cremi3d", {})
-        mitoem2_cfg = datasets_cfg.get("mitoem2", {})
-
-        patch_size = data_cfg.get("patch_size", [32, 160, 160])
-        if isinstance(patch_size, list):
-            patch_size = tuple(patch_size)
-
-        dm_entries: Dict[str, tuple] = {}
-
-        if snemi3d_cfg.get("enabled", True):
-            snemi3d_root = snemi3d_cfg.get("data_root", "data/snemi3d")
-            if Path(snemi3d_root).exists():
-                dm_entries["snemi3d"] = (
-                    SNEMI3DDataModule(
-                        data_root=snemi3d_root,
-                        batch_size=data_cfg.get("batch_size", 4),
-                        num_workers=data_cfg.get("num_workers", 4),
-                        cache_rate=data_cfg.get("cache_rate", 0.5),
-                        patch_size=patch_size,
-                        slice_mode=False,
-                        train_volumes=_to_vol_list(snemi3d_cfg.get("train_volumes")),
-                        test_volumes=_to_vol_list(snemi3d_cfg.get("test_volumes")),
-                    ),
-                    snemi3d_cfg.get("weight", 1.0),
-                )
-
-        if cremi3d_cfg.get("enabled", True):
-            cremi3d_root = cremi3d_cfg.get("data_root", "data/cremi3d")
-            if Path(cremi3d_root).exists():
-                dm_entries["cremi3d"] = (
-                    CREMI3DDataModule(
-                        data_root=cremi3d_root,
-                        batch_size=data_cfg.get("batch_size", 4),
-                        num_workers=data_cfg.get("num_workers", 4),
-                        cache_rate=data_cfg.get("cache_rate", 0.5),
-                        patch_size=patch_size,
-                        train_volumes=_to_vol_list(cremi3d_cfg.get("train_volumes")),
-                        test_volumes=_to_vol_list(cremi3d_cfg.get("test_volumes")),
-                        include_clefts=cremi3d_cfg.get("include_clefts", True),
-                        include_mito=cremi3d_cfg.get("include_mito", False),
-                    ),
-                    cremi3d_cfg.get("weight", 1.0),
-                )
-
-        if mitoem2_cfg.get("enabled", False):
-            mito_root = mitoem2_cfg.get("data_root", "data/mitoem2")
-            if Path(mito_root).exists():
-                dm_entries["mitoem2"] = (
-                    MitoEM2DataModule(
-                        data_root=mito_root,
-                        batch_size=data_cfg.get("batch_size", 4),
-                        num_workers=data_cfg.get("num_workers", 4),
-                        cache_rate=data_cfg.get("cache_rate", 0.5),
-                        train_volumes=_to_vol_list(mitoem2_cfg.get("train_volumes")),
-                        test_volumes=_to_vol_list(mitoem2_cfg.get("test_volumes")),
-                        slice_mode=False,
-                    ),
-                    mitoem2_cfg.get("weight", 1.5),
-                )
-
-        return CombineDataModule(
-            datamodules=dm_entries if dm_entries else None,
-            batch_size=data_cfg.get("batch_size", 4),
-            num_workers=data_cfg.get("num_workers", 4),
-            use_weighted_sampling=True,
-        )
-
-    else:
-        raise ValueError(f"Unknown dataset type: {dataset_type}")
+    kwargs = _build_datamodule_kwargs(cfg)
+    # Each DataModule ignores kwargs it doesn't declare, so we filter to
+    # avoid TypeError on older DataModule signatures.
+    import inspect
+    accepted = set(inspect.signature(cls).parameters)
+    kwargs = {k: v for k, v in kwargs.items() if k in accepted and v is not None}
+    return cls(**kwargs)
 
 
 def get_module(cfg: DictConfig) -> pl.LightningModule:
-    """Create appropriate Lightning module based on config."""
+    """Instantiate the Lightning module selected by ``cfg.model.type``."""
     from neurons.modules import (
         Vista3DModule,
         Vista2DModule,
@@ -250,76 +170,66 @@ def get_module(cfg: DictConfig) -> pl.LightningModule:
         CosmosTransfer3DModule,
     )
 
-    model_cfg = dict(cfg.get("model", {}))
-    optimizer_cfg = dict(cfg.get("optimizer", {}))
-    loss_cfg = dict(cfg.get("loss", {}))
-    training_cfg = dict(cfg.get("training", {}))
-
-    model_type = model_cfg.pop("type", "vista3d").lower()
-
-    _MODULE_MAP = {
+    module_classes = {
         "vista2d": Vista2DModule,
+        "vista3d": Vista3DModule,
         "cosmospredict3d": CosmosPredict3DModule,
-        "cosmos_predict25_3d": CosmosPredict3DModule,
         "cosmostransfer3d": CosmosTransfer3DModule,
+        # Legacy aliases.
+        "cosmos_predict25_3d": CosmosPredict3DModule,
         "cosmos_transfer25_3d": CosmosTransfer3DModule,
     }
 
-    _MODULE_MAP["vista3d"] = Vista3DModule
+    model_cfg = dict(cfg.get("model", {}))
+    model_type = model_cfg.pop("type", "vista3d").lower()
 
-    module_cls = _MODULE_MAP.get(model_type)
-    if module_cls is None:
+    cls = module_classes.get(model_type)
+    if cls is None:
         raise ValueError(
             f"Unknown model type: '{model_type}'. "
-            f"Choose from: {sorted(_MODULE_MAP)}"
+            f"Choose from: {sorted(module_classes)}"
         )
 
-    return module_cls(
+    return cls(
         model_config=model_cfg,
-        optimizer_config=optimizer_cfg,
-        loss_config=loss_cfg,
-        training_config=training_cfg,
+        optimizer_config=dict(cfg.get("optimizer", {})),
+        loss_config=dict(cfg.get("loss", {})),
+        training_config=dict(cfg.get("training", {})),
     )
 
 
 def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
-    """Setup training callbacks from configuration."""
+    """Build the standard callback list from the ``callbacks`` config block."""
     output_dir = cfg.get("output_dir", "outputs")
-    callbacks: List[pl.Callback] = []
-
     callback_cfg = cfg.get("callbacks", {})
+    callbacks: List[pl.Callback] = []
 
     if callback_cfg.get("cuda_empty_cache_before_val", False):
         from neurons.callbacks.memory import CudaEmptyCacheCallback
-
         callbacks.append(CudaEmptyCacheCallback())
 
     ckpt_cfg = callback_cfg.get("checkpoint", {})
     if ckpt_cfg.get("enabled", True):
-        callbacks.append(
-            ModelCheckpoint(
-                dirpath=ckpt_cfg.get("dirpath") or str(Path(output_dir) / "checkpoints"),
-                filename=ckpt_cfg.get("filename", "{epoch:02d}-{val/loss:.4f}"),
-                save_top_k=ckpt_cfg.get("save_top_k", 3),
-                monitor=ckpt_cfg.get("monitor", "val/loss"),
-                mode=ckpt_cfg.get("mode", "min"),
-                save_last=ckpt_cfg.get("save_last", True),
-                verbose=ckpt_cfg.get("verbose", True),
-                auto_insert_metric_name=False,
-            )
-        )
+        callbacks.append(ModelCheckpoint(
+            dirpath=ckpt_cfg.get("dirpath") or str(Path(output_dir) / "checkpoints"),
+            filename=ckpt_cfg.get("filename", "{epoch:02d}-{val/loss:.4f}"),
+            save_top_k=ckpt_cfg.get("save_top_k", 3),
+            monitor=ckpt_cfg.get("monitor", "val/loss"),
+            mode=ckpt_cfg.get("mode", "min"),
+            save_last=ckpt_cfg.get("save_last", True),
+            verbose=ckpt_cfg.get("verbose", True),
+            auto_insert_metric_name=False,
+        ))
 
     es_cfg = callback_cfg.get("early_stopping", {})
     if es_cfg.get("enabled", False):
-        callbacks.append(
-            EarlyStopping(
-                monitor=es_cfg.get("monitor", "val/loss"),
-                patience=es_cfg.get("patience", 20),
-                mode=es_cfg.get("mode", "min"),
-                verbose=es_cfg.get("verbose", True),
-                min_delta=es_cfg.get("min_delta", 0.0),
-            )
-        )
+        callbacks.append(EarlyStopping(
+            monitor=es_cfg.get("monitor", "val/loss"),
+            patience=es_cfg.get("patience", 20),
+            mode=es_cfg.get("mode", "min"),
+            verbose=es_cfg.get("verbose", True),
+            min_delta=es_cfg.get("min_delta", 0.0),
+        ))
 
     if callback_cfg.get("lr_monitor", {}).get("enabled", True):
         callbacks.append(LearningRateMonitor(logging_interval="step"))
@@ -327,25 +237,22 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     img_cfg = callback_cfg.get("image_logger", {})
     if img_cfg.get("enabled", True):
         from neurons.callbacks import ImageLogger
-        spatial = cfg.get("model", {}).get("type", "vista2d")
-        callbacks.append(
-            ImageLogger(
-                every_n_epochs=img_cfg.get("every_n_epochs", 1),
-                max_images=img_cfg.get("max_images", 4),
-                spatial_dims=3 if "3d" in spatial else 2,
-                projection_algorithm=img_cfg.get("projection_algorithm", "pca"),
-                projection_backend=img_cfg.get("projection_backend", "auto"),
-            )
-        )
+        model_type = cfg.get("model", {}).get("type", "vista2d")
+        callbacks.append(ImageLogger(
+            every_n_epochs=img_cfg.get("every_n_epochs", 1),
+            max_images=img_cfg.get("max_images", 4),
+            spatial_dims=3 if "3d" in model_type else 2,
+            projection_algorithm=img_cfg.get("projection_algorithm", "pca"),
+            projection_backend=img_cfg.get("projection_backend", "auto"),
+        ))
 
     callbacks.append(RichProgressBar())
     callbacks.append(ModelSummary(max_depth=2))
-
     return callbacks
 
 
-def setup_logger(cfg: DictConfig) -> Any:
-    """Setup experiment logger."""
+def setup_logger(cfg: DictConfig):
+    """Build the experiment logger (TensorBoard or Weights & Biases)."""
     output_dir = cfg.get("output_dir", "outputs")
     logger_type = cfg.get("logger", "tensorboard")
 
@@ -355,26 +262,25 @@ def setup_logger(cfg: DictConfig) -> Any:
             name=cfg.get("experiment_name", "neurons"),
             version=None,
         )
-    elif logger_type == "wandb":
+    if logger_type == "wandb":
         return WandbLogger(
             project=cfg.get("project_name", "neurons"),
             name=f"{cfg.get('experiment_name', 'run')}_{cfg.get('seed', 42)}",
             save_dir=str(Path(output_dir) / "logs"),
         )
-    else:
-        return True
+    return True
 
 
-def setup_profiler(cfg: DictConfig) -> Any:
-    """Setup profiler from configuration."""
+def setup_profiler(cfg: DictConfig):
+    """Build the training profiler from ``cfg.training.profiler``, or None."""
     output_dir = cfg.get("output_dir", "outputs")
     profiler_type = cfg.get("training", {}).get("profiler")
 
     if profiler_type == "simple":
         return SimpleProfiler(dirpath=output_dir, filename="profile-simple")
-    elif profiler_type == "advanced":
+    if profiler_type == "advanced":
         return AdvancedProfiler(dirpath=output_dir, filename="profile-advanced")
-    elif profiler_type == "pytorch":
+    if profiler_type == "pytorch":
         return PyTorchProfiler(
             dirpath=output_dir,
             filename="profile-pytorch",
@@ -384,7 +290,7 @@ def setup_profiler(cfg: DictConfig) -> Any:
             ],
             schedule=torch.profiler.schedule(wait=1, warmup=2, active=6, repeat=1),
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                str(Path(output_dir) / "profiler_traces")
+                str(Path(output_dir) / "profiler_traces"),
             ),
             record_shapes=True,
             profile_memory=True,
@@ -393,89 +299,124 @@ def setup_profiler(cfg: DictConfig) -> Any:
     return None
 
 
+def setup_strategy(cfg: DictConfig):
+    """Resolve the Lightning distributed strategy from ``training.strategy``."""
+    strategy_name = cfg.training.get("strategy", "auto")
+    use_compile = cfg.get("training", {}).get("compile", False)
+
+    if strategy_name == "ddp":
+        return DDPStrategy(
+            find_unused_parameters=True,
+            gradient_as_bucket_view=not use_compile,
+        )
+    if strategy_name == "fsdp":
+        return FSDPStrategy(
+            sharding_strategy="FULL_SHARD",
+            activation_checkpointing_policy={torch.nn.modules.conv.Conv3d},
+        )
+    return strategy_name
+
+
+# ----------------------------------------------------------------------
+# Checkpoint loading
+# ----------------------------------------------------------------------
+
+def _resolve_checkpoint(cfg: DictConfig, module: pl.LightningModule) -> Optional[str]:
+    """Pick up an existing checkpoint, either full-resume or weights-only."""
+    training_cfg = cfg.training
+    resume_ckpt = training_cfg.get("resume_from_checkpoint")
+    weights_only_ckpt = cfg.get("ckpt_path")
+
+    if resume_ckpt and weights_only_ckpt:
+        raise ValueError(
+            "Use either training.resume_from_checkpoint (full Lightning resume) "
+            "or +ckpt_path= (weights-only warm start), not both."
+        )
+
+    if resume_ckpt:
+        print(f"\nFull Lightning resume from: {resume_ckpt}")
+        return str(resume_ckpt)
+
+    if weights_only_ckpt:
+        print(f"Loading model weights from checkpoint: {weights_only_ckpt}")
+        ckpt = torch.load(weights_only_ckpt, map_location="cpu", weights_only=False)
+        state_dict = ckpt.get("state_dict", ckpt)
+        missing, unexpected = module.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"  Missing keys: {len(missing)}")
+        if unexpected:
+            print(f"  Unexpected keys: {len(unexpected)}")
+        print("  Model weights loaded (optimiser state skipped).")
+
+    return None
+
+
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
+
 @hydra.main(version_base=None, config_path="../configs", config_name="default")
 def main(cfg: DictConfig) -> None:
-    """Main training entry point."""
     print("=" * 60)
     print("Neurons - Connectomics Segmentation Training")
     print("=" * 60)
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
 
-    output_base = cfg.get("output_dir", "outputs")
-    experiment = cfg.get("experiment_name", "run")
+    # Unique per-run output directory.
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = str(Path(output_base) / f"{timestamp}_{experiment}")
-    OmegaConf.update(cfg, "output_dir", run_dir, force_add=True)
-    Path(run_dir).mkdir(parents=True, exist_ok=True)
+    run_dir = Path(cfg.get("output_dir", "outputs")) / f"{timestamp}_{cfg.get('experiment_name', 'run')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.update(cfg, "output_dir", str(run_dir), force_add=True)
     print(f"\nRun directory: {run_dir}")
 
     seed = cfg.get("seed", 42)
     pl.seed_everything(seed, workers=True)
-    print(f"\nRandom seed: {seed}")
+    print(f"Random seed: {seed}")
 
     datamodule = get_datamodule(cfg)
     print(f"\nDataModule: {datamodule.__class__.__name__}")
-    print(f"  Dataset: {cfg.data.get('dataset', 'snemi3d')}")
-    print(f"  Data root: {cfg.data.get('data_root', 'data')}")
+    print(f"  Dataset:    {cfg.data.get('dataset', 'snemi3d')}")
+    print(f"  Data root:  {cfg.data.get('data_root', 'data')}")
     print(f"  Batch size: {cfg.data.get('batch_size', 4)}")
 
     module = get_module(cfg)
     print(f"\nModule: {module.__class__.__name__}")
 
     backbone_loaded = getattr(getattr(module, "model", None), "_backbone_loaded", None)
-    if backbone_loaded is not None:
-        print(f"  Backbone loaded: {backbone_loaded}")
-        if not backbone_loaded:
-            print(
-                "  WARNING: pretrained backbone was NOT loaded — "
-                "the model will train from random initialisation. "
-                "Check HuggingFace cache, network access, and diffusers version."
-            )
+    if backbone_loaded is False:
+        print(
+            "  WARNING: pretrained backbone was NOT loaded — model will train "
+            "from random init.  Check HuggingFace cache, network access, and "
+            "diffusers version."
+        )
 
+    # ``torch.compile``: only compile the trainable DiT backbone.  Compiling
+    # the whole wrapper causes torch.compile+DDP to run frozen subgraphs in
+    # inference_mode, producing tensors that cannot be saved for backward.
     if cfg.get("training", {}).get("compile", False):
-        # Compile only the trainable DiT backbone, not the frozen VAE encoder/decoder.
-        # Compiling the full model causes torch.compile+DDP to run frozen subgraphs in
-        # inference_mode, producing tensors that cannot be saved for backward.
         dit = getattr(getattr(module, "model", None), "dit", None)
         if dit is not None:
             module.model.dit = torch.compile(dit, mode="max-autotune")
             print("  torch.compile enabled on DiT backbone (max-autotune)")
         else:
             module.model = torch.compile(module.model, mode="max-autotune")
-            print("  torch.compile enabled (max-autotune)")
+            print("  torch.compile enabled on full model (max-autotune)")
 
     callbacks = setup_callbacks(cfg)
-    print(f"\nCallbacks: {len(callbacks)} registered")
-
     logger = setup_logger(cfg)
-    print(f"Logger: {cfg.get('logger', 'tensorboard')}")
-
     profiler = setup_profiler(cfg)
+    print(f"\nCallbacks: {len(callbacks)} registered")
+    print(f"Logger:    {cfg.get('logger', 'tensorboard')}")
     if profiler is not None:
-        print(f"Profiler: {profiler.__class__.__name__}")
+        print(f"Profiler:  {profiler.__class__.__name__}")
 
     training_cfg = cfg.training
-    strategy_name = training_cfg.get("strategy", "auto")
-    use_compile = cfg.get("training", {}).get("compile", False)
-    if strategy_name == "ddp":
-        strategy = DDPStrategy(
-            find_unused_parameters=True,
-            gradient_as_bucket_view=not use_compile,
-        )
-    elif strategy_name == "fsdp":
-        strategy = FSDPStrategy(
-            sharding_strategy="FULL_SHARD",
-            activation_checkpointing_policy={torch.nn.modules.conv.Conv3d},
-        )
-    else:
-        strategy = strategy_name
-
     trainer = pl.Trainer(
         max_epochs=training_cfg.get("max_epochs", 100),
         accelerator=training_cfg.get("accelerator", "auto"),
         devices=training_cfg.get("devices", 1),
-        strategy=strategy,
+        strategy=setup_strategy(cfg),
         precision=training_cfg.get("precision", "32-true"),
         callbacks=callbacks,
         logger=logger,
@@ -494,51 +435,28 @@ def main(cfg: DictConfig) -> None:
         fast_dev_run=training_cfg.get("fast_dev_run", False),
     )
 
-    print(f"\nTrainer initialized:")
-    print(f"  Max epochs: {training_cfg.get('max_epochs', 100)}")
-    print(f"  Accelerator: {training_cfg.get('accelerator', 'auto')}")
-    print(f"  Devices: {training_cfg.get('devices', 1)}")
-    print(f"  Precision: {training_cfg.get('precision', '32-true')}")
+    print("\nTrainer initialised:")
+    print(f"  Max epochs:   {training_cfg.get('max_epochs', 100)}")
+    print(f"  Accelerator:  {training_cfg.get('accelerator', 'auto')}")
+    print(f"  Devices:      {training_cfg.get('devices', 1)}")
+    print(f"  Precision:    {training_cfg.get('precision', '32-true')}")
 
     print("\n" + "=" * 60)
     print("Starting Training")
     print("=" * 60 + "\n")
 
-    resume_ckpt = training_cfg.get("resume_from_checkpoint")
-    weights_only_ckpt = cfg.get("ckpt_path", None)
-
-    if resume_ckpt and weights_only_ckpt:
-        raise ValueError(
-            "Use either training.resume_from_checkpoint (full Lightning resume) "
-            "or +ckpt_path= (weights-only warm start), not both."
-        )
-
-    fit_ckpt_path: Optional[str] = None
-    if resume_ckpt:
-        fit_ckpt_path = str(resume_ckpt)
-        print(f"\nFull Lightning resume from: {fit_ckpt_path}")
-    elif weights_only_ckpt:
-        print(f"Loading model weights from checkpoint: {weights_only_ckpt}")
-        ckpt = torch.load(weights_only_ckpt, map_location="cpu", weights_only=False)
-        state_dict = ckpt.get("state_dict", ckpt)
-        missing, unexpected = module.load_state_dict(state_dict, strict=False)
-        if missing:
-            print(f"  Missing keys: {len(missing)}")
-        if unexpected:
-            print(f"  Unexpected keys: {len(unexpected)}")
-        print("  Model weights loaded (optimizer state skipped — fresh optimizer)")
+    fit_ckpt_path = _resolve_checkpoint(cfg, module)
 
     interrupted = False
-    output_dir = cfg.get("output_dir", "outputs")
     try:
         trainer.fit(module, datamodule, ckpt_path=fit_ckpt_path)
     except KeyboardInterrupt:
-        print("\n\nTraining interrupted by user")
+        print("\n\nTraining interrupted by user.")
         interrupted = True
-    except Exception as e:
-        print(f"\n\nTraining failed: {e}")
+    except Exception as exc:
+        print(f"\n\nTraining failed: {exc}")
         if trainer.global_rank == 0:
-            recovery = Path(output_dir) / "checkpoints" / "crash_recovery.ckpt"
+            recovery = Path(cfg.output_dir) / "checkpoints" / "crash_recovery.ckpt"
             recovery.parent.mkdir(parents=True, exist_ok=True)
             try:
                 trainer.save_checkpoint(str(recovery))
@@ -548,10 +466,11 @@ def main(cfg: DictConfig) -> None:
         raise
 
     if trainer.global_rank == 0:
-        final_path = Path(output_dir) / "checkpoints" / "final_model.ckpt"
+        final_path = Path(cfg.output_dir) / "checkpoints" / "final_model.ckpt"
         final_path.parent.mkdir(parents=True, exist_ok=True)
         if interrupted:
-            print("\nWARNING: Saving checkpoint from interrupted training — weights may be partially updated")
+            print("\nWARNING: saving checkpoint from an interrupted run — "
+                  "weights may be partially updated.")
         trainer.save_checkpoint(str(final_path))
         print(f"\nFinal model saved: {final_path}")
 

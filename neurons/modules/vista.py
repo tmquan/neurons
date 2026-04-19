@@ -1,15 +1,12 @@
 """
-Base Vista Lightning Module for 2D/3D segmentation training.
+Base Vista Lightning module for 2-D / 3-D connectomics segmentation.
 
-Provides the shared implementation for :class:`Vista2DModule` and
-:class:`Vista3DModule`.  Subclasses set ``_SPATIAL_DIMS``, ``_model_cls``
-and ``_loss_cls``; all training, evaluation and optimiser logic lives here.
+Shared implementation for :class:`Vista2DModule` and :class:`Vista3DModule`.
+Subclasses just set ``_SPATIAL_DIMS``, ``_model_cls`` and ``_loss_cls``;
+all training, evaluation and optimiser logic lives here.
 
-Supports two training modes that can be combined in a single step:
-
-- **automatic**: predict everything from the image alone.
-- **proofread**: additional context (fractionary labels or interactive
-  point prompts) is provided.
+Only the **automatic** training mode is supported (predict from the
+image alone).
 """
 
 import warnings
@@ -30,28 +27,17 @@ from neurons.metrics import (
     compute_per_batch_voi,
     compute_per_batch_ted,
 )
-from neurons.utils.point_sampling import sample_point_prompts
 
 _SPATIAL_AXES = {2: "h w", 3: "d h w"}
-_DEFAULT_TRAINING_MODES: List[str] = ["automatic"]
 
 
 class BaseVistaModule(pl.LightningModule):
-    """Abstract base for Vista 2D / 3D modules.
+    """Abstract base for Vista 2-D / 3-D modules.
 
     Subclasses **must** define:
-
-    - ``_SPATIAL_DIMS`` (``int``): 2 or 3.
-    - ``_model_cls`` (``type``): Model wrapper class.
-    - ``_loss_cls`` (``type``): Loss class.
-
-    Args:
-        model_config: Model configuration dict.
-        optimizer_config: Optimizer configuration dict.
-        loss_config: Loss function configuration dict (passed as
-            ``**loss_config`` to ``_loss_cls``).
-        training_config: Training configuration dict (contains
-            ``training_modes``, ``num_pos_points``, etc.).
+      - ``_SPATIAL_DIMS`` (``int``): 2 or 3.
+      - ``_model_cls``    (``type``): Model wrapper class.
+      - ``_loss_cls``     (``type``): Loss class (typically :class:`CombinedLoss`).
     """
 
     _SPATIAL_DIMS: int
@@ -61,15 +47,20 @@ class BaseVistaModule(pl.LightningModule):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         dims = getattr(cls, "_SPATIAL_DIMS", None)
-        if dims is not None:
-            if dims not in _SPATIAL_AXES:
-                raise ValueError(
-                    f"{cls.__name__}._SPATIAL_DIMS={dims} is invalid. "
-                    f"Must be one of {sorted(_SPATIAL_AXES)}."
-                )
-            axes = _SPATIAL_AXES[dims]
-            cls._EXPAND_PATTERN = f"b {axes} -> b 1 {axes}"
-            cls._SQUEEZE_PATTERN = f"b 1 {axes} -> b {axes}"
+        if dims is None:
+            return
+        if dims not in _SPATIAL_AXES:
+            raise ValueError(
+                f"{cls.__name__}._SPATIAL_DIMS={dims} is invalid. "
+                f"Must be one of {sorted(_SPATIAL_AXES)}."
+            )
+        axes = _SPATIAL_AXES[dims]
+        cls._EXPAND_PATTERN = f"b {axes} -> b 1 {axes}"
+        cls._SQUEEZE_PATTERN = f"b 1 {axes} -> b {axes}"
+
+    # ------------------------------------------------------------------
+    # Setup
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -83,8 +74,7 @@ class BaseVistaModule(pl.LightningModule):
 
         if kwargs:
             warnings.warn(
-                f"{type(self).__name__} received unknown keyword arguments "
-                f"that will be ignored: {sorted(kwargs)}",
+                f"{type(self).__name__} ignoring unknown kwargs: {sorted(kwargs)}",
                 stacklevel=2,
             )
 
@@ -104,7 +94,7 @@ class BaseVistaModule(pl.LightningModule):
             dropout=model_config.get("dropout", 0.0),
         )
 
-        self.criterion = self._loss_cls(**loss_config)
+        self.criterion = self._loss_cls(spatial_dims=self._SPATIAL_DIMS, **loss_config)
 
         clusterer_config = dict(training_config.get("clusterer", {}) or {})
         clusterer_name = clusterer_config.pop("name", "soft_meanshift")
@@ -113,17 +103,13 @@ class BaseVistaModule(pl.LightningModule):
             "normalize_embeddings", loss_config.get("normalize_embeddings", False),
         )
         self.clusterer = build_clusterer(clusterer_name, **clusterer_config)
-        self._ignore_index = loss_config.get("ignore_index", -100)
 
-        self.training_modes: List[str] = list(
-            training_config.get("training_modes", _DEFAULT_TRAINING_MODES)
-        )
-        self._num_pos_points: int = training_config.get("num_pos_points", 5)
-        self._num_neg_points: int = training_config.get("num_neg_points", 5)
-        self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
-
-        if "proofread" not in self.training_modes:
+        # Vista models include a PointPromptEncoder for future proofread
+        # support; keep it frozen since no config activates it.
+        if hasattr(self.model, "point_encoder"):
             self.model.point_encoder.requires_grad_(False)
+
+        self._eval_accum: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0])
 
     # ------------------------------------------------------------------
     # Forward
@@ -133,19 +119,23 @@ class BaseVistaModule(pl.LightningModule):
         return self.model(x, **kw)
 
     # ------------------------------------------------------------------
-    # Target preparation
+    # Batch helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_meta_tensor(batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Strip MONAI MetaTensor subclasses at the batch boundary."""
+        return {
+            k: v.as_subclass(torch.Tensor) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
 
     @torch.no_grad()
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Extract and reshape targets from *batch*.
+        """Build the targets dict consumed by ``self.criterion``.
 
-        Squeezes the unit channel dim added by ``EnsureChannelFirstd``
-        so every spatial target is ``[B, *spatial]``.
-
-        Membrane / boundary voxels in ``label`` (and thus semantic targets
-        derived from ``label``) come from the data pipeline only, e.g.
-        ``data.find_boundaries`` → ``FindBoundariesd`` on train patches.
+        Boundary/membrane voxels are applied upstream by the data pipeline
+        (``data.find_boundaries`` → ``FindBoundariesd``), not here.
         """
         ndim_with_channel = self._SPATIAL_DIMS + 2
         squeeze = self._SQUEEZE_PATTERN
@@ -169,93 +159,10 @@ class BaseVistaModule(pl.LightningModule):
             )
         if "image" in batch and self.criterion.weight_geometry > 0:
             targets["raw_image"] = batch["image"]
-        if "label_direction" in batch:
-            targets["label_direction"] = batch["label_direction"]
-        if "label_covariance" in batch:
-            targets["label_covariance"] = batch["label_covariance"]
+        for key in ("label_direction", "label_covariance"):
+            if key in batch:
+                targets[key] = batch[key]
         return targets
-
-    # ------------------------------------------------------------------
-    # Proofread helpers
-    # ------------------------------------------------------------------
-
-    def _get_proofread_sub_mode(self, targets: Dict[str, torch.Tensor]) -> str:
-        """Return ``"fractionary"`` for partial annotations, else ``"interactive"``."""
-        labels = targets["labels"]
-        has_ignore = (labels == self._ignore_index).any()
-        has_valid_fg = (labels > 0).any() & (labels != self._ignore_index).any()
-        if has_ignore and has_valid_fg:
-            return "fractionary"
-        return "interactive"
-
-    def _resolve_fractionary_labels(
-        self, targets: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        """Remap a fractionary-annotated patch to contiguous instance IDs."""
-        targets = dict(targets)
-        labels = targets["labels"]
-        unknown = labels == self._ignore_index
-
-        sem = targets["semantic_labels"].clone()
-        sem[unknown] = self._ignore_index
-        targets["semantic_labels"] = sem
-        targets["semantic_ids"] = sem
-
-        inst = labels.clone()
-        inst[unknown] = 0
-        known_ids = inst.unique()
-        known_ids = known_ids[known_ids > 0]
-        remap = torch.zeros(
-            int(known_ids.max().item()) + 1 if known_ids.numel() > 0 else 1,
-            dtype=torch.long, device=labels.device,
-        )
-        remap[known_ids] = torch.arange(1, known_ids.numel() + 1, device=labels.device)
-        flat = rearrange(inst, "... -> (...)")
-        mask = flat > 0
-        flat[mask] = remap[flat[mask]]
-        targets["labels"] = inst
-        return targets
-
-    # ------------------------------------------------------------------
-    # Per-mode forward + loss
-    # ------------------------------------------------------------------
-
-    def _run_automatic(
-        self, images: torch.Tensor, targets: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        predictions = self.model(images)
-        return self.criterion(predictions, targets)
-
-    def _run_proofread(
-        self, images: torch.Tensor, targets: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        sub_mode = self._get_proofread_sub_mode(targets)
-        if sub_mode == "fractionary":
-            targets = self._resolve_fractionary_labels(targets)
-            targets.pop("_cached_weights", None)
-            predictions = self.model(images, semantic_ids=targets.get("semantic_ids"))
-        else:
-            point_prompts = sample_point_prompts(
-                targets["semantic_labels"],
-                targets["labels"],
-                num_pos=self._num_pos_points,
-                num_neg=self._num_neg_points,
-                sample_mode=self._point_sample_mode,
-            )
-            predictions = self.model(images, point_prompts=point_prompts)
-        return self.criterion(predictions, targets)
-
-    # ------------------------------------------------------------------
-    # Batch sanitisation
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _strip_meta_tensor(batch: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert MONAI MetaTensors to plain torch.Tensors."""
-        return {
-            k: v.as_subclass(torch.Tensor) if isinstance(v, torch.Tensor) else v
-            for k, v in batch.items()
-        }
 
     # ------------------------------------------------------------------
     # Training step
@@ -268,35 +175,24 @@ class BaseVistaModule(pl.LightningModule):
             images = rearrange(images, self._EXPAND_PATTERN)
 
         targets = self._prepare_targets(batch)
+        targets["_cached_weights"] = self.criterion._compute_targets(
+            targets["labels"], targets,
+        )
 
-        cached = self.criterion._compute_targets(targets["labels"], targets)
-        targets["_cached_weights"] = cached
-
-        all_losses: Dict[str, torch.Tensor] = {}
-        mode_losses: List[torch.Tensor] = []
-
-        for mode in self.training_modes:
-            if mode == "automatic":
-                losses = self._run_automatic(images, targets)
-            elif mode == "proofread":
-                losses = self._run_proofread(images, targets)
-            else:
-                raise ValueError(f"Unknown training mode: {mode}")
-            mode_losses.append(losses["loss"])
-            for k, v in losses.items():
-                all_losses[f"train/{mode}/{k}"] = v
-
-        total_loss = torch.stack(mode_losses).mean().float()
+        predictions = self.model(images)
+        losses = self.criterion(predictions, targets)
+        total_loss = losses["loss"].float()
 
         bs = images.shape[0]
-        for name, val in all_losses.items():
-            self.log(name, val, on_step=False, on_epoch=True, batch_size=bs)
+        for name, value in losses.items():
+            self.log(f"train/automatic/{name}", value,
+                     on_step=False, on_epoch=True, batch_size=bs)
         self.log("train/loss", total_loss, prog_bar=True, on_step=True, batch_size=bs)
 
         return total_loss
 
     # ------------------------------------------------------------------
-    # Eval — accumulate-then-reduce
+    # Evaluation — accumulate metrics locally, all-reduce once per epoch
     # ------------------------------------------------------------------
 
     def _accum(self, name: str, value, weight: float) -> None:
@@ -307,9 +203,7 @@ class BaseVistaModule(pl.LightningModule):
 
     @torch.no_grad()
     def _eval_step_and_accumulate(
-        self,
-        batch: Dict[str, torch.Tensor],
-        prefix: str,
+        self, batch: Dict[str, torch.Tensor], prefix: str,
     ) -> None:
         batch = self._strip_meta_tensor(batch)
         images = batch["image"]
@@ -332,15 +226,17 @@ class BaseVistaModule(pl.LightningModule):
         sem_gt = targets["semantic_labels"]
         n_cls = sem_logits.shape[1]
 
-        self._accum(f"{prefix}/sem_acc", reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
-        self._accum(f"{prefix}/sem_iou", compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
-        self._accum(f"{prefix}/sem_dice", compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls), bs)
+        self._accum(f"{prefix}/sem_acc",
+                    reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
+        self._accum(f"{prefix}/sem_iou",
+                    compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
+        self._accum(f"{prefix}/sem_dice",
+                    compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls), bs)
 
         fg_mask = targets["labels"] > 0
         if fg_mask.any():
             ins_pred, _, _ = self.clusterer(predictions["instance"], fg_mask)
             ins_gt = targets["labels"]
-
             self._accum(f"{prefix}/ins_ari", compute_per_batch_ari(ins_pred, ins_gt), bs)
             self._accum(f"{prefix}/ins_ami", compute_per_batch_ami(ins_pred, ins_gt), bs)
             voi = compute_per_batch_voi(ins_pred, ins_gt)
@@ -356,7 +252,7 @@ class BaseVistaModule(pl.LightningModule):
         if not self._eval_accum:
             return
 
-        names = sorted(self._eval_accum.keys())
+        names = sorted(self._eval_accum)
         sums = torch.tensor([self._eval_accum[n][0] for n in names], device=self.device)
         counts = torch.tensor([self._eval_accum[n][1] for n in names], device=self.device)
 
@@ -364,15 +260,21 @@ class BaseVistaModule(pl.LightningModule):
             dist.all_reduce(sums, op=dist.ReduceOp.SUM)
             dist.all_reduce(counts, op=dist.ReduceOp.SUM)
 
-        _PROG_BAR = {f"{prefix}/loss", f"{prefix}/sem_acc", f"{prefix}/sem_iou", f"{prefix}/ins_ari"}
+        prog_bar_names = {
+            f"{prefix}/loss",
+            f"{prefix}/sem_acc",
+            f"{prefix}/sem_iou",
+            f"{prefix}/ins_ari",
+        }
         for i, name in enumerate(names):
             if counts[i] > 0:
                 avg = (sums[i] / counts[i]).item()
-                self.log(name, avg, prog_bar=(name in _PROG_BAR),
+                self.log(name, avg, prog_bar=(name in prog_bar_names),
                          sync_dist=False, rank_zero_only=True)
 
         self._eval_accum.clear()
 
+    # Validation
     def on_validation_epoch_start(self) -> None:
         self._eval_accum: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0])
 
@@ -384,6 +286,7 @@ class BaseVistaModule(pl.LightningModule):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    # Test
     def on_test_epoch_start(self) -> None:
         self._eval_accum = defaultdict(lambda: [0.0, 0.0])
 
@@ -412,7 +315,7 @@ class BaseVistaModule(pl.LightningModule):
             else:
                 decay.append(param)
         param_groups = [
-            {"params": decay, "weight_decay": wd},
+            {"params": decay,    "weight_decay": wd},
             {"params": no_decay, "weight_decay": 0.0},
         ]
         optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
@@ -424,22 +327,24 @@ class BaseVistaModule(pl.LightningModule):
             from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
             warmup_epochs = sched_cfg.get("warmup_epochs", 5)
-            T_max = sched_cfg.get("T_max", 100)
+            t_max = sched_cfg.get("T_max", 100)
             eta_min = sched_cfg.get("eta_min", 1e-7)
 
             warmup = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs)
             cosine = CosineAnnealingLR(
-                optimizer, T_max=max(T_max - warmup_epochs, 1), eta_min=eta_min,
+                optimizer, T_max=max(t_max - warmup_epochs, 1), eta_min=eta_min,
             )
             scheduler = SequentialLR(
                 optimizer, [warmup, cosine], milestones=[warmup_epochs],
             )
-            return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
+            }
 
         if stype:
             warnings.warn(
-                f"Unknown scheduler type '{stype}', using no scheduler. "
-                f"Supported: 'cosine'.",
+                f"Unknown scheduler type '{stype}', using no scheduler. Supported: 'cosine'.",
                 stacklevel=2,
             )
         return optimizer

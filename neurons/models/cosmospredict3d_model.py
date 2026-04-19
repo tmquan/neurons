@@ -35,6 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
+from neurons.models.vista import VistaTaskHead3D
 from neurons.models.point_prompt_encoder import PointPromptEncoder
 
 logger = logging.getLogger(__name__)
@@ -461,20 +462,32 @@ class _DecoderAdapter3D(nn.Module):
             )
             self._hidden_ch = feature_size
 
-        self.head_semantic = nn.Sequential(
-            _CONV(self._hidden_ch, 64, 3, padding=1), _NORM(64),
-            nn.ReLU(inplace=True), nn.Dropout3d(dropout),
-            _CONV(64, num_classes, 1),
+        # VISTA3D-style task heads.  Each head mirrors MONAI's
+        # ``ClassMappingClassify.image_post_mapping`` (2× residual
+        # UnetrBasicBlock at a shared refinement width with instance
+        # norm) and replaces the class-embedding mask-attention with a
+        # 1×1 conv so we can emit continuous targets (instance
+        # embeddings, geometry regressions) alongside class logits.
+        # Refinement runs at ``feature_size`` — the Cosmos decoder can
+        # emit substantially wider feature maps on the 14B variant, so
+        # a fixed-width refinement keeps per-head cost predictable.
+        self.head_semantic = VistaTaskHead3D(
+            in_channels=self._hidden_ch,
+            out_channels=num_classes,
+            refine_channels=feature_size,
+            dropout=dropout,
         )
-        self.head_instance = nn.Sequential(
-            _CONV(self._hidden_ch, 64, 3, padding=1), _NORM(64),
-            nn.ReLU(inplace=True), nn.Dropout3d(dropout),
-            _CONV(64, emb_dim, 1),
+        self.head_instance = VistaTaskHead3D(
+            in_channels=self._hidden_ch,
+            out_channels=emb_dim,
+            refine_channels=feature_size,
+            dropout=dropout,
         )
-        self.head_geometry = nn.Sequential(
-            _CONV(self._hidden_ch, 64, 3, padding=1), _NORM(64),
-            nn.ReLU(inplace=True), nn.Dropout3d(dropout),
-            _CONV(64, geom_channels, 1),
+        self.head_geometry = VistaTaskHead3D(
+            in_channels=self._hidden_ch,
+            out_channels=geom_channels,
+            refine_channels=feature_size,
+            dropout=dropout,
         )
 
     def _replace_conv_out(self) -> int:
@@ -1359,159 +1372,3 @@ class CosmosPredict3DWrapper(nn.Module):
 
     def get_output_channels(self) -> int:
         return self.num_classes
-
-
-# ---------------------------------------------------------------------------
-# 3-D fit verification
-# ---------------------------------------------------------------------------
-
-def verify_fit(
-    variant: str = "2B",
-    input_shape: Tuple[int, ...] = (1, 1, 32, 64, 64),
-    num_classes: int = 16,
-    emb_dim: int = 16,
-    feature_size: int = 64,
-    device: str = "cuda",
-) -> Dict[str, Any]:
-    """Verify a Cosmos-Predict2.5 variant for 3-stage volumetric segmentation.
-
-    Checks input/output dimensionality, sequence-length constraints,
-    estimated memory footprint, and tokeniser compression requirements.
-
-    Args:
-        variant: ``"2B"`` or ``"14B"``.
-        input_shape: ``(B, C, D, H, W)`` test shape.
-        num_classes: Semantic classes.
-        emb_dim: Instance embedding dim.
-        feature_size: Intermediate feature channels.
-        device: Target device for memory estimation.
-
-    Returns:
-        Dict with ``compatible``, ``warnings``, ``errors``, ``checks``.
-    """
-    variant = variant.upper()
-    if variant not in _VARIANT_CONFIGS:
-        return {
-            "compatible": False,
-            "errors": [f"Unknown variant: {variant}"],
-            "warnings": [],
-            "checks": {},
-        }
-
-    cfg = _VARIANT_CONFIGS[variant]
-    B, _C, D, H, W = input_shape
-    results: Dict[str, Any] = {
-        "variant": variant,
-        "compatible": True,
-        "warnings": [],
-        "errors": [],
-        "checks": {},
-    }
-
-    s, t = cfg.spatial_compression, cfg.temporal_compression
-    D_lat = D // t
-    H_lat = H // s
-    W_lat = W // s
-    results["checks"]["latent_spatial"] = (D_lat, H_lat, W_lat)
-
-    if D_lat < 1 or H_lat < 1 or W_lat < 1:
-        results["errors"].append(
-            f"Input {D}x{H}x{W} too small for "
-            f"temporal_compression={t} / spatial_compression={s}. "
-            f"Minimum input: {t}x{s}x{s}."
-        )
-        results["compatible"] = False
-
-    if D % t != 0 or H % s != 0 or W % s != 0:
-        results["warnings"].append(
-            f"Input {D}x{H}x{W} not evenly divisible by compression. "
-            f"Padding will be applied."
-        )
-
-    P = cfg.patch_size
-    D_p = D_lat + (P - D_lat % P) % P
-    H_p = H_lat + (P - H_lat % P) % P
-    W_p = W_lat + (P - W_lat % P) % P
-    seq_len = (D_p // P) * (H_p // P) * (W_p // P)
-    results["checks"]["sequence_length"] = seq_len
-    results["checks"]["max_sequence_length"] = cfg.max_sequence_length
-
-    if seq_len > cfg.max_sequence_length:
-        results["errors"].append(
-            f"Sequence length {seq_len} exceeds max "
-            f"{cfg.max_sequence_length}.  Reduce input volume size."
-        )
-        results["compatible"] = False
-
-    S = _SPATIAL_DIMS
-    geom_ch = S + S * S + 4
-    results["checks"]["output_channels"] = {
-        "semantic": num_classes,
-        "instance": emb_dim,
-        "geometry": geom_ch,
-        "total": num_classes + emb_dim + geom_ch,
-    }
-
-    param_bytes = cfg.hidden_dim * cfg.num_layers * cfg.hidden_dim * 4 * 2
-    backbone_gb = param_bytes / (1024 ** 3)
-    head_params = (feature_size * 64 + 64 * (num_classes + emb_dim + geom_ch)) * 27
-    head_gb = head_params * 4 / (1024 ** 3)
-    activation_gb = B * seq_len * cfg.hidden_dim * 4 / (1024 ** 3)
-    total_gb = backbone_gb + head_gb + activation_gb
-
-    results["checks"]["memory_estimate_gb"] = {
-        "backbone_params": round(backbone_gb, 2),
-        "head_params": round(head_gb, 4),
-        "activations": round(activation_gb, 2),
-        "total": round(total_gb, 2),
-        "variant_vram_recommended": cfg.estimated_vram_gb,
-    }
-
-    if device == "cuda" and torch.cuda.is_available():
-        available_gb = (
-            torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
-        )
-        results["checks"]["memory_estimate_gb"]["available"] = round(
-            available_gb, 2,
-        )
-        if total_gb > available_gb * 0.85:
-            results["warnings"].append(
-                f"Estimated {total_gb:.1f} GB may exceed 85% of "
-                f"available {available_gb:.1f} GB GPU memory."
-            )
-    else:
-        results["warnings"].append(
-            "CUDA not available -- cannot check GPU memory."
-        )
-
-    if variant == "14B":
-        results["warnings"].append(
-            "14B variant requires multi-GPU or CPU offloading for "
-            "3-D volumes.  Use gradient checkpointing and mixed precision."
-        )
-
-    results["checks"]["stage_compatibility"] = {
-        "stage1_semantic": (
-            "Compatible -- standard voxel classification via logit head."
-        ),
-        "stage2_instance": (
-            "Compatible -- embedding head produces per-voxel vectors."
-        ),
-        "stage3_geometry": (
-            "Compatible with caveats -- Cosmos backbone is trained on "
-            "natural video, not EM volumes.  Direction / covariance "
-            "heads are randomly initialised.  The 3-D geometry head "
-            "outputs S + S**2 + 4 = 16 channels (dir=3 + cov=9 + rgba=4)."
-        ),
-    }
-
-    if not results["errors"]:
-        logger.info(
-            "verify_fit(%s, 3D): PASS -- %d warnings",
-            variant, len(results["warnings"]),
-        )
-    else:
-        results["compatible"] = False
-        logger.warning("verify_fit(%s, 3D): FAIL -- %s", variant, results["errors"])
-
-    return results

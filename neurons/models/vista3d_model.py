@@ -12,15 +12,10 @@ from typing import Any, Dict, Optional
 import torch
 import torch.nn as nn
 
+from neurons.models.vista import VistaTaskHead3D
 from neurons.models.point_prompt_encoder import PointPromptEncoder
 
 _SPATIAL_DIMS = 3
-_CONV = nn.Conv3d
-
-
-def _NORM(ch: int) -> nn.GroupNorm:
-    num_groups = max(g for g in (1, 2, 4, 8, 16, 32) if ch % g == 0)
-    return nn.GroupNorm(num_groups, ch)
 
 
 class Vista3DWrapper(nn.Module):
@@ -68,17 +63,31 @@ class Vista3DWrapper(nn.Module):
 
         self._build_backbone(encoder_name, **kwargs)
 
-        self.head_semantic = nn.Sequential(
-            _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
-            _CONV(64, num_classes, 1),
+        # VISTA3D-style task heads.  Each head mirrors MONAI's real
+        # ``ClassMappingClassify.image_post_mapping`` (2× residual
+        # UnetrBasicBlock with instance norm) and replaces the class
+        # embedding mask-attention with a per-voxel 1×1 projection so
+        # we can emit continuous targets (instance embeddings, geometry
+        # regressions) as well as class logits.  Refinement runs at
+        # ``feature_size`` — the same width the SegResNetDS2 encoder
+        # emits — matching the reference VISTA3D network exactly.
+        self.head_semantic = VistaTaskHead3D(
+            in_channels=feature_size,
+            out_channels=num_classes,
+            refine_channels=feature_size,
+            dropout=dropout,
         )
-        self.head_instance = nn.Sequential(
-            _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
-            _CONV(64, emb_dim, 1),
+        self.head_instance = VistaTaskHead3D(
+            in_channels=feature_size,
+            out_channels=emb_dim,
+            refine_channels=feature_size,
+            dropout=dropout,
         )
-        self.head_geometry = nn.Sequential(
-            _CONV(feature_size, 64, 3, padding=1), _NORM(64), nn.ReLU(inplace=True),
-            _CONV(64, self.geom_channels, 1),
+        self.head_geometry = VistaTaskHead3D(
+            in_channels=feature_size,
+            out_channels=self.geom_channels,
+            refine_channels=feature_size,
+            dropout=dropout,
         )
 
         self.point_encoder = PointPromptEncoder(

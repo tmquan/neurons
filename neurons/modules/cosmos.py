@@ -1,15 +1,13 @@
 """
-Base Cosmos Lightning Module for 3D volumetric segmentation training.
+Base Cosmos Lightning module for 3-D volumetric segmentation training.
 
-Provides the shared implementation for :class:`CosmosPredict3DModule` and
-:class:`CosmosTransfer3DModule`.  Subclasses set ``_model_cls``,
-``_loss_cls`` and ``_verify_fit_fn``; all training, evaluation, freeze
-scheduling and optimiser logic lives here.
+Shared implementation for :class:`CosmosPredict3DModule` and
+:class:`CosmosTransfer3DModule`.  Subclasses just set ``_model_cls`` and
+``_loss_cls``; every training, evaluation, freeze-scheduling and
+optimiser hook lives here.
 
-Supports two training modes that can be combined in a single step:
-
-- **automatic**: predict from the volume alone.
-- **proofread**: (not yet implemented) additional context via point prompts.
+Only the **automatic** training mode is supported (predict from the
+volume alone).  Point-prompt / proofread training is a Vista-only path.
 """
 
 import logging
@@ -31,35 +29,34 @@ from neurons.metrics import (
     compute_per_batch_voi,
     compute_per_batch_ted,
 )
+
 logger = logging.getLogger(__name__)
 
 _SPATIAL_DIMS = 3
 _EXPAND_PATTERN = "b d h w -> b 1 d h w"
 _SQUEEZE_PATTERN = "b 1 d h w -> b d h w"
 
-_DEFAULT_TRAINING_MODES: List[str] = ["automatic"]
-
 
 class BaseCosmosModule(pl.LightningModule):
-    """Abstract base for Cosmos Predict / Transfer 3D modules.
+    """Abstract base for Cosmos-Predict / Cosmos-Transfer 3-D modules.
 
     Subclasses **must** define:
-
-    - ``_model_cls`` (``type``): Model wrapper class.
-    - ``_loss_cls`` (``type``): Loss class.
-    - ``_verify_fit_fn`` (``staticmethod``): The ``verify_fit`` callable
-      from the corresponding model module.
+      - ``_model_cls`` (``type``): Model wrapper class.
+      - ``_loss_cls``  (``type``): Loss class (typically :class:`CombinedLoss`).
 
     Args:
         model_config: Forwarded to ``_model_cls``.
         optimizer_config: Optimizer / scheduler settings.
         loss_config: Forwarded as ``**loss_config`` to ``_loss_cls``.
-        training_config: Training behaviour (modes, point sampling, ...).
+        training_config: Training behaviour (clusterer, freeze schedule, ...).
     """
 
     _model_cls: type
     _loss_cls: type
-    _verify_fit_fn: Any  # staticmethod wrapping a Callable
+
+    # ------------------------------------------------------------------
+    # Setup
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -73,30 +70,26 @@ class BaseCosmosModule(pl.LightningModule):
 
         if kwargs:
             warnings.warn(
-                f"{type(self).__name__} received unknown keyword arguments "
-                f"that will be ignored: {sorted(kwargs)}",
+                f"{type(self).__name__} ignoring unknown kwargs: {sorted(kwargs)}",
                 stacklevel=2,
             )
 
         model_config = dict(model_config or {})
-        _hf_token = model_config.pop("hf_token", None)
+        # ``hf_token`` is intentionally not persisted via save_hyperparameters.
+        hf_token = model_config.pop("hf_token", None)
         self.save_hyperparameters()
-        if _hf_token is not None:
-            model_config["hf_token"] = _hf_token
+        if hf_token is not None:
+            model_config["hf_token"] = hf_token
 
         self.optimizer_config = optimizer_config or {}
         self.training_config = training_config or {}
         loss_config = loss_config or {}
-        training_config = self.training_config
 
-        disabled_heads: set = set()
-        if loss_config.get("weight_semantic", 1.0) == 0:
-            disabled_heads.add("semantic")
-        if loss_config.get("weight_instance", 1.0) == 0:
-            disabled_heads.add("instance")
-        if loss_config.get("weight_geometry", 1.0) == 0:
-            disabled_heads.add("geometry")
-        self._disabled_heads: frozenset = frozenset(disabled_heads)
+        disabled_heads = {
+            name for name in ("semantic", "instance", "geometry")
+            if loss_config.get(f"weight_{name}", 1.0) == 0
+        }
+        self._disabled_heads = frozenset(disabled_heads)
         if disabled_heads:
             logger.info("Heads disabled (weight=0): %s", sorted(disabled_heads))
 
@@ -118,9 +111,9 @@ class BaseCosmosModule(pl.LightningModule):
             disabled_heads=self._disabled_heads or None,
         )
 
-        self.criterion = self._loss_cls(**loss_config)
+        self.criterion = self._loss_cls(spatial_dims=_SPATIAL_DIMS, **loss_config)
 
-        clusterer_config = dict(training_config.get("clusterer", {}) or {})
+        clusterer_config = dict(self.training_config.get("clusterer", {}) or {})
         clusterer_name = clusterer_config.pop("name", "soft_meanshift")
         clusterer_config.setdefault("bandwidth", loss_config.get("delta_v", 0.5))
         clusterer_config.setdefault(
@@ -131,66 +124,54 @@ class BaseCosmosModule(pl.LightningModule):
             "Validation clusterer: %s (%s)",
             clusterer_name, type(self.clusterer).__name__,
         )
-        self._ignore_index = loss_config.get("ignore_index", -100)
 
-        self.training_modes: List[str] = list(
-            training_config.get("training_modes", _DEFAULT_TRAINING_MODES)
-        )
-        self._num_pos_points: int = training_config.get("num_pos_points", 5)
-        self._num_neg_points: int = training_config.get("num_neg_points", 5)
-        self._point_sample_mode: str = training_config.get("point_sample_mode", "class")
+        # Cosmos doesn't train the point encoder (proofread unsupported),
+        # but the wrapper still instantiates one so ``ddp find_unused_parameters``
+        # works; simply never flow grads through it.
+        if hasattr(self.model, "point_encoder"):
+            self.model.point_encoder.requires_grad_(False)
+        if self.model._backbone_loaded and self.model.vae_encoder is not None:
+            self.model._fallback_down.requires_grad_(False)
 
-        self._variant = model_config.get("variant", "2B")
+        self._eval_accum: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0])
 
+        # Phased freeze schedule: value is either a bool ("permanently
+        # frozen / permanently trainable") or an int ("frozen for the
+        # first N epochs, then unfreeze").
         self._freeze_schedule = {
             "vae_encoder": model_config.get("freeze_vae_encoder", True),
             "dit_backbone": model_config.get("freeze_dit_backbone", False),
             "vae_decoder": model_config.get("freeze_vae_decoder", False),
         }
 
-        if "proofread" not in self.training_modes:
-            self.model.point_encoder.requires_grad_(False)
-        if self.model._backbone_loaded and self.model.vae_encoder is not None:
-            self.model._fallback_down.requires_grad_(False)
-
     # ------------------------------------------------------------------
     # Phased freeze / unfreeze
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _should_freeze(value: "bool | int", epoch: int) -> bool:
-        if isinstance(value, bool):
-            return value
-        return epoch < int(value)
-
     def on_train_epoch_start(self) -> None:
-        epoch = self.current_epoch
-        _METHODS = {
+        methods = {
             "vae_encoder": (self.model.freeze_vae_encoder, self.model.unfreeze_vae_encoder),
             "dit_backbone": (self.model.freeze_dit_backbone, self.model.unfreeze_dit_backbone),
             "vae_decoder": (self.model.freeze_vae_decoder, self.model.unfreeze_vae_decoder),
         }
-        _FLAGS = {
+        flags = {
             "vae_encoder": "_freeze_vae_encoder",
             "dit_backbone": "_freeze_dit_backbone",
             "vae_decoder": "_freeze_vae_decoder",
         }
-        needs_optimizer_rebuild = False
-        for name, value in self._freeze_schedule.items():
-            if isinstance(value, bool):
-                continue
-            want_frozen = self._should_freeze(value, epoch)
-            is_frozen = getattr(self.model, _FLAGS[name])
+        needs_rebuild = False
+        for name, schedule in self._freeze_schedule.items():
+            if isinstance(schedule, bool):
+                continue  # permanently frozen / permanently trainable
+            want_frozen = self.current_epoch < int(schedule)
+            is_frozen = getattr(self.model, flags[name])
             if want_frozen and not is_frozen:
-                _METHODS[name][0]()
+                methods[name][0]()
             elif not want_frozen and is_frozen:
-                _METHODS[name][1]()
-                needs_optimizer_rebuild = True
-        if needs_optimizer_rebuild and self.trainer is not None:
+                methods[name][1]()
+                needs_rebuild = True
+        if needs_rebuild and self.trainer is not None:
             self.trainer.strategy.setup_optimizers(self.trainer)
-
-    def on_train_epoch_end(self) -> None:
-        pass
 
     # ------------------------------------------------------------------
     # Forward
@@ -200,15 +181,27 @@ class BaseCosmosModule(pl.LightningModule):
         return self.model(x, **kw)
 
     # ------------------------------------------------------------------
-    # Target preparation
+    # Batch helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_meta_tensor(batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Strip MONAI MetaTensor subclasses at the batch boundary.
+
+        MetaTensor's ``__torch_function__`` override can interfere with
+        mixed-dtype backward passes; plain ``torch.Tensor`` is safer.
+        """
+        return {
+            k: v.as_subclass(torch.Tensor) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
 
     @torch.inference_mode()
     def _prepare_targets(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Extract and reshape targets from *batch*.
+        """Build the targets dict consumed by ``self.criterion``.
 
-        Boundary voxels in ``label`` are handled in the dataloader transforms
-        (``data.find_boundaries`` / ``FindBoundariesd``), not here.
+        Boundary/membrane voxels are applied upstream by the data pipeline
+        (``data.find_boundaries`` → ``FindBoundariesd``), not here.
         """
         labels = batch["label"]
         if labels.dim() == _SPATIAL_DIMS + 2:
@@ -223,59 +216,23 @@ class BaseCosmosModule(pl.LightningModule):
             "labels": labels,
         }
         if "semantic_ids" in batch:
+            sid = batch["semantic_ids"]
             targets["semantic_ids"] = (
-                rearrange(batch["semantic_ids"], _SQUEEZE_PATTERN)
-                if batch["semantic_ids"].dim() == _SPATIAL_DIMS + 2
-                else batch["semantic_ids"]
+                rearrange(sid, _SQUEEZE_PATTERN)
+                if sid.dim() == _SPATIAL_DIMS + 2 else sid
             )
         if "image" in batch and self.criterion.weight_geometry > 0:
             targets["raw_image"] = batch["image"]
-        if "label_direction" in batch:
-            targets["label_direction"] = batch["label_direction"]
-        if "label_covariance" in batch:
-            targets["label_covariance"] = batch["label_covariance"]
+        for key in ("label_direction", "label_covariance"):
+            if key in batch:
+                targets[key] = batch[key]
         return targets
-
-    # ------------------------------------------------------------------
-    # Batch sanitisation
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _strip_meta_tensor(batch: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert MONAI MetaTensors to plain torch.Tensors.
-
-        MetaTensor's ``__torch_function__`` override can interfere with
-        mixed-dtype backward passes.  Stripping it at the batch boundary
-        keeps the entire computation graph on plain Tensors.
-        """
-        return {
-            k: v.as_subclass(torch.Tensor) if isinstance(v, torch.Tensor) else v
-            for k, v in batch.items()
-        }
-
-    # ------------------------------------------------------------------
-    # Per-mode forward + loss
-    # ------------------------------------------------------------------
-
-    def _run_automatic(
-        self, images: torch.Tensor, targets: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        predictions = self.model(images)
-        return self.criterion(predictions, targets)
-
-    def _run_proofread(
-        self, images: torch.Tensor, targets: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        """Proofread mode (VISTA3D-style point-prompt training)."""
-        raise NotImplementedError("Proofread training mode is not yet implemented.")
 
     # ------------------------------------------------------------------
     # Training step
     # ------------------------------------------------------------------
 
-    _MODE_DISPATCH = {"automatic": "_run_automatic", "proofread": "_run_proofread"}
-
-    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Optional[torch.Tensor]:
         batch = self._strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
@@ -286,47 +243,35 @@ class BaseCosmosModule(pl.LightningModule):
             targets["labels"], targets,
         )
 
-        bs = images.shape[0]
-        all_losses: Dict[str, torch.Tensor] = {}
-        mode_losses: List[torch.Tensor] = []
-
-        for mode in self.training_modes:
-            fn = self._MODE_DISPATCH.get(mode)
-            if fn is None:
-                raise ValueError(f"Unknown training mode: {mode}")
-            losses = getattr(self, fn)(images, targets)
-            if losses["loss"].isnan().any():
-                nan_keys = [k for k, v in losses.items()
-                            if isinstance(v, torch.Tensor) and v.isnan().any()]
-                logger.warning(
-                    "NaN in %s mode at step %d: keys=%s",
-                    mode, self.global_step, nan_keys,
-                )
-            mode_losses.append(losses["loss"])
-            for k, v in losses.items():
-                all_losses[f"train/{mode}/{k}"] = v
-
-        total_loss = mode_losses[0] if len(mode_losses) == 1 else torch.stack(mode_losses).mean()
+        predictions = self.model(images)
+        losses = self.criterion(predictions, targets)
+        total_loss = losses["loss"]
 
         if total_loss.isnan().any() or total_loss.isinf().any():
+            nan_keys = [
+                k for k, v in losses.items()
+                if isinstance(v, torch.Tensor) and (v.isnan().any() or v.isinf().any())
+            ]
             logger.warning(
-                "NaN/Inf total loss at step %d — skipping backward.",
-                self.global_step,
+                "NaN/Inf total loss at step %d — skipping backward (keys=%s).",
+                self.global_step, nan_keys,
             )
             return None
 
-        for name, val in all_losses.items():
-            self.log(name, val, on_step=False, on_epoch=True, batch_size=bs)
-        self.log("train/loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=bs)
+        bs = images.shape[0]
+        for name, value in losses.items():
+            self.log(f"train/automatic/{name}", value,
+                     on_step=False, on_epoch=True, batch_size=bs)
+        self.log("train/loss", total_loss,
+                 prog_bar=True, on_step=True, on_epoch=True, batch_size=bs)
 
         return total_loss
 
     # ------------------------------------------------------------------
-    # Eval — accumulate-then-reduce
+    # Evaluation — accumulate metrics locally, all-reduce once per epoch
     # ------------------------------------------------------------------
 
     def _accum(self, name: str, value, weight: float) -> None:
-        """Accumulate a weighted metric value for epoch-end averaging."""
         v = value.item() if isinstance(value, torch.Tensor) else float(value)
         acc = self._eval_accum[name]
         acc[0] += v * weight
@@ -334,11 +279,8 @@ class BaseCosmosModule(pl.LightningModule):
 
     @torch.inference_mode()
     def _eval_step_and_accumulate(
-        self,
-        batch: Dict[str, torch.Tensor],
-        prefix: str,
+        self, batch: Dict[str, torch.Tensor], prefix: str,
     ) -> None:
-        """Run forward + loss + metrics, accumulate everything locally."""
         batch = self._strip_meta_tensor(batch)
         images = batch["image"]
         if images.dim() == _SPATIAL_DIMS + 1:
@@ -355,12 +297,11 @@ class BaseCosmosModule(pl.LightningModule):
         if "semantic" in predictions:
             sem_logits = predictions["semantic"]
             sem_loss = self.criterion.semantic_loss
-            active = getattr(sem_loss, "active_classes", None) if sem_loss is not None else None
+            active = getattr(sem_loss, "active_classes", None) if sem_loss else None
             if active is not None and active < sem_logits.shape[1]:
                 sem_logits = sem_logits[:, :active]
-            sem_gt = targets["semantic_labels"]
 
-            sem_mode = getattr(sem_loss, "mode", "softmax") if sem_loss is not None else "softmax"
+            sem_mode = getattr(sem_loss, "mode", "softmax") if sem_loss else "softmax"
             if sem_mode == "sigmoid" and sem_logits.shape[1] == 1:
                 sem_pred = (sem_logits[:, 0].sigmoid() > 0.5).long()
                 n_cls = 2
@@ -368,16 +309,19 @@ class BaseCosmosModule(pl.LightningModule):
                 sem_pred = sem_logits.argmax(dim=1)
                 n_cls = sem_logits.shape[1]
 
-            self._accum(f"{prefix}/sem_acc", reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
-            self._accum(f"{prefix}/sem_iou", compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
-            self._accum(f"{prefix}/sem_dice", compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls), bs)
+            sem_gt = targets["semantic_labels"]
+            self._accum(f"{prefix}/sem_acc",
+                        reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"), bs)
+            self._accum(f"{prefix}/sem_iou",
+                        compute_per_batch_iou(sem_pred, sem_gt, num_classes=n_cls), bs)
+            self._accum(f"{prefix}/sem_dice",
+                        compute_per_batch_dice(sem_pred, sem_gt, num_classes=n_cls), bs)
 
         if "instance" in predictions:
             fg_mask = targets["labels"] > 0
             if fg_mask.any():
                 ins_pred, _, _ = self.clusterer(predictions["instance"].float(), fg_mask)
                 ins_gt = targets["labels"]
-
                 self._accum(f"{prefix}/ins_ari", compute_per_batch_ari(ins_pred, ins_gt), bs)
                 self._accum(f"{prefix}/ins_ami", compute_per_batch_ami(ins_pred, ins_gt), bs)
                 voi = compute_per_batch_voi(ins_pred, ins_gt)
@@ -387,28 +331,13 @@ class BaseCosmosModule(pl.LightningModule):
                 self._accum(f"{prefix}/ins_ted", compute_per_batch_ted(ins_pred, ins_gt), bs)
                 del ins_pred
 
-        # Geometry: regression sub-losses (dir/cov/raw) are already
-        # captured above via self.criterion → losses dict.  No extra
-        # discrete metrics apply to continuous geometry outputs.
-
         del predictions, losses
 
-    @torch.inference_mode()
-    def _eval_proofread_and_accumulate(
-        self,
-        batch: Dict[str, torch.Tensor],
-        prefix: str,
-        num_trials: int = 3,
-    ) -> None:
-        """Proofread evaluation (VISTA3D-style point-prompt dice)."""
-        raise NotImplementedError("Proofread evaluation is not yet implemented.")
-
     def _reduce_and_log_accum(self, prefix: str) -> None:
-        """All-reduce accumulated metrics once and log epoch averages."""
         if not self._eval_accum:
             return
 
-        names = sorted(self._eval_accum.keys())
+        names = sorted(self._eval_accum)
         sums = torch.tensor([self._eval_accum[n][0] for n in names], device=self.device)
         counts = torch.tensor([self._eval_accum[n][1] for n in names], device=self.device)
 
@@ -416,17 +345,22 @@ class BaseCosmosModule(pl.LightningModule):
             dist.all_reduce(sums, op=dist.ReduceOp.SUM)
             dist.all_reduce(counts, op=dist.ReduceOp.SUM)
 
-        _PROG_BAR = {f"{prefix}/loss", f"{prefix}/sem_acc", f"{prefix}/sem_iou", f"{prefix}/sem_dice", f"{prefix}/ins_ari"}
+        prog_bar_names = {
+            f"{prefix}/loss",
+            f"{prefix}/sem_acc",
+            f"{prefix}/sem_iou",
+            f"{prefix}/sem_dice",
+            f"{prefix}/ins_ari",
+        }
         for i, name in enumerate(names):
             if counts[i] > 0:
                 avg = (sums[i] / counts[i]).item()
-                self.log(name, avg, prog_bar=(name in _PROG_BAR),
+                self.log(name, avg, prog_bar=(name in prog_bar_names),
                          sync_dist=False, rank_zero_only=True)
 
         self._eval_accum.clear()
 
-    # --- validation ---
-
+    # Validation
     def on_validation_epoch_start(self) -> None:
         self._eval_accum: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0])
 
@@ -438,8 +372,7 @@ class BaseCosmosModule(pl.LightningModule):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    # --- test ---
-
+    # Test
     def on_test_epoch_start(self) -> None:
         self._eval_accum = defaultdict(lambda: [0.0, 0.0])
 
@@ -458,19 +391,17 @@ class BaseCosmosModule(pl.LightningModule):
     def configure_gradient_clipping(
         self, optimizer, gradient_clip_val=None, gradient_clip_algorithm=None,
     ) -> None:
-        """Clip gradients, zeroing any NaN/Inf grads first to protect weights."""
-        nan_count = 0
+        """Zero NaN/Inf gradients before clipping so bad batches don't poison weights."""
+        bad = 0
         for group in optimizer.param_groups:
             for p in group["params"]:
-                if p.grad is not None and (
-                    p.grad.isnan().any() or p.grad.isinf().any()
-                ):
+                if p.grad is not None and (p.grad.isnan().any() or p.grad.isinf().any()):
                     p.grad.zero_()
-                    nan_count += 1
-        if nan_count > 0:
+                    bad += 1
+        if bad:
             logger.warning(
                 "Zeroed NaN/Inf gradients in %d parameters at step %d.",
-                nan_count, self.global_step,
+                bad, self.global_step,
             )
         self.clip_gradients(
             optimizer,
@@ -481,25 +412,27 @@ class BaseCosmosModule(pl.LightningModule):
     def configure_optimizers(self) -> Any:
         lr = self.optimizer_config.get("lr", 1e-4)
         wd = self.optimizer_config.get("weight_decay", 1e-5)
-
         backbone_lr = self.optimizer_config.get("dit_backbone_lr") or lr
-        backbone_decay, backbone_no_decay = [], []
-        head_decay, head_no_decay = [], []
+
+        backbone_decay, backbone_no_decay, head_decay, head_no_decay = [], [], [], []
         for name, param in self.named_parameters():
             if not param.requires_grad:
                 continue
             is_backbone = name.startswith("model.dit.")
-            if param.dim() <= 1 or name.endswith(".bias"):
-                (backbone_no_decay if is_backbone else head_no_decay).append(param)
+            no_decay = param.dim() <= 1 or name.endswith(".bias")
+            if is_backbone:
+                (backbone_no_decay if no_decay else backbone_decay).append(param)
             else:
-                (backbone_decay if is_backbone else head_decay).append(param)
+                (head_no_decay if no_decay else head_decay).append(param)
+
         param_groups = [
-            {"params": backbone_decay, "lr": backbone_lr, "weight_decay": wd},
+            {"params": backbone_decay,    "lr": backbone_lr, "weight_decay": wd},
             {"params": backbone_no_decay, "lr": backbone_lr, "weight_decay": 0.0},
-            {"params": head_decay, "lr": lr, "weight_decay": wd},
-            {"params": head_no_decay, "lr": lr, "weight_decay": 0.0},
+            {"params": head_decay,        "lr": lr,          "weight_decay": wd},
+            {"params": head_no_decay,     "lr": lr,          "weight_decay": 0.0},
         ]
-        param_groups = [g for g in param_groups if len(g["params"]) > 0]
+        param_groups = [g for g in param_groups if g["params"]]
+
         clip_val = self.training_config.get("gradient_clip_val")
         use_fused = (
             not clip_val
@@ -517,61 +450,25 @@ class BaseCosmosModule(pl.LightningModule):
             from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
             warmup_epochs = sched_cfg.get("warmup_epochs", 5)
-            T_max = sched_cfg.get("T_max", 100)
+            t_max = sched_cfg.get("T_max", 100)
             eta_min = sched_cfg.get("eta_min", 1e-7)
 
             warmup = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs)
             cosine = CosineAnnealingLR(
-                optimizer, T_max=max(T_max - warmup_epochs, 1), eta_min=eta_min,
+                optimizer, T_max=max(t_max - warmup_epochs, 1), eta_min=eta_min,
             )
             scheduler = SequentialLR(
                 optimizer, [warmup, cosine], milestones=[warmup_epochs],
             )
-            return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
+            }
 
         if stype:
             warnings.warn(
                 f"Unknown scheduler type '{stype}', using no scheduler. "
-                f"Supported: 'cosine', 'cosine_warmup'.",
+                "Supported: 'cosine', 'cosine_warmup'.",
                 stacklevel=2,
             )
         return optimizer
-
-    # ------------------------------------------------------------------
-    # Compatibility check
-    # ------------------------------------------------------------------
-
-    def compatibility_check(
-        self,
-        input_shape: tuple = (1, 1, 32, 64, 64),
-    ) -> Dict[str, Any]:
-        """Verify the 3-D model fits the 3-stage volumetric segmentation task."""
-        result = self._verify_fit_fn(
-            variant=self._variant,
-            input_shape=input_shape,
-            num_classes=self.model.num_classes,
-            emb_dim=self.model.emb_dim,
-            feature_size=self.model.feature_size,
-        )
-
-        for mode in self.training_modes:
-            if mode not in ("automatic", "proofread"):
-                result["errors"].append(f"Invalid training mode: {mode}")
-                result["compatible"] = False
-
-        if self._variant == "14B" and self.criterion.weight_geometry > 0:
-            result["warnings"].append(
-                "14B + 3-D geometry head is extremely memory-intensive.  "
-                "Consider weight_geometry=0 or gradient checkpointing."
-            )
-
-        if not self.model._backbone_loaded:
-            result["warnings"].append(
-                "Backbone weights not loaded -- model is randomly initialised."
-            )
-
-        result["checks"]["backbone_loaded"] = self.model._backbone_loaded
-        result["checks"]["backbone_frozen"] = self.model._freeze_dit_backbone
-        result["checks"]["training_modes"] = self.training_modes
-        result["checks"]["variant"] = self._variant
-        return result
