@@ -20,7 +20,7 @@ data:
   dataset: snemi3d
   data_root: data/SNEMI3D
   batch_size: 4
-  num_workers: 8
+  num_workers: 16
   persistent_workers: true
   cache_rate: 0.0
   pin_memory: true
@@ -96,8 +96,8 @@ training:
   # torch.compile on DiT backbone. false/null disables; true uses
   # "reduce-overhead" (~1 min compile, good runtime); "max-autotune"
   # gives best runtime but 5-15 min first-run compile.
-  compile: false
-  compile_fullgraph: false
+  compile: "max-autotune"
+  compile_fullgraph: true
   training_modes:
     - automatic
   # Validation-time clusterer.  `bandwidth` and `normalize_embeddings`
