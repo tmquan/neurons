@@ -344,21 +344,36 @@ def _propagate_labels(
 
 
 def _remap_consecutive(labels: np.ndarray, min_cluster_size: int) -> np.ndarray:
-    """Remap foreground labels to ``1..K'`` after filtering tiny clusters."""
-    uniq, counts = np.unique(labels, return_counts=True)
-    fg_labels = uniq[uniq > 0]
-    for u, c in zip(uniq, counts):
-        if u > 0 and c < min_cluster_size:
-            labels[labels == u] = 0
-    uniq_fg = np.unique(labels[labels > 0])
-    if len(uniq_fg) == 0:
-        return labels.astype(np.int64)
-    remap = np.zeros(int(uniq_fg.max()) + 1, dtype=np.int64)
-    for new, old in enumerate(uniq_fg, start=1):
-        remap[int(old)] = new
-    out = labels.copy()
-    out[out > 0] = remap[labels[labels > 0]]
-    return out
+    """Remap foreground labels to ``1..K'`` after filtering tiny clusters.
+
+    Fully vectorised: O(N + max_label) with no per-label Python loop.
+    The previous implementation did ``labels[labels == u] = 0`` inside a
+    Python ``for`` over every unique id, which degenerates to O(K × N) and
+    can take minutes on a sanity-check batch when a randomly-initialised
+    embedding fragments foreground into tens of thousands of tiny CCs.
+    """
+    if labels.size == 0:
+        return labels.astype(np.int64, copy=False)
+
+    max_lbl = int(labels.max())
+    if max_lbl <= 0:
+        return labels.astype(np.int64, copy=False)
+
+    # O(N) count of every label id, including background (id 0).
+    counts = np.bincount(labels.ravel(), minlength=max_lbl + 1)
+
+    # Foreground ids (>0) whose cluster passes the size threshold.
+    keep = counts >= min_cluster_size
+    keep[0] = False
+
+    if not keep.any():
+        return np.zeros_like(labels, dtype=np.int64)
+
+    kept_ids = np.flatnonzero(keep)
+    remap = np.zeros(max_lbl + 1, dtype=np.int64)
+    remap[kept_ids] = np.arange(1, kept_ids.size + 1, dtype=np.int64)
+
+    return remap[labels]
 
 
 # ---------------------------------------------------------------------------
