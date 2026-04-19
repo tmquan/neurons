@@ -124,6 +124,11 @@ training:
   enable_model_summary: true
   deterministic: false
   benchmark: true
+  # torch.compile on the DiT backbone (Cosmos-only; no-op on Vista).
+  # false/null = off; true = "reduce-overhead" (~1 min compile);
+  # "max-autotune" = best runtime but 5-15 min first compile.
+  compile: false
+  compile_fullgraph: false
   fast_dev_run: false
   profiler: null  # Options: null, simple, advanced, pytorch
   # Full Lightning resume (optimizer, epoch, schedulers). Prefer this after crashes.

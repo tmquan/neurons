@@ -394,14 +394,26 @@ def main(cfg: DictConfig) -> None:
     # ``torch.compile``: only compile the trainable DiT backbone.  Compiling
     # the whole wrapper causes torch.compile+DDP to run frozen subgraphs in
     # inference_mode, producing tensors that cannot be saved for backward.
-    if cfg.get("training", {}).get("compile", False):
+    #
+    # ``training.compile`` accepts:
+    #   false / null        -> no compile (fastest startup)
+    #   true                -> mode="reduce-overhead" (fast compile, good runtime)
+    #   "max-autotune"      -> best runtime, 5-15 min first compile
+    #   "reduce-overhead"   -> ~1 min compile, ~10-20% slower than max-autotune
+    #   "default"           -> minimal overhead, minimal speedup
+    # ``training.compile_fullgraph`` (default false) forces a single graph
+    # (no graph breaks); safer to leave off on DDP runs.
+    compile_cfg = cfg.get("training", {}).get("compile", False)
+    if compile_cfg:
+        mode = compile_cfg if isinstance(compile_cfg, str) else "reduce-overhead"
+        fullgraph = bool(cfg.get("training", {}).get("compile_fullgraph", False))
         dit = getattr(getattr(module, "model", None), "dit", None)
         if dit is not None:
-            module.model.dit = torch.compile(dit, mode="max-autotune")
-            print("  torch.compile enabled on DiT backbone (max-autotune)")
+            module.model.dit = torch.compile(dit, mode=mode, fullgraph=fullgraph)
+            print(f"  torch.compile enabled on DiT backbone (mode={mode}, fullgraph={fullgraph})")
         else:
-            module.model = torch.compile(module.model, mode="max-autotune")
-            print("  torch.compile enabled on full model (max-autotune)")
+            module.model = torch.compile(module.model, mode=mode, fullgraph=fullgraph)
+            print(f"  torch.compile enabled on full model (mode={mode}, fullgraph={fullgraph})")
 
     callbacks = setup_callbacks(cfg)
     logger = setup_logger(cfg)
