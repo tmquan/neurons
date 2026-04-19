@@ -37,11 +37,17 @@ numbered ``1..K``.  Only ``soft_meanshift`` is differentiable.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
 from einops import rearrange, reduce
+
+# Public type aliases.  ``delta_v`` is either a single scalar
+# (isotropic threshold) or a per-axis sequence of length ``n_dims``
+# (anisotropic thresholds — e.g. tighter in Z to avoid merging
+# touching neurons across slices on 5:1 anisotropic EM).
+DeltaV = Union[float, Sequence[float]]
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +211,36 @@ def _probe_cupy_csgraph() -> Optional[Tuple[Any, Any]]:
 # ---------------------------------------------------------------------------
 
 _VALID_ALGOS = ("meanshift", "hdbscan", "soft_meanshift", "spatial_cc")
-_VALID_BACKENDS = ("auto", "cuml", "cupy", "hdbscan", "sklearn", "torch", "scipy")
+_VALID_BACKENDS = (
+    "auto", "cuml", "cupy", "self", "hdbscan", "sklearn", "torch", "scipy",
+)
+
+
+def _normalize_delta_v(delta_v: DeltaV, n_dims: int) -> List[float]:
+    """Normalize ``delta_v`` to a length-``n_dims`` per-axis list.
+
+    Accepts either a scalar (broadcast to every axis, isotropic
+    behaviour — identical to the original ``spatial_cc``) or a
+    sequence of length ``n_dims`` giving axis-specific Euclidean
+    thresholds.  The per-axis form is useful on anisotropic EM where
+    Z-neighbour voxels are physically further apart (e.g. 5:1 Z:XY)
+    and distinct neurons often touch across Z but not within XY.  A
+    tight Z threshold keeps them separate even when their mean
+    embeddings are close.
+    """
+    if isinstance(delta_v, (int, float)) or (
+        isinstance(delta_v, np.ndarray) and delta_v.ndim == 0
+    ):
+        return [float(delta_v)] * n_dims
+    vals = [float(x) for x in delta_v]
+    if len(vals) != n_dims:
+        raise ValueError(
+            f"delta_v must be a scalar or length-{n_dims} sequence "
+            f"(one threshold per spatial axis); got {delta_v!r}."
+        )
+    if any(v <= 0 for v in vals):
+        raise ValueError(f"delta_v entries must be positive; got {vals}.")
+    return vals
 
 
 def _as_fg_np(
@@ -429,20 +464,33 @@ def _run_hdbscan(
 def _spatial_cc_edges(
     embedding: torch.Tensor,
     fg: torch.Tensor,
-    delta_v: float,
+    delta_v: DeltaV,
     connectivity: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Build a sparse affinity edge list between spatial neighbours.
 
     Two foreground voxels ``i`` and ``j`` are linked iff they are spatial
     neighbours under the requested connectivity and their embedding
-    distance is strictly less than ``delta_v``.
+    distance is strictly less than the per-axis threshold ``delta_v[d]``
+    (or the scalar ``delta_v`` for every axis).
+
+    Anisotropy.  Per-axis thresholds are the cheapest way to respect
+    physical voxel anisotropy (e.g. SNEMI3D's 5:1 Z:XY) without
+    re-training.  On EM stacks where unrelated neurons frequently
+    touch across Z slices while XY continuity is a strong within-cell
+    cue, setting ``delta_v[0]`` (Z) well below ``delta_v[1:]`` (XY)
+    keeps the cells apart even when their mean embeddings are close.
+
+    For diagonal offsets (``connectivity != 1``) we take the
+    *minimum* of the involved axis thresholds — the strictest one —
+    so diagonal Z links never leak where axial Z links wouldn't.
 
     Args:
         embedding: ``[E, *spatial]`` tensor (already L2-normalised if
             requested by the caller).
         fg: ``[*spatial]`` boolean foreground mask.
-        delta_v: Euclidean threshold on per-edge embedding distance.
+        delta_v: Either a scalar (isotropic) or a length-``n_dims``
+            sequence of per-axis Euclidean thresholds.
         connectivity: ``1`` for face-connectivity (6 in 3D, 4 in 2D);
             any other value enables full connectivity (26 in 3D, 8 in
             2D).  Matches scipy's ``connectivity`` convention.
@@ -461,7 +509,7 @@ def _spatial_cc_edges(
     for i in range(n_dims - 2, -1, -1):
         strides[i] = strides[i + 1] * spatial_shape[i + 1]
 
-    thr_sq = float(delta_v) ** 2
+    delta_per_axis = _normalize_delta_v(delta_v, n_dims)
 
     # Enumerate unit offsets; for face connectivity keep only +ê_d, for
     # full connectivity keep every non-zero offset with first-non-zero
@@ -486,6 +534,12 @@ def _spatial_cc_edges(
     dst_chunks: list[torch.Tensor] = []
 
     for off in offsets:
+        nonzero_axes = [d for d, o in enumerate(off) if o != 0]
+        # Axial offset  -> axis-specific threshold.
+        # Diagonal      -> strictest axis along the offset (min).
+        thr = min(delta_per_axis[d] for d in nonzero_axes)
+        thr_sq = thr * thr
+
         lo_slicer = [slice(None)] * n_dims
         hi_slicer = [slice(None)] * n_dims
         for d, o in enumerate(off):
@@ -528,7 +582,7 @@ def cluster_spatial_cc(
     embedding: torch.Tensor,
     foreground_mask: Optional[torch.Tensor] = None,
     *,
-    delta_v: float = 0.5,
+    delta_v: DeltaV = 0.5,
     min_cluster_size: int = 50,
     connectivity: int = 1,
     normalize_embeddings: bool = False,
@@ -559,9 +613,13 @@ def cluster_spatial_cc(
         embedding: ``[E, *spatial]`` embedding tensor (unbatched).
         foreground_mask: Optional ``[*spatial]`` bool mask.  Background
             voxels always receive label 0.
-        delta_v: Edge threshold.  Same semantics as the discriminative
-            loss's pull margin; using the trained value is the right
-            default.
+        delta_v: Edge threshold — scalar (isotropic) or length-``n_dims``
+            sequence (anisotropic, one threshold per spatial axis).
+            Same semantics as the discriminative loss's pull margin;
+            using the trained value is the right isotropic default.
+            On 5:1 anisotropic EM a tighter Z threshold (e.g.
+            ``[0.2, 0.5, 0.5]``) stops distinct neurons from merging
+            through chance Z contacts.
         min_cluster_size: Clusters with fewer than this many voxels
             are dropped (mapped to label 0).  Applied at full resolution
             — no subsample bias.
@@ -569,20 +627,31 @@ def cluster_spatial_cc(
             any other value uses full connectivity (26 / 8).
         normalize_embeddings: L2-normalise before computing distances.
             Must match the flag used at training time.
-        backend: ``"auto"`` (cupyx.scipy.sparse.csgraph on CUDA, else
-            scipy) / ``"cupy"`` (force GPU) / ``"scipy"`` (force CPU).
-            There is no ``cuml`` or ``cugraph`` path because neither
-            library ships a sparse ``connected_components``; ``cupyx``
-            covers this as of cupy >= 9.
+        backend: Selection policy for the connected-components pass:
+
+            - ``"auto"``:   pick the fastest available path on the
+                            input's device.  On CUDA: ``self`` (our
+                            self-contained RawKernel union-find — has
+                            no ``pylibcugraph`` dependency) → ``cupy``
+                            (cupyx.csgraph) → ``scipy`` (CPU
+                            roundtrip).  On CPU: ``scipy``.
+            - ``"self"``:   force the custom CuPy union-find kernel.
+                            Only works for CUDA inputs.  Preferred
+                            over ``cupy`` because it avoids the
+                            cusparse CSC→CSR round-trip and the
+                            optional ``pylibcugraph`` dependency.
+            - ``"cupy"``:   force cupyx.scipy.sparse.csgraph on CUDA
+                            (requires ``pylibcugraph``).
+            - ``"scipy"``:  force scipy CPU (device round-trip).
 
     Returns:
         ``[*spatial]`` ``torch.long`` label tensor (0 = background,
         1..K = instances) on the same device as ``embedding``.
     """
-    if backend not in ("auto", "cupy", "scipy"):
+    if backend not in ("auto", "cupy", "self", "scipy"):
         raise ValueError(
             f"spatial_cc: unsupported backend {backend!r}; "
-            f"choose 'auto', 'cupy', or 'scipy'."
+            f"choose 'auto', 'self', 'cupy', or 'scipy'."
         )
 
     device = embedding.device
@@ -622,18 +691,38 @@ def cluster_spatial_cc(
     # Build edges on the input's device (fast tensor ops in torch).
     src, dst = _spatial_cc_edges(embedding, fg, delta_v, connectivity)
 
-    use_gpu = False
+    # --- Backend selection -------------------------------------------------
+    # Preferred fast path on CUDA is our own self-contained union-find
+    # kernel (`self`): it writes edges directly into a parent array and
+    # runs Shiloach-Vishkin hook + pointer-jumping on the device, so it
+    # has no `pylibcugraph` / cusparse dependency and no CSC<->CSR
+    # round-trip.  cupyx.csgraph is kept as a second GPU option for
+    # debugging / parity.
+    want_self = (
+        backend in ("auto", "self")
+        and embedding.is_cuda
+        and _probe_cupy() is not None
+    )
+    if backend == "self" and not want_self:
+        raise RuntimeError(
+            "spatial_cc: backend='self' requires a CUDA embedding and "
+            "a working cupy install."
+        )
+
+    use_cupy_csgraph = False
     gpu_mods = None
-    if backend in ("auto", "cupy") and embedding.is_cuda:
+    if not want_self and backend in ("auto", "cupy") and embedding.is_cuda:
         gpu_mods = _probe_cupy_csgraph()
-        use_gpu = gpu_mods is not None
-    if backend == "cupy" and not use_gpu:
+        use_cupy_csgraph = gpu_mods is not None
+    if backend == "cupy" and not use_cupy_csgraph:
         raise RuntimeError(
             "spatial_cc: backend='cupy' requires a CUDA embedding and "
             "cupyx.scipy.sparse.csgraph.connected_components (cupy >= 9)."
         )
 
-    if use_gpu:
+    if want_self:
+        labels_flat = _spatial_cc_run_self(src, dst, fg, n_total, device)
+    elif use_cupy_csgraph:
         labels_flat = _spatial_cc_run_gpu(
             src, dst, fg, n_total, gpu_mods, device,
         )
@@ -674,6 +763,193 @@ def _spatial_cc_run_cpu(
     )
     _, comp = csgraph_mod.connected_components(graph, directed=False)
     comp_t = torch.from_numpy(comp.astype(np.int64, copy=False)).to(device)
+    fg_flat = rearrange(fg, "... -> (...)")
+    return (comp_t + 1) * fg_flat.to(comp_t.dtype)
+
+
+# ---------------------------------------------------------------------------
+# Vectorized GPU union-find (CuPy RawKernel) for spatial_cc
+# ---------------------------------------------------------------------------
+#
+# Shiloach-Vishkin-style connectivity on the GPU: `uf_hook` uses
+# `atomicMin` on the parent array to "hook" the higher-id endpoint's
+# root to the lower-id endpoint's root per edge, and `uf_compress` does
+# pointer-jumping path compression in parallel.  Two passes are
+# interleaved until the parent array stops changing.  Convergence is
+# O(log N) iterations for grid graphs and usually finishes in <10 on
+# realistic volumes; we cap at a safe upper bound just in case.
+#
+# Why not cupyx.scipy.sparse.csgraph?
+#   - It requires pylibcugraph (pre-flight probe can fail silently on
+#     some builds — existing `_probe_cupy_csgraph` covers this).
+#   - It rebuilds a CSR from our COO edge list, which costs cusparse
+#     kernels comparable to the whole connectivity run.
+#   - We only need unordered union-find, not full sparse CSR.
+
+_UF_KERNEL_SRC = r"""
+extern "C" {
+
+// Hook step: for each edge (u, v), find each endpoint's current root
+// via path halving and then attach the higher-index root to the lower
+// via atomicMin.  `parent` stores int32 indices into the flattened
+// spatial grid, initialised to arange(n).
+__global__ void uf_hook(const int* __restrict__ src,
+                        const int* __restrict__ dst,
+                        int*       __restrict__ parent,
+                        int num_edges) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= num_edges) return;
+
+    int u = src[tid];
+    int v = dst[tid];
+
+    // Path halving: parent[u] = parent[parent[u]] while walking up.
+    while (true) {
+        int pu = parent[u];
+        if (pu == u) break;
+        int gp = parent[pu];
+        // Racy write; idempotent — any concurrent thread still sees a
+        // valid ancestor after this store.
+        parent[u] = gp;
+        if (pu == gp) { u = pu; break; }
+        u = gp;
+    }
+    while (true) {
+        int pv = parent[v];
+        if (pv == v) break;
+        int gp = parent[pv];
+        parent[v] = gp;
+        if (pv == gp) { v = pv; break; }
+        v = gp;
+    }
+    if (u == v) return;
+
+    int lo = u < v ? u : v;
+    int hi = u < v ? v : u;
+    atomicMin(&parent[hi], lo);
+}
+
+// Compression step: walk each node's chain to its current root and
+// point directly at it.  One pass suffices after a finite number of
+// hook passes because the chain depth halves each time.
+__global__ void uf_compress(int* parent, int n) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= n) return;
+    int p = parent[tid];
+    while (p != parent[p]) {
+        p = parent[p];
+    }
+    parent[tid] = p;
+}
+
+}
+"""
+
+
+@lru_cache(maxsize=1)
+def _uf_kernels() -> Optional[Tuple[Any, Any]]:
+    """Compile (and cache) the union-find kernels; ``None`` if unavailable.
+
+    Compilation is lazy because importing this file on a CPU-only box
+    must not trigger a nvrtc call.
+    """
+    cp = _probe_cupy()
+    if cp is None:
+        return None
+    try:
+        mod = cp.RawModule(code=_UF_KERNEL_SRC, backend="nvcc")
+    except Exception:
+        # Older cupy only accepts backend="nvrtc"; try the default.
+        try:
+            mod = cp.RawModule(code=_UF_KERNEL_SRC)
+        except Exception:
+            return None
+    try:
+        return mod.get_function("uf_hook"), mod.get_function("uf_compress")
+    except Exception:
+        return None
+
+
+def _spatial_cc_run_self(
+    src: torch.Tensor,
+    dst: torch.Tensor,
+    fg: torch.Tensor,
+    n_total: int,
+    device: torch.device,
+    max_iters: int = 32,
+) -> torch.Tensor:
+    """Run connected-components on GPU via our self-contained union-find kernel.
+
+    The edge list lives on the device throughout — zero-copy handoff
+    torch→cupy via DLPack — and we only materialise a single
+    ``parent`` buffer of shape ``[n_total]``.  Memory cost is
+    ``4 * (2*M + N)`` bytes (int32), dominated by the edge list.
+
+    Args:
+        src, dst: ``[M]`` long edge-endpoint tensors on the input device.
+        fg: ``[*spatial]`` boolean foreground mask.
+        n_total: product of the spatial shape (flattened size).
+        device: torch device for the output tensor.
+        max_iters: upper bound on hook+compress iterations.  Grid
+            graphs converge in ``O(log diameter)`` — usually <10 passes
+            even on 256³ volumes.
+
+    Returns:
+        ``[n_total]`` int64 label tensor: root id + 1 on foreground,
+        ``0`` on background.  Downstream ``_remap_consecutive`` remaps
+        root ids to contiguous 1..K'.
+    """
+    cp = _probe_cupy()
+    assert cp is not None, "cupy must be available on the 'self' UF path"
+    kernels = _uf_kernels()
+    if kernels is None:
+        raise RuntimeError(
+            "spatial_cc: 'self' union-find kernel failed to compile; "
+            "set backend='cupy' or backend='scipy' instead."
+        )
+    hook_fn, compress_fn = kernels
+
+    # Zero-copy torch -> cupy edge views.  32-bit indices match the
+    # atomicMin signature and the grid sizes we care about (< 2**31).
+    if n_total >= 2**31:
+        raise ValueError(
+            f"spatial_cc 'self' backend is limited to volumes with "
+            f"fewer than 2**31 voxels (got {n_total})."
+        )
+    if src.numel() == 0:
+        # No affinity edges survived: every foreground voxel is a
+        # singleton component.  Fall through so _remap_consecutive
+        # filters by min_cluster_size.
+        parent_cp = cp.arange(n_total, dtype=cp.int32)
+    else:
+        src_cp = cp.from_dlpack(src.contiguous()).astype(cp.int32)
+        dst_cp = cp.from_dlpack(dst.contiguous()).astype(cp.int32)
+        parent_cp = cp.arange(n_total, dtype=cp.int32)
+
+        n_edges = int(src_cp.size)
+        block = 256
+        grid_edges = ((n_edges + block - 1) // block,)
+        grid_nodes = ((n_total + block - 1) // block,)
+
+        # Iterate hook -> compress until the parent array is stable.
+        # `(parent == prev).all()` is a single device reduction per
+        # iteration (≲ a few µs) so the convergence check is cheap.
+        prev = cp.empty_like(parent_cp)
+        for _ in range(max_iters):
+            prev[...] = parent_cp
+            hook_fn(
+                grid_edges, (block,),
+                (src_cp, dst_cp, parent_cp, cp.int32(n_edges)),
+            )
+            compress_fn(
+                grid_nodes, (block,),
+                (parent_cp, cp.int32(n_total)),
+            )
+            if bool((parent_cp == prev).all()):
+                break
+
+    # Zero-copy cupy -> torch; mask by foreground; shift to 1-indexed.
+    comp_t = torch.from_dlpack(parent_cp.astype(cp.int64)).to(device)
     fg_flat = rearrange(fg, "... -> (...)")
     return (comp_t + 1) * fg_flat.to(comp_t.dtype)
 
@@ -726,7 +1002,7 @@ def cluster_embeddings(
     foreground_mask: Optional[torch.Tensor] = None,
     algorithm: str = "meanshift",
     *,
-    bandwidth: float = 0.5,
+    bandwidth: DeltaV = 0.5,
     min_cluster_size: int = 50,
     normalize_embeddings: bool = False,
     backend: str = "auto",
@@ -808,9 +1084,13 @@ def cluster_embeddings(
 
     if algorithm == "spatial_cc":
         # Spatial-affinity CC uses bandwidth as the embedding-distance
-        # threshold (semantically identical to delta_v).  max_points,
-        # min_samples, cluster_selection_epsilon are all irrelevant here.
-        cc_backend = backend if backend in ("auto", "cupy", "scipy") else "auto"
+        # threshold (semantically identical to delta_v).  It also
+        # accepts a per-axis list (anisotropic mode) — passed through
+        # untouched.  max_points, min_samples, cluster_selection_epsilon
+        # are all irrelevant here.
+        cc_backend = (
+            backend if backend in ("auto", "cupy", "self", "scipy") else "auto"
+        )
         return cluster_spatial_cc(
             embedding,
             foreground_mask=foreground_mask,
@@ -989,7 +1269,7 @@ def cluster_embeddings_soft(
 def cluster_embeddings_spatial_cc(
     embedding: torch.Tensor,
     foreground_mask: Optional[torch.Tensor] = None,
-    delta_v: float = 0.5,
+    delta_v: DeltaV = 0.5,
     min_cluster_size: int = 50,
     connectivity: int = 1,
     normalize_embeddings: bool = False,

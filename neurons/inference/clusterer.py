@@ -51,14 +51,18 @@ Implementations
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+import inspect
+import logging
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, reduce, repeat
 
-from neurons.utils.clustering import _reshape_to_spatial
+from neurons.utils.clustering import DeltaV, _reshape_to_spatial
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -440,39 +444,63 @@ class SpatialCCClusterer(_BaseUnsupervisedClusterer):
 
     Args:
         bandwidth: Embedding-distance threshold for linking spatial
-            neighbours.  Semantically equal to the training pull
-            margin (``delta_v``); named ``bandwidth`` to match the
-            other clusterers' common kwarg so the module-layer
-            config wiring (``clusterer.bandwidth``) is identical.
+            neighbours.  Accepts either:
+
+            - a single scalar (isotropic — identical to the original
+              clusterer), or
+            - a length-``n_dims`` sequence giving a separate threshold
+              per spatial axis.  Use a tighter Z entry on anisotropic
+              EM (e.g. ``[0.2, 0.5, 0.5]`` on 5:1 Z:XY) so that
+              touching-but-distinct neurons across Z never merge.
+
+            Semantically equal to the training pull margin
+            (``delta_v``); named ``bandwidth`` to match the other
+            clusterers' common kwarg so the module-layer config
+            wiring (``clusterer.bandwidth``) is identical.
         min_cluster_size: Clusters smaller than this are dropped
             (mapped to background).  Applied at full resolution.
         connectivity: ``1`` for face-connectivity (6 in 3D, 4 in 2D);
             any other value enables full connectivity (26 / 8).
         normalize_embeddings: L2-normalise embeddings before computing
             distances.  Must match the flag used at training time.
-        backend: ``"auto"`` (cupy on CUDA → scipy on CPU),
-            ``"cupy"`` (force GPU), or ``"scipy"`` (force CPU).
+        backend: Path for the connected-components pass:
+
+            - ``"auto"``:  self-contained UF kernel on CUDA, else scipy.
+            - ``"self"``:  force our self-contained CuPy union-find
+                           kernel (no ``pylibcugraph`` dependency;
+                           fastest).
+            - ``"cupy"``:  cupyx.scipy.sparse.csgraph (needs
+                           ``pylibcugraph``; kept for debugging).
+            - ``"scipy"``: CPU round-trip.
     """
 
     algorithm = "spatial_cc"
 
     def __init__(
         self,
-        bandwidth: float = 0.5,
+        bandwidth: DeltaV = 0.5,
         min_cluster_size: int = 50,
         connectivity: int = 1,
         normalize_embeddings: bool = False,
         backend: str = "auto",
     ) -> None:
         super().__init__()
-        self.bandwidth = bandwidth
+        # Keep raw value for introspection/logging; conversion to a
+        # per-axis list happens inside `cluster_spatial_cc` where the
+        # spatial rank is known.  Accept both Python scalars and
+        # Omegaconf ListConfig objects (Hydra-materialised YAML lists).
+        if hasattr(bandwidth, "_content"):  # OmegaConf ListConfig
+            bandwidth = list(bandwidth)
+        if isinstance(bandwidth, (list, tuple)):
+            bandwidth = [float(x) for x in bandwidth]
+        self.bandwidth: DeltaV = bandwidth
         self.min_cluster_size = min_cluster_size
         self.connectivity = connectivity
         self.normalize_embeddings = normalize_embeddings
         self.backend = backend
 
     @property
-    def delta_v(self) -> float:
+    def delta_v(self) -> DeltaV:
         """Alias: the affinity threshold _is_ the trained pull margin."""
         return self.bandwidth
 
@@ -714,7 +742,32 @@ def build_clusterer(name: str, **kwargs: Any) -> nn.Module:
             f"Unknown clusterer {name!r}. Choose one of "
             f"{sorted(set(_CLUSTERER_REGISTRY))}."
         )
-    return _CLUSTERER_REGISTRY[key](**kwargs)
+    cls = _CLUSTERER_REGISTRY[key]
+
+    # Drop kwargs that the selected class does not accept so that users
+    # can switch `name:` between clusterers without pruning every
+    # adjacent option from their config (e.g. `backend`, `connectivity`
+    # are irrelevant to `SoftMeanShift`).
+    sig = inspect.signature(cls.__init__)
+    accepts_var_kw = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    if not accepts_var_kw:
+        accepted = {
+            n for n, p in sig.parameters.items()
+            if p.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ) and n != "self"
+        }
+        ignored = {k: v for k, v in kwargs.items() if k not in accepted}
+        if ignored:
+            logger.warning(
+                "build_clusterer: %s does not accept %s; ignoring.",
+                cls.__name__, sorted(ignored),
+            )
+        kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+    return cls(**kwargs)
 
 
 __all__ = [
